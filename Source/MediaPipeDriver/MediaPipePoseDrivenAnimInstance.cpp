@@ -2918,6 +2918,11 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		ApplySemanticBasisToBone(SpineBone, RefSpineComp[i], RefSpineBasisComp[i], TargetBasis, BodyState.bHasSmoothedSpineRotCS[i], BodyState.SmoothedSpineRotCS[i], SpineRotAlpha);
 	}
 
+	// Spine rotations can recompose child component-space positions. Refresh the
+	// solved translations so the chest anchor remains authoritative before the
+	// neck/head chain is derived from it.
+	ApplyBodyFusionSpineTranslationTargets();
+
 	const FQuat HmdRotationComp = WorldToComponent.TransformRotation(HeadPoint.RotationWorld).GetNormalized();
 	FVector HmdForwardComp = HmdRotationComp.RotateVector(FVector::ForwardVector).GetSafeNormal();
 	if (HmdForwardComp.IsNearlyZero())
