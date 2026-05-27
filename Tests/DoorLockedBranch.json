@@ -1,0 +1,17 @@
+{
+  "name": "DoorLockedBranch",
+  "map": "/Game/MCPBench/Maps/L_MCP_Test_ChiR24",
+  "steps": [
+    { "action": "startPie" },
+    { "action": "wait", "ms": 1500 },
+    { "action": "movePawn", "location": [620, 0, 120] },
+    { "action": "wait", "ms": 1000 },
+    {
+      "action": "checkpoint",
+      "label": "door-stays-closed",
+      "python": "import unreal, json\nworld=unreal.EditorLevelLibrary.get_game_world()\nactors=unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)\nfor a in actors:\n    if 'BP_ChiR24_LockedDoor_C' in a.get_class().get_name():\n        print(json.dumps({'hasKey': bool(a.get_editor_property('HasKey')), 'isOpen': bool(a.get_editor_property('IsOpen'))}))"
+    },
+    { "action": "stopPie" }
+  ]
+}
+

@@ -1,0 +1,24 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Codex Agent",
+  "Description": "Local Unreal Editor chat panel connected to the TestingKit Codex Agent Bridge.",
+  "Category": "Editor|Automation|AI",
+  "CreatedBy": "OpenAI Codex",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "IsExperimentalVersion": true,
+  "EnabledByDefault": true,
+  "Modules": [
+    {
+      "Name": "CodexAgent",
+      "Type": "Editor",
+      "LoadingPhase": "Default",
+      "PlatformAllowList": [
+        "Win64"
+      ]
+    }
+  ]
+}
+

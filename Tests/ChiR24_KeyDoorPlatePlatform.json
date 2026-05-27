@@ -1,0 +1,22 @@
+{
+  "name": "ChiR24_KeyDoorPlatePlatform",
+  "map": "/Game/MCPBench/Maps/L_MCP_Test_ChiR24",
+  "steps": [
+    { "action": "startPie" },
+    { "action": "wait", "ms": 1500 },
+    { "action": "movePawn", "location": [220, 0, 120] },
+    { "action": "wait", "ms": 1000 },
+    { "action": "movePawn", "location": [620, 0, 120] },
+    { "action": "wait", "ms": 1600 },
+    { "action": "movePawn", "location": [930, 0, 120] },
+    { "action": "wait", "ms": 2600 },
+    {
+      "action": "checkpoint",
+      "label": "after-plate",
+      "python": "import unreal, json\nworld=unreal.EditorLevelLibrary.get_game_world()\nactors=unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)\nfound={}\nfor a in actors:\n    c=a.get_class().get_name()\n    if 'BP_ChiR24_LockedDoor_C' in c: found['door']=a\n    if 'BP_ChiR24_PressurePlate_C' in c: found['plate']=a\n    if 'BP_ChiR24_MovingPlatform_C' in c: found['platform']=a\ndef b(k,p):\n    return bool(found[k].get_editor_property(p)) if k in found else None\nprint(json.dumps({'doorOpen': b('door','IsOpen'), 'plateActive': b('plate','Activated'), 'platformActive': b('platform','Activated')}))"
+    },
+    { "action": "screenshot", "filename": "ChiR24_KeyDoorPlatePlatform.png" },
+    { "action": "stopPie" }
+  ]
+}
+

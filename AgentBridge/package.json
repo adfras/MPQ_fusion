@@ -1,0 +1,19 @@
+{
+  "name": "testingkit-codex-agent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local localhost bridge between Unreal Editor, a signed-in Codex account, and Unreal MCP tools.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "smoke": "node src/smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.0",
+    "@openai/codex-sdk": "^0.128.0"
+  }
+}
+

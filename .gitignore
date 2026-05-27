@@ -1,0 +1,53 @@
+# Unreal generated files
+Content/
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Generated folders anywhere in plugins/tools
+**/Binaries/
+**/Build/
+**/DerivedDataCache/
+**/Intermediate/
+**/Saved/
+
+# IDE/editor state
+.vs/
+.vscode/
+.idea/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.pdb
+*.ilk
+
+# Node/package caches
+.codex_external/
+_MCPBench/
+AgentBridge/node_modules/
+**/node_modules/
+
+# Local binary/media drops
+*.dll
+*.png
+Test*.txt
+
+# Python caches
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+.DS_Store
