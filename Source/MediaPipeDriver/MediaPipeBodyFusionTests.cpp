@@ -1,13 +1,19 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "MediaPipeBodyFusion.h"
 #include "MediaPipeAutoQuestProfilePolicy.h"
-
+#include "MediaPipeBodyFusion.h"
+#include "MediaPipeBodyFusionAuthorityPolicy.h"
+#include "MediaPipeBodyFusionPoseWriteContext.h"
+#include "MediaPipeBodyFusionRuntime.h"
+#include "MediaPipeTrackingSourceFrameBuilder.h"
 #include "MediaPipeMetaHumanProfile.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
-
 #include "Misc/AutomationTest.h"
 
+// Consolidated from MediaPipeBodyFusionTests.cpp
+
+namespace MediaPipeBodyFusionTests
+{
 namespace
 {
 FMediaPipeAvatarEmbodimentProfile MakeBodyFusionTestProfile()
@@ -1056,6 +1062,668 @@ bool FMediaPipeBodyFusionAutoQuestBodyDrivePolicyAutomationTest::RunTest(const F
 	TestTrue(TEXT("Non-embodied AutoQuest keeps existing raw torso behavior"),
 		MirrorPolicy.bDriveClavicles && MirrorPolicy.bDriveSpine);
 	return true;
+}
+}
+
+// Consolidated from MediaPipeBodyFusionInvariantsTests.cpp
+
+namespace MediaPipeBodyFusionInvariantsTests
+{
+namespace
+{
+FMediaPipeAvatarEmbodimentProfile MakeInvariantProfile()
+{
+	FMediaPipeAvatarEmbodimentProfile Profile;
+	Profile.ProfileId = FName(TEXT("BodyFusionInvariant"));
+	Profile.SkeletonFamily = EMediaPipeAvatarSkeletonFamily::MannyLike;
+	Profile.DefaultEyeLocalOffset = FVector(0.0f, 0.0f, 160.0f);
+	Profile.DefaultChestLocalOffset = FVector(0.0f, 0.0f, 116.0f);
+	Profile.DefaultPelvisLocalOffset = FVector(0.0f, 0.0f, 58.0f);
+	Profile.ExpectedHeadToChestCm = 52.0f;
+	Profile.ExpectedChestToPelvisCm = 58.0f;
+	return Profile;
+}
+
+FMediaPipeTrackingSourceFrame MakeInvariantFrame(const FVector& HmdLocationWorld)
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	Frame.FrameTimeSeconds = 10.0;
+	Frame.bHasHmdPose = true;
+	Frame.HmdLocationWorld = HmdLocationWorld;
+	Frame.HmdRotationWorld = FQuat::Identity;
+	Frame.TrackingUpWorld = FVector::UpVector;
+	Frame.HmdTimestampSeconds = 9.95;
+	Frame.HmdConfidence = 1.0f;
+
+	Frame.bHasMediaPipePose = true;
+	Frame.MediaPipePoseTimestampSeconds = 9.95;
+	Frame.MediaPipePoseConfidence = 0.9f;
+	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, 96.0f), 0.9f);
+	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightHip, FVector(0.0f, 10.0f, 96.0f), 0.9f);
+	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+	return Frame;
+}
+
+FMediaPipeEmbodimentCalibration MakeInvariantCalibration()
+{
+	FMediaPipeEmbodimentCalibration Calibration;
+	Calibration.bHasCalibration = true;
+	Calibration.YawRotation = FQuat::Identity;
+	Calibration.Translation = FVector::ZeroVector;
+	Calibration.Scale = 1.0f;
+	Calibration.Confidence = 1.0f;
+	Calibration.TimestampSeconds = 10.0;
+	return Calibration;
+}
+
+FMediaPipeBodyFusionSolveInput MakeInvariantInput(const FVector& HmdLocationWorld)
+{
+	FMediaPipeBodyFusionSolveInput Input;
+	Input.SourceFrame = MakeInvariantFrame(HmdLocationWorld);
+	Input.Calibration = MakeInvariantCalibration();
+	Input.Authority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
+	Input.Profile = MakeInvariantProfile();
+	Input.AvatarWorldTransform = FTransform::Identity;
+	Input.BodyAuthorityState = EMediaPipeBodyFusionAuthorityState::MediaPipeStable;
+	return Input;
+}
+
+FVector PlanarXY(const FVector& Value)
+{
+	return FVector(Value.X, Value.Y, 0.0f);
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionPelvisDoesNotFollowHmdPlanarTest,
+	"MediaPipe.BodyFusion.Invariants.PelvisDoesNotFollowHmdPlanar",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionPelvisDoesNotFollowHmdPlanarTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionSolveInput InputA = MakeInvariantInput(FVector(0.0f, 0.0f, 170.0f));
+	FMediaPipeBodyFusionSolveInput InputB = MakeInvariantInput(FVector(80.0f, -25.0f, 170.0f));
+
+	FMediaPipeFusedAvatarPose PoseA;
+	FMediaPipeFusedAvatarPose PoseB;
+	TestTrue(TEXT("Baseline embodied hips-only solve succeeds"),
+		FMediaPipeBodyFusionSolver::Solve(InputA, PoseA));
+	TestTrue(TEXT("Translated HMD embodied hips-only solve succeeds"),
+		FMediaPipeBodyFusionSolver::Solve(InputB, PoseB));
+
+	TestTrue(TEXT("Default embodied hips-only mode keeps pelvis planar position independent of HMD translation"),
+		PlanarXY(PoseA.Pelvis.LocationWorld).Equals(PlanarXY(PoseB.Pelvis.LocationWorld), 0.01f));
+	TestTrue(TEXT("Default embodied hips-only mode keeps MediaPipe vertical hip authority"),
+		FMath::IsNearlyEqual(PoseB.Pelvis.LocationWorld.Z, 96.0f, 0.01f) &&
+		PoseB.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+
+	InputA.Profile.PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::FollowUpperBodyExplicit;
+	InputB.Profile.PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::FollowUpperBodyExplicit;
+	FMediaPipeFusedAvatarPose ExplicitFollowPoseA;
+	FMediaPipeFusedAvatarPose ExplicitFollowPoseB;
+	TestTrue(TEXT("Explicit pelvis-follow baseline solve succeeds"),
+		FMediaPipeBodyFusionSolver::Solve(InputA, ExplicitFollowPoseA));
+	TestTrue(TEXT("Explicit pelvis-follow translated solve succeeds"),
+		FMediaPipeBodyFusionSolver::Solve(InputB, ExplicitFollowPoseB));
+	TestTrue(TEXT("Explicit pelvis-follow mode is the only mode that consumes HMD planar translation"),
+		!PlanarXY(ExplicitFollowPoseA.Pelvis.LocationWorld).Equals(PlanarXY(ExplicitFollowPoseB.Pelvis.LocationWorld), 0.01f) &&
+		ExplicitFollowPoseB.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused);
+	return true;
+}
+}
+
+// Consolidated from MediaPipeBodyFusionAuthorityPolicyTests.cpp
+
+namespace MediaPipeBodyFusionAuthorityPolicyTests
+{
+namespace
+{
+FMediaPipeBodyFusionSourceStatus MakeSourceStatus(
+	const EMediaPipeBodyFusionSourceState State,
+	const float Confidence = 1.0f)
+{
+	FMediaPipeBodyFusionSourceStatus Status;
+	Status.State = State;
+	Status.Confidence = Confidence;
+	Status.AgeSeconds = State == EMediaPipeBodyFusionSourceState::Missing ? -1.0f : 0.01f;
+	return Status;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionAuthorityGateTraceOnlyTest,
+	"MediaPipe.BodyFusion.AuthorityGate.TraceOnlyBlocksMediaPipe",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionAuthorityGateTraceOnlyTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionAuthorityGateInput Input;
+	Input.MediaPipeAuthorityMode = 0;
+	Input.bCalibrationUsable = true;
+	Input.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+
+	const FMediaPipeBodyFusionAuthorityGateDecision Decision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(Input);
+
+	TestEqual(TEXT("Trace-only keeps no MediaPipe authority state"),
+		static_cast<uint8>(Decision.AuthorityState),
+		static_cast<uint8>(EMediaPipeBodyFusionAuthorityState::NoMediaPipe));
+	TestEqual(TEXT("Trace-only reason is explicit"), Decision.Reason, FString(TEXT("trace-only")));
+	TestEqual(TEXT("Trace-only blocks MediaPipe pose authority"), Decision.bAllowMediaPipePoseAuthority, static_cast<uint8>(0));
+	TestEqual(TEXT("Trace-only still returns embodied hips-only configured pelvis owner"),
+		static_cast<uint8>(Decision.Authority.GetOwner(EMediaPipeBodyFusionRegion::Pelvis)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionAuthorityGateCalibrationTest,
+	"MediaPipe.BodyFusion.AuthorityGate.CalibrationStates",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionAuthorityGateCalibrationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionAuthorityGateInput FreshInput;
+	FreshInput.MediaPipeAuthorityMode = 1;
+	FreshInput.bCalibrationUsable = false;
+	FreshInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+	const FMediaPipeBodyFusionAuthorityGateDecision FreshDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(FreshInput);
+	TestEqual(TEXT("Fresh MediaPipe pose without calibration enters calibrating state"),
+		static_cast<uint8>(FreshDecision.AuthorityState),
+		static_cast<uint8>(EMediaPipeBodyFusionAuthorityState::MediaPipeCalibrating));
+	TestEqual(TEXT("Missing reject reason falls back to waiting message"),
+		FreshDecision.Reason,
+		FString(TEXT("waiting for calibration")));
+	TestEqual(TEXT("Calibrating state blocks MediaPipe pose authority"),
+		FreshDecision.bAllowMediaPipePoseAuthority,
+		static_cast<uint8>(0));
+
+	FMediaPipeBodyFusionAuthorityGateInput StaleInput = FreshInput;
+	StaleInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
+	StaleInput.CalibrationRejectReason = TEXT("Low MediaPipe confidence");
+	const FMediaPipeBodyFusionAuthorityGateDecision StaleDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StaleInput);
+	TestEqual(TEXT("Stale MediaPipe pose without calibration is rejected"),
+		static_cast<uint8>(StaleDecision.AuthorityState),
+		static_cast<uint8>(EMediaPipeBodyFusionAuthorityState::MediaPipeRejected));
+	TestEqual(TEXT("Calibration reject reason is preserved"),
+		StaleDecision.Reason,
+		FString(TEXT("Low MediaPipe confidence")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionAuthorityGateStableAndStaleTest,
+	"MediaPipe.BodyFusion.AuthorityGate.StableAndStaleMediaPipe",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionAuthorityGateStableAndStaleTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionAuthorityGateInput StableInput;
+	StableInput.MediaPipeAuthorityMode = 1;
+	StableInput.bCalibrationUsable = true;
+	StableInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+	const FMediaPipeBodyFusionAuthorityGateDecision StableDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StableInput);
+	TestEqual(TEXT("Fresh calibrated MediaPipe pose is stable"),
+		static_cast<uint8>(StableDecision.AuthorityState),
+		static_cast<uint8>(EMediaPipeBodyFusionAuthorityState::MediaPipeStable));
+	TestEqual(TEXT("Stable state allows MediaPipe pose authority"),
+		StableDecision.bAllowMediaPipePoseAuthority,
+		static_cast<uint8>(1));
+	TestEqual(TEXT("Stable reason uses normal calibrated wording"),
+		StableDecision.Reason,
+		FString(TEXT("stable calibrated fresh")));
+
+	FMediaPipeBodyFusionAuthorityGateInput LegacyInput = StableInput;
+	LegacyInput.MediaPipeAuthorityMode = 2;
+	const FMediaPipeBodyFusionAuthorityGateDecision LegacyDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(LegacyInput);
+	TestEqual(TEXT("Legacy mode preserves legacy reason"),
+		LegacyDecision.Reason,
+		FString(TEXT("legacy calibrated fresh")));
+
+	FMediaPipeBodyFusionAuthorityGateInput StaleInput = StableInput;
+	StaleInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
+	const FMediaPipeBodyFusionAuthorityGateDecision StaleDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StaleInput);
+	TestEqual(TEXT("Stale calibrated MediaPipe pose is rejected"),
+		static_cast<uint8>(StaleDecision.AuthorityState),
+		static_cast<uint8>(EMediaPipeBodyFusionAuthorityState::MediaPipeRejected));
+	TestEqual(TEXT("Stale reason names source freshness"),
+		StaleDecision.Reason,
+		FString(TEXT("mediaPipe Stale")));
+	TestEqual(TEXT("Rejected state blocks MediaPipe pose authority"),
+		StaleDecision.bAllowMediaPipePoseAuthority,
+		static_cast<uint8>(0));
+	return true;
+}
+}
+
+// Consolidated from MediaPipeBodyFusionPoseWriteContextTests.cpp
+
+namespace MediaPipeBodyFusionPoseWriteContextTests
+{
+namespace
+{
+	FMediaPipeFusedBodyPoint MakeWriteContextPoint(const FVector& LocationWorld)
+	{
+		FMediaPipeFusedBodyPoint Point;
+		Point.bValid = true;
+		Point.LocationWorld = LocationWorld;
+		Point.RotationWorld = FQuat::Identity;
+		Point.Owner = EMediaPipeBodyFusionOwner::Fused;
+		Point.SourceState = EMediaPipeBodyFusionSourceState::Fresh;
+		return Point;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionPoseWriteContextBuildTest,
+	"MediaPipe.BodyFusion.PoseWriteContext.BuildsComponentTargets",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionPoseWriteContextBuildTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeFusedAvatarPose Pose;
+	Pose.Pelvis = MakeWriteContextPoint(FVector(0.0, 0.0, 90.0));
+	Pose.Chest = MakeWriteContextPoint(FVector(0.0, 0.0, 140.0));
+	Pose.Head = MakeWriteContextPoint(FVector(0.0, 0.0, 175.0));
+
+	FMediaPipeAvatarEmbodimentProfile Profile;
+	Profile.DefaultChestLocalOffset = FVector(0.0, 0.0, 140.0);
+	Profile.DefaultHeadLocalOffset = FVector(0.0, 0.0, 175.0);
+	Profile.DefaultNeckLocalOffset = FVector(0.0, 0.0, 160.0);
+	Profile.DefaultNeck02LocalOffset = FVector(0.0, 0.0, 168.0);
+
+	FMediaPipeBodyFusionPoseWriteContextInput Input;
+	Input.Pose = &Pose;
+	Input.TargetComponentToWorld = FTransform::Identity;
+	Input.Profile = Profile;
+	Input.RefChestPosComp = Profile.DefaultChestLocalOffset;
+	Input.RefHeadPosComp = Profile.DefaultHeadLocalOffset;
+	Input.RefNeckPosComp = Profile.DefaultNeckLocalOffset;
+	Input.RefNeck02PosComp = Profile.DefaultNeck02LocalOffset;
+	Input.bHasRefChestPosComp = true;
+	Input.bHasRefNeck02PosComp = true;
+
+	FMediaPipeBodyFusionPoseWriteContext Context;
+	TestTrue(TEXT("Context builds"), FMediaPipeBodyFusionPoseWriteContextBuilder::Build(Input, Context));
+	TestTrue(TEXT("Pelvis component target comes from fused pose"), Context.PelvisComp.Equals(FVector(0.0, 0.0, 90.0)));
+	TestTrue(TEXT("Chest component target comes from fused pose"), Context.ChestComp.Equals(FVector(0.0, 0.0, 140.0)));
+	TestTrue(TEXT("Head component target comes from fused pose"), Context.HeadComp.Equals(FVector(0.0, 0.0, 175.0)));
+	TestTrue(TEXT("Torso up points along solved pelvis-to-chest"), Context.UpComp.Equals(FVector::UpVector));
+	TestTrue(TEXT("Neck chain targets are available"), Context.bHasNeckChainTargets);
+	TestTrue(TEXT("Neck02 alpha is after neck alpha"), Context.RefNeck02Alpha >= Context.RefNeckAlpha);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionPoseWriteContextMissingPoseTest,
+	"MediaPipe.BodyFusion.PoseWriteContext.RejectsMissingPose",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionPoseWriteContextMissingPoseTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionPoseWriteContextInput Input;
+	FMediaPipeBodyFusionPoseWriteContext Context;
+	TestFalse(TEXT("Missing pose is rejected"), FMediaPipeBodyFusionPoseWriteContextBuilder::Build(Input, Context));
+
+	FMediaPipeFusedAvatarPose Pose;
+	Input.Pose = &Pose;
+	TestFalse(TEXT("Invalid fused body points are rejected"), FMediaPipeBodyFusionPoseWriteContextBuilder::Build(Input, Context));
+
+	return true;
+}
+}
+
+// Runtime policy coverage now lives with the BodyFusion behavior tests.
+
+namespace MediaPipeBodyFusionRuntimeTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionRuntimePolicyStableGateTest,
+	"MediaPipe.BodyFusion.Runtime.StableGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionRuntimePolicyStableGateTest::RunTest(const FString& Parameters)
+{
+	TestEqual(
+		TEXT("Default authority clamps stable frame config to non-negative"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableFrames(0, -3),
+		0);
+	TestEqual(
+		TEXT("Default authority preserves positive stable frame config"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableFrames(0, 12),
+		12);
+	TestEqual(
+		TEXT("Forced authority bypasses stable frame gate"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableFrames(2, 12),
+		0);
+
+	TestEqual(
+		TEXT("Default authority clamps stable seconds config to non-negative"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableSeconds(0, -0.25f),
+		0.0f);
+	TestEqual(
+		TEXT("Default authority preserves stable seconds config"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableSeconds(0, 0.35f),
+		0.35f);
+	TestEqual(
+		TEXT("Forced authority bypasses stable seconds gate"),
+		FMediaPipeBodyFusionRuntimePolicy::ResolveRequiredStableSeconds(2, 0.35f),
+		0.0f);
+
+	return true;
+}
+}
+
+// Source-frame builder input coverage after merging the adapter/builder files.
+
+namespace MediaPipeTrackingSourceFrameBuilderInputTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderBuildsNormalizedFrameTest,
+	"MediaPipe.TrackingSourceFrameBuilder.BuildsNormalizedFrame",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderBuildsNormalizedFrameTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrameBuilderInput Input;
+	Input.NowSeconds = 42.0;
+	Input.bHasHmdPose = true;
+	Input.HmdLocationWorld = FVector(1.0f, 2.0f, 180.0f);
+	Input.HmdRotationWorld = FQuat(FVector::UpVector, PI * 0.25f);
+	Input.HmdTrackingUpWorld = FVector::UpVector;
+
+	Input.QuestHands.bHasLeft = 1;
+	Input.QuestHands.bLeftTracked = 1;
+	Input.QuestHands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] =
+		FVector(10.0f, -20.0f, 90.0f);
+
+	Input.MediaPipePose.TimestampSeconds = 41.95;
+	Input.MediaPipePose.SetLandmark(
+		EMediaPipePoseLandmark::LeftHip,
+		FVector(0.0f, -8.0f, 92.0f),
+		0.8f);
+	Input.MediaPipePose.SetLandmark(
+		EMediaPipePoseLandmark::RightHip,
+		FVector(0.0f, 8.0f, 92.0f),
+		0.6f);
+	Input.bOverrideQuestFullArmChainMaxAgeSeconds = true;
+	Input.QuestFullArmChainMaxAgeSeconds = 0.75f;
+
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
+	FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(Input, Frame, Thresholds);
+
+	TestTrue(TEXT("HMD pose is copied"), Frame.bHasHmdPose);
+	TestTrue(TEXT("HMD location matches"), Frame.HmdLocationWorld.Equals(Input.HmdLocationWorld, 0.01f));
+	TestEqual(TEXT("HMD status is fresh"),
+		static_cast<uint8>(Frame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	TestTrue(TEXT("Quest left hand is copied"), Frame.bHasQuestLeftHand);
+	TestEqual(TEXT("Quest full-arm freshness override is applied"),
+		Thresholds.QuestFullArmChainMaxAgeSeconds,
+		0.75f);
+
+	FVector LeftHipWorld = FVector::ZeroVector;
+	float LeftHipReliability = 0.0f;
+	TestTrue(TEXT("MediaPipe landmark is copied"),
+		Frame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
+	TestTrue(TEXT("MediaPipe landmark location matches"), LeftHipWorld.Equals(FVector(0.0f, -8.0f, 92.0f), 0.01f));
+	TestEqual(TEXT("MediaPipe landmark reliability matches"), LeftHipReliability, 0.8f);
+	TestEqual(TEXT("MediaPipe pose status is fresh"),
+		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderMissingHmdTest,
+	"MediaPipe.TrackingSourceFrameBuilder.MissingHmdRemainsMissing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderMissingHmdTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrameBuilderInput Input;
+	Input.NowSeconds = 10.0;
+
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
+	FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(Input, Frame, Thresholds);
+
+	TestFalse(TEXT("Missing HMD stays absent"), Frame.bHasHmdPose);
+	TestEqual(TEXT("Missing HMD status remains missing"),
+		static_cast<uint8>(Frame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Missing));
+	TestTrue(TEXT("Empty MediaPipe pose sample is still present to preserve legacy builder behavior"), Frame.bHasMediaPipePose);
+	TestEqual(TEXT("Empty MediaPipe pose is classified invalid"),
+		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Invalid));
+	return true;
+}
+}
+
+// Direct source-frame builder population coverage.
+
+namespace MediaPipeTrackingSourceFrameBuilderTests
+{
+namespace
+{
+void MarkFullArmJoint(FMediaPipeFullArmChainJointSnapshot& Joint, const FVector& LocationWorld)
+{
+	Joint.WorldTransform = FTransform(FQuat::Identity, LocationWorld);
+	Joint.bValid = 1;
+	Joint.bPositionValid = 1;
+	Joint.bOrientationValid = 1;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderQuestHandsTest,
+	"MediaPipe.TrackingSourceFrameBuilder.QuestHands",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderQuestHandsTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(Frame, 12.0);
+
+	FQuestHandTrackingSnapshot Hands;
+	Hands.bHasLeft = 1;
+	Hands.bLeftTracked = 1;
+	Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = FVector(10.0f, -20.0f, 90.0f);
+	Hands.bHasRight = 1;
+	Hands.bRightTracked = 0;
+	Hands.RightPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = FVector(11.0f, 20.0f, 91.0f);
+
+	FMediaPipeTrackingSourceFrameBuilder::PopulateQuestHands(Frame, Hands, 12.0);
+	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+
+	TestTrue(TEXT("Left Quest hand wrist is copied"), Frame.bHasQuestLeftHand);
+	TestTrue(TEXT("Right Quest hand wrist is copied even when side is untracked but available"), Frame.bHasQuestRightHand);
+	TestTrue(TEXT("Left wrist location matches"), Frame.QuestLeftHandWorld.Equals(FVector(10.0f, -20.0f, 90.0f), 0.01f));
+	TestTrue(TEXT("Right wrist location matches"), Frame.QuestRightHandWorld.Equals(FVector(11.0f, 20.0f, 91.0f), 0.01f));
+	TestEqual(TEXT("Tracked Quest hand confidence is live"), Frame.QuestLeftHandConfidence, 1.0f);
+	TestEqual(TEXT("Available untracked Quest hand confidence is held"), Frame.QuestRightHandConfidence, 0.5f);
+	TestEqual(TEXT("Left Quest hand status is fresh"),
+		static_cast<uint8>(Frame.QuestLeftHandStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderFullArmChainTest,
+	"MediaPipe.TrackingSourceFrameBuilder.FullArmChain",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderFullArmChainTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(Frame, 20.0);
+
+	FMediaPipeFullArmChainSnapshot FullArm;
+	FullArm.bActive = 1;
+	FullArm.Confidence = 0.75f;
+	FullArm.Left.bActive = 1;
+	FullArm.Left.Confidence = 0.6f;
+	FullArm.Left.TimestampSeconds = 19.9;
+	MarkFullArmJoint(FullArm.Left.Shoulder, FVector(1.0f, -20.0f, 140.0f));
+	MarkFullArmJoint(FullArm.Left.UpperArm, FVector(5.0f, -25.0f, 130.0f));
+	MarkFullArmJoint(FullArm.Left.LowerArm, FVector(15.0f, -35.0f, 115.0f));
+	MarkFullArmJoint(FullArm.Left.WristOrPalm, FVector(28.0f, -48.0f, 95.0f));
+
+	FMediaPipeTrackingSourceFrameBuilder::PopulateFullArmChain(Frame, FullArm);
+	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+
+	TestTrue(TEXT("Left full-arm chain is copied"), Frame.bHasQuestLeftFullArmChain);
+	TestTrue(TEXT("Shoulder location matches"), Frame.QuestLeftShoulderWorld.Equals(FVector(1.0f, -20.0f, 140.0f), 0.01f));
+	TestTrue(TEXT("Lower arm joint is used as elbow location"), Frame.QuestLeftElbowWorld.Equals(FVector(15.0f, -35.0f, 115.0f), 0.01f));
+	TestTrue(TEXT("Wrist location matches"), Frame.QuestLeftWristWorld.Equals(FVector(28.0f, -48.0f, 95.0f), 0.01f));
+	TestEqual(TEXT("Full-arm chain confidence uses side/global max"), Frame.QuestLeftFullArmChainConfidence, 0.75f);
+	TestEqual(TEXT("Left full-arm chain status is fresh"),
+		static_cast<uint8>(Frame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	TestFalse(TEXT("Missing right full-arm chain remains absent"), Frame.bHasQuestRightFullArmChain);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest,
+	"MediaPipe.TrackingSourceFrameBuilder.MediaPipePoseConfidence",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(Frame, 30.0);
+
+	TStaticArray<FVector, MediaPipePoseLandmarkCount> LandmarksWorld;
+	TStaticArray<float, MediaPipePoseLandmarkCount> LandmarkReliability;
+	TStaticArray<uint8, MediaPipePoseLandmarkCount> LandmarkValid;
+	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+	{
+		LandmarksWorld[Index] = FVector::ZeroVector;
+		LandmarkReliability[Index] = 0.0f;
+		LandmarkValid[Index] = 0;
+	}
+
+	const int32 NoseIndex = static_cast<int32>(EMediaPipePoseLandmark::Nose);
+	const int32 LeftHipIndex = static_cast<int32>(EMediaPipePoseLandmark::LeftHip);
+	const int32 RightHipIndex = static_cast<int32>(EMediaPipePoseLandmark::RightHip);
+	LandmarksWorld[NoseIndex] = FVector(0.0f, 0.0f, 170.0f);
+	LandmarkReliability[NoseIndex] = 0.3f;
+	LandmarkValid[NoseIndex] = 1;
+	LandmarksWorld[LeftHipIndex] = FVector(0.0f, -10.0f, 90.0f);
+	LandmarkReliability[LeftHipIndex] = 0.6f;
+	LandmarkValid[LeftHipIndex] = 1;
+	LandmarksWorld[RightHipIndex] = FVector(0.0f, 10.0f, 90.0f);
+	LandmarkReliability[RightHipIndex] = 0.9f;
+	LandmarkValid[RightHipIndex] = 1;
+
+	FMediaPipeTrackingSourceFrameBuilder::PopulateMediaPipePose(
+		Frame,
+		29.95,
+		LandmarksWorld,
+		LandmarkReliability,
+		LandmarkValid);
+	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+
+	TestTrue(TEXT("MediaPipe pose is marked present"), Frame.bHasMediaPipePose);
+	TestEqual(TEXT("Core MediaPipe pose confidence averages valid core landmarks"), Frame.MediaPipePoseConfidence, 0.6f);
+	TestEqual(TEXT("MediaPipe pose status is fresh"),
+		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+
+	FVector LeftHipWorld = FVector::ZeroVector;
+	float LeftHipReliability = 0.0f;
+	TestTrue(TEXT("Left hip landmark is available"),
+		Frame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
+	TestTrue(TEXT("Left hip location matches"), LeftHipWorld.Equals(FVector(0.0f, -10.0f, 90.0f), 0.01f));
+	TestEqual(TEXT("Left hip reliability matches"), LeftHipReliability, 0.6f);
+	return true;
+}
+}
+
+// Tracking source frame normalization coverage after merging SourceNormalizer.
+
+namespace MediaPipeTrackingSourceFrameNormalizationTests
+{
+namespace
+{
+FMediaPipeTrackingSourceFrame MakeSourceNormalizationFrame()
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	Frame.FrameTimeSeconds = 10.0;
+	Frame.bHasHmdPose = true;
+	Frame.HmdLocationWorld = FVector(10.0f, 5.0f, 170.0f);
+	Frame.HmdRotationWorld = FQuat(0.0f, 0.0f, 0.0f, 2.0f);
+	Frame.TrackingUpWorld = FVector::ZeroVector;
+	Frame.HmdTimestampSeconds = 9.95;
+	Frame.HmdConfidence = 1.0f;
+
+	Frame.bHasQuestLeftFullArmChain = true;
+	Frame.QuestLeftShoulderWorld = FVector(0.0f, -20.0f, 145.0f);
+	Frame.QuestLeftElbowWorld = FVector(15.0f, -35.0f, 120.0f);
+	Frame.QuestLeftWristWorld = FVector(30.0f, -50.0f, 95.0f);
+	Frame.QuestLeftFullArmChainTimestampSeconds = 9.60;
+	Frame.QuestLeftFullArmChainConfidence = 0.9f;
+	return Frame;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameNormalizationFreshnessTest,
+	"MediaPipe.TrackingSourceFrame.Freshness.NormalizesFrameStatus",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameNormalizationFreshnessTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeTrackingSourceFrame RawFrame = MakeSourceNormalizationFrame();
+	const FMediaPipeTrackingSourceFrame NormalizedFrame =
+		RawFrame.Normalized(FMediaPipeBodyFusionFreshnessThresholds());
+
+	TestEqual(
+		TEXT("Normalize does not mutate source frame status"),
+		static_cast<uint8>(RawFrame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Missing));
+	TestTrue(TEXT("Tracking up falls back to world up"),
+		NormalizedFrame.TrackingUpWorld.Equals(FVector::UpVector, 0.001f));
+	TestTrue(TEXT("HMD rotation is normalized"),
+		FMath::IsNearlyEqual(NormalizedFrame.HmdRotationWorld.Size(), 1.0f, 0.001f));
+	TestEqual(
+		TEXT("HMD status is fresh after normalization"),
+		static_cast<uint8>(NormalizedFrame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	TestEqual(
+		TEXT("Default full-arm threshold marks 0.4s sample stale"),
+		static_cast<uint8>(NormalizedFrame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Stale));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameNormalizationThresholdPolicyTest,
+	"MediaPipe.TrackingSourceFrame.Freshness.UsesProvidedThresholds",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameNormalizationThresholdPolicyTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
+	Thresholds.QuestFullArmChainMaxAgeSeconds = 0.5f;
+
+	FMediaPipeTrackingSourceFrame NormalizedFrame = MakeSourceNormalizationFrame();
+	NormalizedFrame.NormalizeInPlace(Thresholds);
+
+	TestEqual(
+		TEXT("Provided full-arm threshold keeps 0.4s sample fresh"),
+		static_cast<uint8>(NormalizedFrame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+	return true;
+}
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

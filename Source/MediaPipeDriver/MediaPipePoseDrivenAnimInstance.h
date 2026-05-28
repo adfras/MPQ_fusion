@@ -10,7 +10,6 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeAvatarProfileResolver.h"
 #include "MediaPipeBodyFusion.h"
-#include "MediaPipeEmbodimentPipeline.h"
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseDrivenSolverState.h"
 #include "MediaPipePoseTypes.h"
@@ -469,7 +468,6 @@ private:
 	FMediaPipeTrackingSourceFrame BodyFusionSourceFrame;
 	FMediaPipeBodyFusionFreshnessThresholds BodyFusionFreshnessThresholds;
 	FMediaPipeFusedAvatarPose LastBodyFusionPose;
-	FMediaPipeEmbodimentPipelineState BodyFusionPipelineState;
 	FMediaPipeBodyFusionAuthority LastBodyFusionAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	FMediaPipeEmbodimentCalibration BodyFusionCalibration;
 	int32 LastBodyFusionCalibrationResetSerial = 0;

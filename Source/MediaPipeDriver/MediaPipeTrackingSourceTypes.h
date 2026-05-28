@@ -84,6 +84,8 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrame
 	void Reset();
 	void SetMediaPipeLandmark(EMediaPipePoseLandmark Landmark, const FVector& LocationWorld, float Reliability);
 	bool TryGetMediaPipeLandmark(EMediaPipePoseLandmark Landmark, FVector& OutLocationWorld, float* OutReliability = nullptr) const;
+	FMediaPipeTrackingSourceFrame Normalized(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds) const;
+	void NormalizeInPlace(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds);
 	void UpdateFreshness(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds);
 
 	static FMediaPipeBodyFusionSourceStatus ClassifySource(

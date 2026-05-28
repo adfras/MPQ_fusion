@@ -6,7 +6,7 @@
 #include "MediaPipeQuestHandTypes.h"
 #include "MediaPipeTrackingSourceTypes.h"
 
-struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionHmdSourceSnapshot
+struct MEDIAPIPEDRIVER_API FMediaPipeTrackingHmdSourceSnapshot
 {
 	bool bHasPose = false;
 	FVector LocationWorld = FVector::ZeroVector;
@@ -16,14 +16,48 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionHmdSourceSnapshot
 	float Confidence = 1.0f;
 };
 
-class MEDIAPIPEDRIVER_API FMediaPipeBodyFusionSourceFrameBuilder
+struct MEDIAPIPEDRIVER_API FMediaPipeTrackingMediaPipePoseSnapshot
+{
+	double TimestampSeconds = -1.0;
+	TStaticArray<FVector, MediaPipePoseLandmarkCount> LandmarksWorld;
+	TStaticArray<float, MediaPipePoseLandmarkCount> LandmarkReliability;
+	TStaticArray<uint8, MediaPipePoseLandmarkCount> LandmarkValid;
+
+	FMediaPipeTrackingMediaPipePoseSnapshot();
+	void Reset();
+	void SetLandmark(EMediaPipePoseLandmark Landmark, const FVector& LocationWorld, float Reliability);
+};
+
+struct MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrameBuilderInput
+{
+	double NowSeconds = -1.0;
+
+	bool bHasHmdPose = false;
+	FVector HmdLocationWorld = FVector::ZeroVector;
+	FQuat HmdRotationWorld = FQuat::Identity;
+	FVector HmdTrackingUpWorld = FVector::UpVector;
+
+	FQuestHandTrackingSnapshot QuestHands;
+	FMediaPipeFullArmChainSnapshot FullArmChain;
+	FMediaPipeTrackingMediaPipePoseSnapshot MediaPipePose;
+
+	bool bOverrideQuestFullArmChainMaxAgeSeconds = false;
+	float QuestFullArmChainMaxAgeSeconds = 0.25f;
+};
+
+class MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrameBuilder
 {
 public:
+	static void BuildSourceFrame(
+		const FMediaPipeTrackingSourceFrameBuilderInput& Input,
+		FMediaPipeTrackingSourceFrame& OutFrame,
+		FMediaPipeBodyFusionFreshnessThresholds& OutThresholds);
+
 	static void ResetForTimestamp(FMediaPipeTrackingSourceFrame& OutFrame, double NowSeconds);
 
 	static void PopulateHmd(
 		FMediaPipeTrackingSourceFrame& InOutFrame,
-		const FMediaPipeBodyFusionHmdSourceSnapshot& Snapshot);
+		const FMediaPipeTrackingHmdSourceSnapshot& Snapshot);
 
 	static void PopulateQuestHands(
 		FMediaPipeTrackingSourceFrame& InOutFrame,

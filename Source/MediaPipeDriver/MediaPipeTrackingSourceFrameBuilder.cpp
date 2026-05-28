@@ -1,4 +1,4 @@
-#include "MediaPipeBodyFusionSourceFrameBuilder.h"
+#include "MediaPipeTrackingSourceFrameBuilder.h"
 
 namespace
 {
@@ -100,7 +100,75 @@ void PopulateFullArmChainSide(
 }
 }
 
-void FMediaPipeBodyFusionSourceFrameBuilder::ResetForTimestamp(
+FMediaPipeTrackingMediaPipePoseSnapshot::FMediaPipeTrackingMediaPipePoseSnapshot()
+{
+	Reset();
+}
+
+void FMediaPipeTrackingMediaPipePoseSnapshot::Reset()
+{
+	TimestampSeconds = -1.0;
+	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+	{
+		LandmarksWorld[Index] = FVector::ZeroVector;
+		LandmarkReliability[Index] = 0.0f;
+		LandmarkValid[Index] = 0;
+	}
+}
+
+void FMediaPipeTrackingMediaPipePoseSnapshot::SetLandmark(
+	const EMediaPipePoseLandmark Landmark,
+	const FVector& LocationWorld,
+	const float Reliability)
+{
+	const int32 Index = static_cast<int32>(Landmark);
+	if (Index < 0 || Index >= MediaPipePoseLandmarkCount)
+	{
+		return;
+	}
+
+	LandmarksWorld[Index] = LocationWorld;
+	LandmarkReliability[Index] = Reliability;
+	LandmarkValid[Index] = 1;
+}
+
+void FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
+	const FMediaPipeTrackingSourceFrameBuilderInput& Input,
+	FMediaPipeTrackingSourceFrame& OutFrame,
+	FMediaPipeBodyFusionFreshnessThresholds& OutThresholds)
+{
+	ResetForTimestamp(OutFrame, Input.NowSeconds);
+
+	if (Input.bHasHmdPose)
+	{
+		FMediaPipeTrackingHmdSourceSnapshot HmdSource;
+		HmdSource.bHasPose = true;
+		HmdSource.LocationWorld = Input.HmdLocationWorld;
+		HmdSource.RotationWorld = Input.HmdRotationWorld;
+		HmdSource.TrackingUpWorld = Input.HmdTrackingUpWorld;
+		HmdSource.TimestampSeconds = Input.NowSeconds;
+		HmdSource.Confidence = 1.0f;
+		PopulateHmd(OutFrame, HmdSource);
+	}
+
+	PopulateQuestHands(OutFrame, Input.QuestHands, Input.NowSeconds);
+	PopulateFullArmChain(OutFrame, Input.FullArmChain);
+	PopulateMediaPipePose(
+		OutFrame,
+		Input.MediaPipePose.TimestampSeconds,
+		Input.MediaPipePose.LandmarksWorld,
+		Input.MediaPipePose.LandmarkReliability,
+		Input.MediaPipePose.LandmarkValid);
+
+	OutThresholds = FMediaPipeBodyFusionFreshnessThresholds();
+	if (Input.bOverrideQuestFullArmChainMaxAgeSeconds)
+	{
+		OutThresholds.QuestFullArmChainMaxAgeSeconds = Input.QuestFullArmChainMaxAgeSeconds;
+	}
+	OutFrame.NormalizeInPlace(OutThresholds);
+}
+
+void FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(
 	FMediaPipeTrackingSourceFrame& OutFrame,
 	const double NowSeconds)
 {
@@ -108,9 +176,9 @@ void FMediaPipeBodyFusionSourceFrameBuilder::ResetForTimestamp(
 	OutFrame.FrameTimeSeconds = NowSeconds;
 }
 
-void FMediaPipeBodyFusionSourceFrameBuilder::PopulateHmd(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateHmd(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
-	const FMediaPipeBodyFusionHmdSourceSnapshot& Snapshot)
+	const FMediaPipeTrackingHmdSourceSnapshot& Snapshot)
 {
 	if (!Snapshot.bHasPose)
 	{
@@ -125,7 +193,7 @@ void FMediaPipeBodyFusionSourceFrameBuilder::PopulateHmd(
 	InOutFrame.HmdConfidence = Snapshot.Confidence;
 }
 
-void FMediaPipeBodyFusionSourceFrameBuilder::PopulateQuestHands(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateQuestHands(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
 	const FQuestHandTrackingSnapshot& Snapshot,
 	const double NowSeconds)
@@ -134,7 +202,7 @@ void FMediaPipeBodyFusionSourceFrameBuilder::PopulateQuestHands(
 	PopulateQuestHandSide(InOutFrame, Snapshot, false, NowSeconds);
 }
 
-void FMediaPipeBodyFusionSourceFrameBuilder::PopulateFullArmChain(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateFullArmChain(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
 	const FMediaPipeFullArmChainSnapshot& Snapshot)
 {
@@ -142,7 +210,7 @@ void FMediaPipeBodyFusionSourceFrameBuilder::PopulateFullArmChain(
 	PopulateFullArmChainSide(InOutFrame, Snapshot, false);
 }
 
-void FMediaPipeBodyFusionSourceFrameBuilder::PopulateMediaPipePose(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateMediaPipePose(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
 	const double TimestampSeconds,
 	const TStaticArray<FVector, MediaPipePoseLandmarkCount>& LandmarksWorld,
@@ -167,7 +235,7 @@ void FMediaPipeBodyFusionSourceFrameBuilder::PopulateMediaPipePose(
 		InOutFrame.MediaPipeLandmarkValid);
 }
 
-float FMediaPipeBodyFusionSourceFrameBuilder::CalculateCoreMediaPipePoseConfidence(
+float FMediaPipeTrackingSourceFrameBuilder::CalculateCoreMediaPipePoseConfidence(
 	const TStaticArray<float, MediaPipePoseLandmarkCount>& LandmarkReliability,
 	const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid)
 {

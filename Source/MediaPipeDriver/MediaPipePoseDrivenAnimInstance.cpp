@@ -2,14 +2,12 @@
 
 #include "MediaPipeArmGuardPolicy.h"
 #include "MediaPipeArmTwistSolver.h"
-#include "MediaPipeAvatarProfileReferenceCalibration.h"
 #include "MediaPipeBodyDiagnostics.h"
 #include "MediaPipeBodyFusionDebugFormatter.h"
 #include "MediaPipeBodyFusionPoseWriteContext.h"
-#include "MediaPipeBodyFusionRuntimePolicy.h"
-#include "MediaPipeBodyFusionSourceFrameAdapter.h"
+#include "MediaPipeBodyFusionRuntime.h"
+#include "MediaPipeTrackingSourceFrameBuilder.h"
 #include "MediaPipeBodySolverMath.h"
-#include "MediaPipeEmbodimentDebugCommands.h"
 #include "MediaPipeMetaHumanArmRetargeter.h"
 #include "MediaPipeMetaHumanPoseAdapter.h"
 #include "MediaPipePoseCoordinate.h"
@@ -592,7 +590,6 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		ResetPoseYawAlignRuntimeState(SkelComp);
 		ResetQuestWristRuntimeState(SkelComp);
 		ResetRotationSmoothing();
-		BodyFusionPipelineState.Reset();
 		MediaPipePoseFrameContinuity::ResetHeldFrame(
 			bHasPoseFrame,
 			PoseFrame,
@@ -911,7 +908,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	{
 		const double BodyFusionNowSeconds = FPlatformTime::Seconds();
 
-		FMediaPipeBodyFusionMediaPipePoseSnapshot MediaPipePoseSnapshot;
+		FMediaPipeTrackingMediaPipePoseSnapshot MediaPipePoseSnapshot;
 		MediaPipePoseSnapshot.TimestampSeconds = BodyFusionNowSeconds;
 		for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
 		{
@@ -925,7 +922,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 			}
 		}
 
-		FMediaPipeBodyFusionSourceFrameAdapterInput SourceFrameInput;
+		FMediaPipeTrackingSourceFrameBuilderInput SourceFrameInput;
 		SourceFrameInput.NowSeconds = BodyFusionNowSeconds;
 		SourceFrameInput.bHasHmdPose = bHasCachedQuestHmdPose;
 		SourceFrameInput.HmdLocationWorld = CachedQuestHmdWorld;
@@ -937,7 +934,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		SourceFrameInput.bOverrideQuestFullArmChainMaxAgeSeconds = TargetMetaHumanProfile.IsValidForPoseDriving();
 		SourceFrameInput.QuestFullArmChainMaxAgeSeconds =
 			ResolveMediaPipeMetaHumanFullArmChainMaxAgeSeconds(TargetMetaHumanProfile);
-		FMediaPipeBodyFusionSourceFrameAdapter::BuildSourceFrame(
+		FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 			SourceFrameInput,
 			BodyFusionSourceFrame,
 			BodyFusionFreshnessThresholds);
@@ -965,20 +962,18 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		LastBodyFusionAuthorityReason = AuthorityGateDecision.Reason;
 		bLastBodyFusionMediaPipeAuthorityAllowed = AuthorityGateDecision.bAllowMediaPipePoseAuthority;
 
-		FMediaPipeEmbodimentPipelineInput PipelineInput;
-		PipelineInput.SourceFrame = BodyFusionSourceFrame;
-		PipelineInput.FreshnessThresholds = BodyFusionFreshnessThresholds;
-		PipelineInput.Calibration = BodyFusionCalibration;
-		PipelineInput.Authority = LastBodyFusionAuthority;
-		PipelineInput.Profile = BodyFusionProfile;
-		PipelineInput.AvatarWorldTransform = TargetCompTransform;
-		PipelineInput.UserCameraForwardOffsetCm = 0.0f;
-		PipelineInput.bAllowMediaPipePoseAuthority = bLastBodyFusionMediaPipeAuthorityAllowed != 0;
-		PipelineInput.BodyAuthorityState = LastBodyFusionAuthorityState;
+		FMediaPipeBodyFusionSolveInput BodyFusionInput;
+		BodyFusionInput.SourceFrame = BodyFusionSourceFrame.Normalized(BodyFusionFreshnessThresholds);
+		BodyFusionInput.Calibration = BodyFusionCalibration;
+		BodyFusionInput.Authority = LastBodyFusionAuthority;
+		BodyFusionInput.Profile = BodyFusionProfile;
+		BodyFusionInput.AvatarWorldTransform = TargetCompTransform;
+		BodyFusionInput.UserCameraForwardOffsetCm = 0.0f;
+		BodyFusionInput.bAllowMediaPipePoseAuthority = bLastBodyFusionMediaPipeAuthorityAllowed != 0;
+		BodyFusionInput.BodyAuthorityState = LastBodyFusionAuthorityState;
 
-		FMediaPipeEmbodimentPipelineOutput PipelineOutput;
-		FMediaPipeEmbodimentPipeline::Evaluate(PipelineInput, BodyFusionPipelineState, PipelineOutput);
-		LastBodyFusionPose = PipelineOutput.FusedPose;
+		LastBodyFusionPose.Reset();
+		FMediaPipeBodyFusionSolver::Solve(BodyFusionInput, LastBodyFusionPose);
 
 		if (BodyFusionRuntimePolicy.bDebugEnabled)
 		{
@@ -1001,7 +996,6 @@ bool FAnimNode_MediaPipePoseDriven::TryUpdateBodyFusionCalibration_GameThread(co
 		BodyFusionCalibrationStableFrameCount = 0;
 		BodyFusionCalibrationStableSeconds = 0.0f;
 		LastBodyFusionCalibrationUpdateTimeSeconds = -1.0;
-		BodyFusionPipelineState.Reset();
 		if (BodyFusionRuntimePolicy.bDebugEnabled)
 		{
 			UE_LOG(LogMediaPipePose, Log,
@@ -2611,7 +2605,6 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 		ResetPoseYawAlignRuntimeState(RuntimeStateKey);
 		ResetQuestWristRuntimeState(RuntimeStateKey);
 		ResetRotationSmoothing();
-		BodyFusionPipelineState.Reset();
 		UE_LOG(
 			LogMediaPipePose,
 			Warning,

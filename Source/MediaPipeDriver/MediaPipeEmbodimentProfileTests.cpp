@@ -1,18 +1,398 @@
-#include "Misc/AutomationTest.h"
-
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "MediaPipeMetaHumanProfile.h"
-#include "MediaPipeRuntimeCVars.h"
-
 #include "Animation/AnimInstance.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/Actor.h"
 #include "HAL/IConsoleManager.h"
+#include "MediaPipeAvatarEmbodimentProfile.h"
+#include "MediaPipeAvatarProfileResolver.h"
+#include "MediaPipeAvatarRigProfile.h"
+#include "MediaPipeMetaHumanProfile.h"
+#include "MediaPipeRuntimeCVars.h"
+#include "Misc/AutomationTest.h"
 #include "UObject/Package.h"
-
 #include <limits>
 
+// Consolidated from MediaPipeAvatarEmbodimentProfileTests.cpp
+
+namespace MediaPipeAvatarEmbodimentProfileTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarEmbodimentMannySolveAutomationTest,
+	"TestingKit3.MediaPipe.AvatarEmbodiment.MannyCameraAnchoredSolve",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarEmbodimentMannySolveAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarRigProfile RigProfile;
+	TestTrue(TEXT("Internal Manny rig profile resolves"), TryGetMediaPipeInternalMannyAvatarRigProfile(RigProfile));
+
+	const FMediaPipeAvatarEmbodimentProfile Profile = BuildMediaPipeAvatarEmbodimentProfileFromRigProfile(RigProfile);
+	FMediaPipeAvatarEmbodimentSolveInput Input;
+	Input.DesiredCameraWorld = FVector(100.0f, 200.0f, 170.0f);
+	Input.ViewerYawWorld = FRotator(0.0f, 0.0f, 0.0f);
+	Input.Profile = Profile;
+	Input.bSnapAvatarToGround = false;
+
+	FMediaPipeAvatarEmbodimentSolveResult Result;
+	TestTrue(TEXT("Camera-anchored solve succeeds"), FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(Input, Result));
+	TestTrue(TEXT("Manny uses profile yaw offset"), FMath::IsNearlyEqual(Result.AvatarYawWorld.Yaw, -90.0, 0.01));
+	TestTrue(TEXT("Solved camera remains at desired camera when ground snap is off"),
+		Result.CameraWorld.Equals(Input.DesiredCameraWorld, 0.01f));
+	TestTrue(TEXT("Y-forward Manny profile points at viewer forward after yaw offset"),
+		Result.AvatarForwardWorld.Equals(FVector::ForwardVector, 0.01f));
+	TestEqual(TEXT("Profile camera clearance is consumed by the solve"),
+		Result.CameraForwardOffsetCm,
+		10.0f);
+	TestEqual(TEXT("Manny head bone is already at the HMD eye anchor"),
+		Profile.HeadBoneFromEyeOffsetCm,
+		0.0f);
+	TestEqual(TEXT("Manny profile keeps full upper-body follow until a target reference pose calibrates it"),
+		Profile.UpperBodyFollowAlpha,
+		1.0f);
+	TestTrue(TEXT("Manny profile has a derived chest anchor"),
+		Profile.DefaultChestLocalOffset.Z > Profile.DefaultPelvisLocalOffset.Z);
+	TestTrue(TEXT("Manny profile has measured head-to-chest distance"),
+		Profile.ExpectedHeadToChestCm > 0.0f);
+	TestTrue(TEXT("Manny profile has bounded arm length ranges"),
+		Profile.MinUpperArmLengthCm < Profile.ExpectedUpperArmLengthCm &&
+		Profile.MaxUpperArmLengthCm > Profile.ExpectedUpperArmLengthCm &&
+		Profile.MinLowerArmLengthCm < Profile.ExpectedLowerArmLengthCm &&
+		Profile.MaxLowerArmLengthCm > Profile.ExpectedLowerArmLengthCm);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarEmbodimentMetaHumanSolveAutomationTest,
+	"TestingKit3.MediaPipe.AvatarEmbodiment.MetaHumanProfileSolve",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarEmbodimentMetaHumanSolveAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeMetaHumanProfileDefinition MetaHumanProfile;
+	MetaHumanProfile.ProfileId = FName(TEXT("Kellan"));
+	MetaHumanProfile.FaceForwardAxis = EMediaPipeMetaHumanForwardAxis::Y;
+	MetaHumanProfile.EmbodiedYawOffsetDeg = -90.0f;
+	MetaHumanProfile.DefaultEyeLocalOffset = FVector(0.0f, 8.92f, 161.94f);
+	MetaHumanProfile.UpperBodyFollowAlpha = 0.66f;
+
+	const FMediaPipeAvatarEmbodimentProfile Profile =
+		BuildMediaPipeAvatarEmbodimentProfileFromMetaHumanProfile(MetaHumanProfile);
+
+	FMediaPipeAvatarEmbodimentSolveInput Input;
+	Input.DesiredCameraWorld = FVector(10.0f, 20.0f, 180.0f);
+	Input.ViewerYawWorld = FRotator(0.0f, 30.0f, 0.0f);
+	Input.Profile = Profile;
+	Input.bSnapAvatarToGround = false;
+
+	FMediaPipeAvatarEmbodimentSolveResult Result;
+	TestTrue(TEXT("MetaHuman camera-anchored solve succeeds"), FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(Input, Result));
+	TestEqual(TEXT("MetaHuman profile id is retained"), Profile.ProfileId, FName(TEXT("Kellan")));
+	TestTrue(TEXT("MetaHuman uses viewer yaw plus profile yaw offset"), FMath::IsNearlyEqual(Result.AvatarYawWorld.Yaw, -60.0, 0.01));
+	TestTrue(TEXT("Solved MetaHuman camera remains at desired camera when ground snap is off"),
+		Result.CameraWorld.Equals(Input.DesiredCameraWorld, 0.01f));
+	TestTrue(TEXT("MetaHuman profile uses face-forward axis"),
+		Profile.bUseTargetFaceForwardAxis);
+	TestTrue(TEXT("MetaHuman fallback head anchor is below the eye until the spawned avatar resolves exact anchors"),
+		Profile.HeadBoneFromEyeOffsetCm < 0.0f);
+	TestEqual(TEXT("MetaHuman profile carries configured upper-body follow alpha"),
+		Profile.UpperBodyFollowAlpha,
+		0.66f);
+	TestTrue(TEXT("MetaHuman profile has derived pelvis anchor"),
+		Profile.DefaultPelvisLocalOffset.Z > 0.0f);
+	TestTrue(TEXT("MetaHuman profile has measured chest-to-pelvis distance"),
+		Profile.ExpectedChestToPelvisCm > 0.0f);
+	TestTrue(TEXT("MetaHuman profile has bounded leg length ranges"),
+		Profile.MinThighLengthCm < Profile.ExpectedThighLengthCm &&
+		Profile.MaxThighLengthCm > Profile.ExpectedThighLengthCm &&
+		Profile.MinCalfLengthCm < Profile.ExpectedCalfLengthCm &&
+		Profile.MaxCalfLengthCm > Profile.ExpectedCalfLengthCm);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarEmbodimentQuestWristMapAutomationTest,
+	"TestingKit3.MediaPipe.AvatarEmbodiment.QuestHmdRelativeWristMap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarEmbodimentQuestWristMapAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarRigProfile RigProfile;
+	TestTrue(TEXT("Internal Manny rig profile resolves"), TryGetMediaPipeInternalMannyAvatarRigProfile(RigProfile));
+	const FMediaPipeAvatarEmbodimentProfile Profile = BuildMediaPipeAvatarEmbodimentProfileFromRigProfile(RigProfile);
+
+	FMediaPipeAvatarHmdWristMapInput Input;
+	Input.QuestAnchorWorld = FVector(100.0f, 0.0f, 170.0f);
+	Input.QuestAnchorYawWorld = FQuat::Identity;
+	Input.QuestTrackingUpWorld = FVector::UpVector;
+	Input.QuestWristWorld = FVector(120.0f, 30.0f, 160.0f);
+	Input.TargetCompTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector::ZeroVector);
+	Input.Profile = Profile;
+	Input.PositionScale = 1.0f;
+	Input.MaxOffsetCm = 0.0f;
+
+	FMediaPipeAvatarHmdWristMapResult Result;
+	TestTrue(TEXT("HMD-relative wrist map succeeds"), FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(Input, Result));
+	TestTrue(TEXT("HMD-relative wrist is preserved in anchor yaw space"),
+		Result.HmdRelativeWrist.Equals(FVector(20.0f, 30.0f, -10.0f), 0.01f));
+	TestEqual(TEXT("Manny camera clearance applies to wrist mapping"), Result.CameraForwardOffsetCm, 10.0f);
+	TestFalse(TEXT("No reach clamp was applied"), Result.bOffsetClamped);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest,
+	"TestingKit3.MediaPipe.AvatarEmbodiment.LocalViewPolicy",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeAvatarLocalViewPolicy Policy = FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid();
+	TestFalse(TEXT("Single-mesh local cull is disabled by default"), Policy.bAllowSingleMeshComponentCull);
+	TestTrue(TEXT("Single-mesh first-person body proxy is enabled by default"), Policy.bUseSingleMeshFirstPersonBodyProxy);
+	TestTrue(TEXT("Default local-view policy has head/face fragments"), Policy.LocalOnlyCullNameFragments.Contains(FString(TEXT("Face"))));
+	TestTrue(TEXT("Default local-view policy has eye fragments"), Policy.LocalOnlyCullNameFragments.Contains(FString(TEXT("Eye"))));
+	TestTrue(TEXT("Default local-view policy hides the head bone on first-person body proxy"), Policy.LocalOnlyHiddenBones.Contains(FName(TEXT("head"))));
+	TestTrue(TEXT("Default local-view policy hides the neck chain on first-person body proxy"), Policy.LocalOnlyHiddenBones.Contains(FName(TEXT("neck_01"))));
+
+	UStaticMeshComponent* SingleMeshHeadNamedComponent =
+		NewObject<UStaticMeshComponent>(GetTransientPackage(), FName(TEXT("MannySingleMeshWithHead")));
+	TestFalse(TEXT("Single-mesh Manny-like avatar remains locally visible even if the mesh name contains Head"),
+		Policy.ShouldCullComponentFromLocalView(SingleMeshHeadNamedComponent, 1));
+	TestTrue(TEXT("Single-mesh Manny-like avatar uses a first-person body proxy instead of direct whole-mesh cull"),
+		Policy.ShouldUseSingleMeshFirstPersonBodyProxy(1));
+
+	UStaticMeshComponent* MetaHumanFaceComponent =
+		NewObject<UStaticMeshComponent>(GetTransientPackage(), FName(TEXT("Emory_FaceMesh")));
+	TestTrue(TEXT("Separate MetaHuman face component is culled only from the owning local view"),
+		Policy.ShouldCullComponentFromLocalView(MetaHumanFaceComponent, 4));
+	TestFalse(TEXT("Multi-component avatars do not use the single-mesh first-person body proxy"),
+		Policy.ShouldUseSingleMeshFirstPersonBodyProxy(4));
+
+	UStaticMeshComponent* MetaHumanBodyComponent =
+		NewObject<UStaticMeshComponent>(GetTransientPackage(), FName(TEXT("Emory_Body")));
+	TestFalse(TEXT("Separate MetaHuman body component remains locally visible"),
+		Policy.ShouldCullComponentFromLocalView(MetaHumanBodyComponent, 4));
+	return true;
+}
+}
+
+// Reference calibration coverage now lives with the runtime avatar profile tests.
+
+namespace MediaPipeAvatarEmbodimentProfileReferenceCalibrationTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileReferenceCalibrationUpperBodyFollowAutomationTest,
+	"MediaPipe.AvatarEmbodimentProfile.ReferenceCalibration.UpperBodyFollowAlpha",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileReferenceCalibrationUpperBodyFollowAutomationTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("Invalid measurements keep the clamped fallback"),
+		FMath::IsNearlyEqual(
+			FMediaPipeAvatarProfileReferenceCalibration::ResolveUpperBodyFollowAlpha(0.0f, 40.0f, 0.42f),
+			0.42f,
+			0.001f));
+
+	TestTrue(TEXT("Reference proportions derive a bounded upper-body follow alpha"),
+		FMath::IsNearlyEqual(
+			FMediaPipeAvatarProfileReferenceCalibration::ResolveUpperBodyFollowAlpha(50.0f, 30.0f, 1.0f),
+			0.59375f,
+			0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileReferenceCalibrationApplyReferencePoseAutomationTest,
+	"MediaPipe.AvatarEmbodimentProfile.ReferenceCalibration.ApplyReferencePose",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileReferenceCalibrationApplyReferencePoseAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarEmbodimentProfile Profile;
+	Profile.DefaultEyeLocalOffset = FVector(4.0f, 5.0f, 178.0f);
+	Profile.HeadBoneFromEyeOffsetCm = 8.0f;
+	Profile.DefaultChestLocalOffset = FVector(0.0f, 0.0f, 110.0f);
+	Profile.DefaultNeck02LocalOffset = FVector(0.0f, 0.0f, 154.0f);
+	Profile.UpperBodyFollowAlpha = 1.0f;
+	Profile.bAutoCalibrateUpperBodyFollowAlpha = true;
+
+	FMediaPipeAvatarReferencePoseProportions Reference;
+	Reference.bHasReferencePose = true;
+	Reference.bHasLeftArm = true;
+	Reference.bHasRightArm = true;
+	Reference.LeftUpperArmLengthCm = 30.0f;
+	Reference.RightUpperArmLengthCm = 34.0f;
+	Reference.LeftLowerArmLengthCm = 27.0f;
+	Reference.RightLowerArmLengthCm = 29.0f;
+	Reference.bHasLeftLeg = true;
+	Reference.bHasRightLeg = true;
+	Reference.LeftThighLengthCm = 41.0f;
+	Reference.RightThighLengthCm = 45.0f;
+	Reference.LeftCalfLengthCm = 40.0f;
+	Reference.RightCalfLengthCm = 46.0f;
+	Reference.bHasChestLocal = true;
+	Reference.bHasNeck02Local = true;
+	Reference.PelvisLocal = FVector(0.0f, 0.0f, 90.0f);
+	Reference.ChestLocal = FVector(0.0f, 0.0f, 120.0f);
+	Reference.NeckLocal = FVector(0.0f, 0.0f, 150.0f);
+	Reference.Neck02Local = FVector(0.0f, 0.0f, 158.0f);
+	Reference.HeadLocal = FVector(0.0f, 0.0f, 170.0f);
+	Reference.HeadBasisComponent = FQuat::Identity;
+
+	const FMediaPipeAvatarReferenceProfileCalibrationResult Result =
+		FMediaPipeAvatarProfileReferenceCalibration::ApplyReferencePose(Reference, Profile);
+
+	TestTrue(TEXT("Reference pose was applied"), Result.bAppliedReferencePose);
+	TestTrue(TEXT("Eye local offset was resolved from reference head and profile planar offset"), Result.bResolvedEyeLocalOffset);
+	TestTrue(TEXT("Upper arm length averages left and right reference lengths"),
+		FMath::IsNearlyEqual(Profile.ExpectedUpperArmLengthCm, 32.0f, 0.001f));
+	TestTrue(TEXT("Lower arm length averages left and right reference lengths"),
+		FMath::IsNearlyEqual(Profile.ExpectedLowerArmLengthCm, 28.0f, 0.001f));
+	TestTrue(TEXT("Thigh length averages left and right reference lengths"),
+		FMath::IsNearlyEqual(Profile.ExpectedThighLengthCm, 43.0f, 0.001f));
+	TestTrue(TEXT("Calf length averages left and right reference lengths"),
+		FMath::IsNearlyEqual(Profile.ExpectedCalfLengthCm, 43.0f, 0.001f));
+	TestEqual(TEXT("Reference chest anchor is copied into the runtime profile"), Profile.DefaultChestLocalOffset, Reference.ChestLocal);
+	TestEqual(TEXT("Reference neck_02 anchor is copied when present"), Profile.DefaultNeck02LocalOffset, Reference.Neck02Local);
+	TestEqual(TEXT("Reference pelvis anchor is copied into the runtime profile"), Profile.DefaultPelvisLocalOffset, Reference.PelvisLocal);
+	TestTrue(TEXT("Head local anchor is marked present"), Profile.bHasDefaultHeadLocalOffset);
+	TestEqual(TEXT("Reference head anchor is copied into the runtime profile"), Profile.DefaultHeadLocalOffset, Reference.HeadLocal);
+	TestTrue(TEXT("Eye anchor keeps the profile planar offset while preserving head-from-eye distance"),
+		Profile.DefaultEyeLocalOffset.Equals(FVector(4.0f, 5.0f, 162.0f), 0.001f));
+	TestTrue(TEXT("Reference body proportions drive upper-body follow alpha"),
+		FMath::IsNearlyEqual(Profile.UpperBodyFollowAlpha, 0.59375f, 0.001f));
+	TestTrue(TEXT("Eye-in-head local offset is available after calibration"), Profile.bHasDefaultEyeLocalInHeadOffset);
+	TestTrue(TEXT("Measured arm ranges are opened after exact reference calibration"),
+		Profile.MinUpperArmLengthCm == 0.0f && Profile.MaxUpperArmLengthCm == BIG_NUMBER);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileReferenceCalibrationNoReferencePoseAutomationTest,
+	"MediaPipe.AvatarEmbodimentProfile.ReferenceCalibration.NoReferencePoseNoop",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileReferenceCalibrationNoReferencePoseAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarEmbodimentProfile Profile;
+	Profile.ExpectedUpperArmLengthCm = 31.0f;
+
+	FMediaPipeAvatarReferencePoseProportions Reference;
+	const FMediaPipeAvatarReferenceProfileCalibrationResult Result =
+		FMediaPipeAvatarProfileReferenceCalibration::ApplyReferencePose(Reference, Profile);
+
+	TestFalse(TEXT("No reference pose means no calibration was applied"), Result.bAppliedReferencePose);
+	TestFalse(TEXT("No reference pose cannot resolve an eye anchor"), Result.bResolvedEyeLocalOffset);
+	TestTrue(TEXT("Profile remains unchanged"),
+		FMath::IsNearlyEqual(Profile.ExpectedUpperArmLengthCm, 31.0f, 0.001f));
+	return true;
+}
+}
+
+// Consolidated from MediaPipeAvatarProfileResolverTests.cpp
+
+namespace MediaPipeAvatarProfileResolverTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileResolverNullComponentAutomationTest,
+	"MediaPipe.AvatarProfileResolver.NullComponent",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileResolverNullComponentAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeResolvedAvatarProfile ResolvedProfile =
+		FMediaPipeAvatarProfileResolver::ResolveForComponent(nullptr);
+
+	TestFalse(TEXT("Null component does not resolve an embodiment profile"), ResolvedProfile.bHasEmbodimentProfile);
+	TestFalse(TEXT("Null component does not resolve a MetaHuman profile"), ResolvedProfile.MetaHumanProfile.bIsMetaHuman);
+	TestEqual(TEXT("Null component has no target actor name"), ResolvedProfile.TargetActorName, NAME_None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileResolverEmbodimentSnapshotAutomationTest,
+	"MediaPipe.AvatarProfileResolver.EmbodimentSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileResolverEmbodimentSnapshotAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarEmbodimentProfile Profile;
+	Profile.ProfileId = FName(TEXT("SnapshotProfile"));
+	Profile.bUseTargetFaceForwardAxis = true;
+	Profile.DefaultEyeLocalOffset = FVector(1.0f, 2.0f, 165.0f);
+	Profile.EmbodiedCameraForwardOffsetCm = 12.0f;
+
+	FMediaPipeResolvedAvatarProfile ResolvedProfile;
+	ResolvedProfile.SetEmbodimentProfile(Profile);
+
+	TestTrue(TEXT("Valid profile is marked available"), ResolvedProfile.bHasEmbodimentProfile);
+	TestTrue(TEXT("Face-forward axis flag is copied"), ResolvedProfile.bUseTargetFaceForwardAxis);
+	TestTrue(TEXT("Eye offset is available"), ResolvedProfile.bHasTargetEyeLocalOffset);
+	TestEqual(TEXT("Eye offset is copied"), ResolvedProfile.TargetEyeLocalOffset, Profile.DefaultEyeLocalOffset);
+	TestEqual(TEXT("Embodied camera forward offset is copied"),
+		ResolvedProfile.TargetEmbodiedCameraForwardOffsetCm,
+		Profile.EmbodiedCameraForwardOffsetCm);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarProfileResolverLogStateAutomationTest,
+	"MediaPipe.AvatarProfileResolver.LogStateReset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarProfileResolverLogStateAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarProfileResolverLogState LogState;
+	LogState.LastMetaHumanProfileLogStateByRuntimeKey.Add(42u, TEXT("state"));
+	LogState.LastMetaHumanProfileLogTimeByRuntimeKey.Add(42u, 1.0);
+	LogState.LastMetaHumanValidationLogTimeByRuntimeKey.Add(42u, 2.0);
+	LogState.LastMetaHumanProfileLogStateByRuntimeKey.Add(7u, TEXT("other"));
+
+	LogState.ResetRuntimeKey(42u);
+
+	TestFalse(TEXT("Profile log state is cleared for the runtime key"),
+		LogState.LastMetaHumanProfileLogStateByRuntimeKey.Contains(42u));
+	TestFalse(TEXT("Profile log time is cleared for the runtime key"),
+		LogState.LastMetaHumanProfileLogTimeByRuntimeKey.Contains(42u));
+	TestFalse(TEXT("Validation log time is cleared for the runtime key"),
+		LogState.LastMetaHumanValidationLogTimeByRuntimeKey.Contains(42u));
+	TestTrue(TEXT("Other runtime keys are preserved"),
+		LogState.LastMetaHumanProfileLogStateByRuntimeKey.Contains(7u));
+	return true;
+}
+}
+
+// Consolidated from MediaPipeAvatarRigProfileTests.cpp
+
+namespace MediaPipeAvatarRigProfileTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarRigProfileInternalMannyAutomationTest,
+	"TestingKit3.MediaPipe.AvatarRigProfile.InternalManny",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarRigProfileInternalMannyAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeAvatarRigProfile Profile;
+	TestTrue(TEXT("Internal Manny avatar rig profile resolves"), TryGetMediaPipeInternalMannyAvatarRigProfile(Profile));
+	TestEqual(TEXT("Internal Manny profile id"), Profile.ProfileId, FName(TEXT("InternalMannyLike")));
+	TestTrue(TEXT("Internal Manny uses the target face-forward axis"), Profile.bUseTargetFaceForwardAxis);
+	TestEqual(TEXT("Internal Manny embodied yaw offset matches Y-forward avatar placement"), Profile.EmbodiedYawOffsetDeg, -90.0f);
+	TestTrue(TEXT("Internal Manny carries a measured eye/head local offset"),
+		Profile.DefaultEyeLocalOffset.Equals(FVector(0.0f, 0.66f, 162.58f), 0.01f));
+	TestEqual(TEXT("Internal Manny uses a small first-person camera clearance offset"),
+		Profile.EmbodiedCameraForwardOffsetCm,
+		10.0f);
+	return true;
+}
+}
+
+// Consolidated from MediaPipeMetaHumanProfileTests.cpp
+
+namespace MediaPipeMetaHumanProfileTests
+{
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanBuiltInProfilesAutomationTest,
 	"TestingKit3.MediaPipe.MetaHumanProfile.BuiltInProfiles",
@@ -465,6 +845,7 @@ bool FMediaPipeMetaHumanFullArmChainCompatibilityAliasAutomationTest::RunTest(co
 	WallaceTraceInterval->Set(PreviousWallaceTraceInterval, ECVF_SetByConsole);
 	WallaceMaxAge->Set(PreviousWallaceMaxAge, ECVF_SetByConsole);
 	return true;
+}
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

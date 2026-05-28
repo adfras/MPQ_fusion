@@ -74,6 +74,10 @@ public:
 		bool bHasTargetEyeLocalOffset,
 		const FVector& TargetEyeLocalOffset,
 		float TargetEmbodiedCameraForwardOffsetCm);
+	static void CaptureQuestHandPose(const FString& CaptureName);
+	static void LoadQuestHandReplayFile(const FString& NameOrPath);
+	static void StartQuestHandCaptureGuide(const FString& Prefix);
+	static void StopQuestHandCaptureGuide();
 
 	static FMediaPipeQuestRuntimeTickOutput TickSourcesAndDebug(
 		const FMediaPipeQuestRuntimeTickInput& Input,

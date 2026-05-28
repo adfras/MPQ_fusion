@@ -6,6 +6,27 @@ bool IsFiniteVector(const FVector& Value)
 {
 	return !Value.ContainsNaN();
 }
+
+FQuat NormalizeQuatSafe(const FQuat& Rotation)
+{
+	if (Rotation.ContainsNaN() || Rotation.SizeSquared() <= KINDA_SMALL_NUMBER)
+	{
+		return Rotation;
+	}
+
+	FQuat Normalized = Rotation;
+	Normalized.Normalize();
+	return Normalized;
+}
+
+FVector NormalizeUpSafe(const FVector& TrackingUpWorld)
+{
+	if (TrackingUpWorld.ContainsNaN() || TrackingUpWorld.IsNearlyZero())
+	{
+		return FVector::UpVector;
+	}
+	return TrackingUpWorld.GetSafeNormal();
+}
 }
 
 bool FMediaPipeBodyFusionSourceStatus::IsFresh() const
@@ -105,6 +126,21 @@ bool FMediaPipeTrackingSourceFrame::TryGetMediaPipeLandmark(
 		*OutReliability = MediaPipeLandmarkReliability[Index];
 	}
 	return true;
+}
+
+FMediaPipeTrackingSourceFrame FMediaPipeTrackingSourceFrame::Normalized(
+	const FMediaPipeBodyFusionFreshnessThresholds& Thresholds) const
+{
+	FMediaPipeTrackingSourceFrame NormalizedFrame = *this;
+	NormalizedFrame.NormalizeInPlace(Thresholds);
+	return NormalizedFrame;
+}
+
+void FMediaPipeTrackingSourceFrame::NormalizeInPlace(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds)
+{
+	HmdRotationWorld = NormalizeQuatSafe(HmdRotationWorld);
+	TrackingUpWorld = NormalizeUpSafe(TrackingUpWorld);
+	UpdateFreshness(Thresholds);
 }
 
 void FMediaPipeTrackingSourceFrame::UpdateFreshness(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds)

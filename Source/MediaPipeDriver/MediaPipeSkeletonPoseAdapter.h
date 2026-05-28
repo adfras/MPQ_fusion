@@ -5,8 +5,6 @@
 #include "MediaPipeBodyFusionAuthorityPolicy.h"
 #include "MediaPipeFusedAvatarPose.h"
 
-struct FMediaPipeSemanticSkeletonMap;
-
 struct MEDIAPIPEDRIVER_API FMediaPipeSkeletonPoseBinding
 {
 	FName Root = FName(TEXT("root"));
@@ -49,7 +47,6 @@ struct MEDIAPIPEDRIVER_API FMediaPipeSkeletonPoseBinding
 	FName BallR = FName(TEXT("ball_r"));
 
 	static FMediaPipeSkeletonPoseBinding Manny();
-	static FMediaPipeSkeletonPoseBinding FromSemanticSkeletonMap(const FMediaPipeSemanticSkeletonMap& Map);
 };
 
 struct MEDIAPIPEDRIVER_API FMediaPipeAvatarPoseWritePlan

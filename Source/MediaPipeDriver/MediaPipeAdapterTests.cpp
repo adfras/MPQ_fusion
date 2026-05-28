@@ -1,10 +1,15 @@
-#include "Misc/AutomationTest.h"
-
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Engine/SkeletalMesh.h"
+#include "MediaPipeMetaHumanPoseAdapter.h"
+#include "MediaPipeSkeletonPoseAdapter.h"
+#include "Misc/AutomationTest.h"
 #include "ReferenceSkeleton.h"
 
+// Consolidated from MediaPipeMetaHumanArmHelperCoverageTests.cpp
+
+namespace MediaPipeMetaHumanArmHelperCoverageTests
+{
 namespace
 {
 	constexpr const TCHAR* WallaceBodyMeshPath = TEXT("/Game/MetaHumans/Wallace/Body/m_med_unw_body.m_med_unw_body");
@@ -492,5 +497,99 @@ bool FMediaPipeMetaHumanArmHelperOculusStyleScopeTests::RunTest(const FString& P
 		BroadCorrectivesOutsideOculusStyleScope >= 12);
 	return true;
 }
+}
 
-#endif
+// Consolidated from MediaPipeMetaHumanPoseAdapterTests.cpp
+
+namespace MediaPipeMetaHumanPoseAdapterTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeMetaHumanPoseAdapterDefaultHelpersAutomationTest,
+	"MediaPipe.MetaHumanPoseAdapter.DefaultHelperBoneBinding",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeMetaHumanPoseAdapterDefaultHelpersAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeMetaHumanHelperBoneBinding Binding = FMediaPipeMetaHumanHelperBoneBinding::Default();
+
+	TestEqual(TEXT("Left clavicle helper count is stable"), Binding.ClavicleL.Num(), MediaPipeMetaHumanClavicleHelperCount);
+	TestEqual(TEXT("Left upper-arm helper count is stable"), Binding.UpperArmL.Num(), MediaPipeMetaHumanUpperArmHelperCount);
+	TestEqual(TEXT("Left lower-arm helper count is stable"), Binding.LowerArmL.Num(), MediaPipeMetaHumanLowerArmHelperCount);
+	TestEqual(TEXT("Left clavicle outward helper"), Binding.ClavicleL[0], FName(TEXT("clavicle_out_l")));
+	TestEqual(TEXT("Right clavicle pectoral helper"), Binding.ClavicleR[2], FName(TEXT("clavicle_pec_r")));
+	TestEqual(TEXT("Left upper-arm twist corrective helper"), Binding.UpperArmL[0], FName(TEXT("upperarm_twistCor_01_l")));
+	TestEqual(TEXT("Right upper-arm outward helper"), Binding.UpperArmR[8], FName(TEXT("upperarm_out_r")));
+	TestEqual(TEXT("Left lower-arm corrective root"), Binding.LowerArmL[0], FName(TEXT("lowerarm_correctiveRoot_l")));
+	TestEqual(TEXT("Right wrist outer helper"), Binding.LowerArmR[6], FName(TEXT("wrist_outer_r")));
+	return true;
+}
+}
+
+// Writer helper tests kept after deferring the skeleton adapter data-asset layer.
+
+namespace MediaPipeSkeletonAdapterContractTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeSkeletonAdapterPoseBindingMannyTest,
+	"MediaPipe.SkeletonPoseWriter.MannyPoseBindingMatchesAnimDefaults",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeSkeletonAdapterPoseBindingMannyTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeSkeletonPoseBinding Binding = FMediaPipeSkeletonPoseBinding::Manny();
+	TestEqual(TEXT("Manny root"), Binding.Root, FName(TEXT("root")));
+	TestEqual(TEXT("Manny pelvis"), Binding.Pelvis, FName(TEXT("pelvis")));
+	TestEqual(TEXT("Manny top spine"), Binding.Spine05, FName(TEXT("spine_05")));
+	TestEqual(TEXT("Manny left upper arm"), Binding.UpperArmL, FName(TEXT("upperarm_l")));
+	TestEqual(TEXT("Manny left secondary upper-arm twist remains bound"), Binding.UpperArmTwist02L, FName(TEXT("upperarm_twist_02_l")));
+	TestEqual(TEXT("Manny right lower arm"), Binding.LowerArmR, FName(TEXT("lowerarm_r")));
+	TestEqual(TEXT("Manny left foot ball"), Binding.BallL, FName(TEXT("ball_l")));
+	TestEqual(TEXT("Manny right foot ball"), Binding.BallR, FName(TEXT("ball_r")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeSkeletonAdapterPoseWriterMathTest,
+	"MediaPipe.SkeletonPoseWriter.PoseWriterMath",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeSkeletonAdapterPoseWriterMathTest::RunTest(const FString& Parameters)
+{
+	float Alpha = 0.0f;
+	TestTrue(TEXT("Point alpha resolves on a semantic chain"),
+		FMediaPipeAvatarPoseWriter::TryResolveChainAlpha(
+			FVector(0.0f, 0.0f, 0.0f),
+			FVector(0.0f, 0.0f, 100.0f),
+			FVector(0.0f, 0.0f, 45.0f),
+			Alpha));
+	TestEqual(TEXT("Point alpha preserves chain proportion"), Alpha, 0.45f);
+	TestFalse(TEXT("Degenerate chain fails"),
+		FMediaPipeAvatarPoseWriter::TryResolveChainAlpha(
+			FVector::ZeroVector,
+			FVector::ZeroVector,
+			FVector(0.0f, 0.0f, 45.0f),
+			Alpha));
+
+	float NeckAlpha = 0.0f;
+	float Neck02Alpha = 0.0f;
+	FMediaPipeAvatarPoseWriter::ResolveNeckChainAlphas(0.72f, 0.68f, NeckAlpha, Neck02Alpha);
+	TestEqual(TEXT("Neck alpha is clamped"), NeckAlpha, 0.72f);
+	TestEqual(TEXT("Neck02 remains above neck"), Neck02Alpha, NeckAlpha);
+
+	const FQuat RefBone = FQuat(FVector::UpVector, FMath::DegreesToRadians(20.0f));
+	const FQuat RefBasis = FQuat(FVector::RightVector, FMath::DegreesToRadians(10.0f));
+	const FQuat TargetBasis = FQuat(FVector::ForwardVector, FMath::DegreesToRadians(35.0f));
+	const FQuat ExpectedRotCS = ((TargetBasis * RefBasis.Inverse()) * RefBone).GetNormalized();
+	FQuat ResolvedRotCS = FQuat::Identity;
+	TestTrue(TEXT("Semantic basis maps to component-space bone rotation"),
+		FMediaPipeAvatarPoseWriter::TryResolveSemanticBoneRotationCS(
+			RefBone,
+			RefBasis,
+			TargetBasis,
+			ResolvedRotCS));
+	TestTrue(TEXT("Resolved rotation matches writer math"), ResolvedRotCS.Equals(ExpectedRotCS, 0.0001f));
+	return true;
+}
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
