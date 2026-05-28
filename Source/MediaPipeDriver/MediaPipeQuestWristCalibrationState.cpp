@@ -1,6 +1,6 @@
 #include "MediaPipeQuestWristCalibrationState.h"
 
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 void FQuestWristSideRuntimeState::ResetRotationCalibration()
 {

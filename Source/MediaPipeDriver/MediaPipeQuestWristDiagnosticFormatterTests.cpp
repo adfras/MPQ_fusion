@@ -3,9 +3,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "MediaPipePoseDiagnostics.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeQuestHandTypes.h"
 #include "MediaPipeQuestWristCalibrationState.h"
 #include "MediaPipeQuestWristDiagnosticFormatter.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristRollCompactFormatterAutomationTest,

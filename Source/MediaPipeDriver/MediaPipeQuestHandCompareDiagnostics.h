@@ -3,7 +3,8 @@
 #include "CoreMinimal.h"
 #include "Animation/BoneReference.h"
 #include "BonePose.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeQuestHandTypes.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 struct MEDIAPIPEDRIVER_API FMediaPipeQuestHandCompareBuildInput
 {

@@ -1,7 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeAvatarEmbodimentProfile.h"
+#include "MediaPipeQuestHandTypes.h"
 
 class UWorld;
 

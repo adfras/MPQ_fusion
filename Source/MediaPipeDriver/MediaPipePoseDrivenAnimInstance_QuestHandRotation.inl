@@ -36,7 +36,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 			FPlatformTime::Seconds(),
 			&Trace);
 	};
-	const int32 ManualResetSerial = GQuestWristManualResetSerial.GetValue();
+	const int32 ManualResetSerial = FMediaPipeEmbodimentDebugCommands::GetQuestWristManualResetSerial();
 	if (QuestWristState.LastQuestWristManualResetSerial != ManualResetSerial)
 	{
 		QuestWristState.LastQuestWristManualResetSerial = ManualResetSerial;

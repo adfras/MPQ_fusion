@@ -14,6 +14,14 @@ enum class EMediaPipeAvatarSkeletonFamily : uint8
 	CustomHumanoid
 };
 
+enum class EMediaPipePelvisAuthorityMode : uint8
+{
+	ProfileLocked,
+	MediaPipeHipsVerticalOnly,
+	MediaPipeHipsFull,
+	FollowUpperBodyExplicit
+};
+
 struct MEDIAPIPEDRIVER_API FMediaPipeAvatarBoneMap
 {
 	FName Root = FName(TEXT("root"));
@@ -66,6 +74,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeAvatarEmbodimentProfile
 	float HeadBoneFromEyeOffsetCm = 8.0f;
 	bool bAutoCalibrateUpperBodyFollowAlpha = true;
 	float UpperBodyFollowAlpha = 1.0f;
+	EMediaPipePelvisAuthorityMode PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::MediaPipeHipsVerticalOnly;
 	float ExpectedHeadToChestCm = 54.0f;
 	float ExpectedChestToPelvisCm = 58.0f;
 	float ExpectedUpperArmLengthCm = 30.0f;

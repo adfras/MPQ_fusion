@@ -2,7 +2,8 @@
 
 #include "HeadMountedDisplayTypes.h"
 #include "MediaPipePoseDiagnostics.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeQuestHandTypes.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 namespace
 {

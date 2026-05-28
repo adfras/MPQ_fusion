@@ -1,35 +1,3 @@
-bool FAnimNode_MediaPipePoseDriven::TryReadQuestHmdWorldPose_GameThread(FVector& OutLocationWorld, FQuat& OutRotationWorld, FVector* OutTrackingUpWorld) const
-{
-	OutLocationWorld = FVector::ZeroVector;
-	OutRotationWorld = FQuat::Identity;
-	if (OutTrackingUpWorld)
-	{
-		*OutTrackingUpWorld = FVector::UpVector;
-	}
-
-	if (!IsInGameThread() || !GEngine || !GEngine->XRSystem.IsValid())
-	{
-		return false;
-	}
-
-	FQuat HmdRotationTracking = FQuat::Identity;
-	FVector HmdLocationTracking = FVector::ZeroVector;
-	if (!GEngine->XRSystem->GetCurrentPose(IXRTrackingSystem::HMDDeviceId, HmdRotationTracking, HmdLocationTracking))
-	{
-		return false;
-	}
-
-	const FTransform TrackingToWorld = GEngine->XRSystem->GetTrackingToWorldTransform();
-	OutLocationWorld = TrackingToWorld.TransformPosition(HmdLocationTracking);
-	OutRotationWorld = TrackingToWorld.TransformRotation(HmdRotationTracking).GetNormalized();
-	if (OutTrackingUpWorld)
-	{
-		const FVector UpWorld = TrackingToWorld.TransformVectorNoScale(FVector::UpVector).GetSafeNormal();
-		*OutTrackingUpWorld = UpWorld.IsNearlyZero() ? FVector::UpVector : UpWorld;
-	}
-	return true;
-}
-
 bool FAnimNode_MediaPipePoseDriven::TryGetQuestHmdWorldPose(FVector& OutLocationWorld, FQuat& OutRotationWorld) const
 {
 	OutLocationWorld = CachedQuestHmdWorld;

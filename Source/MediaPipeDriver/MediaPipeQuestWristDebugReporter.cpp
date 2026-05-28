@@ -3,9 +3,10 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "MediaPipePoseDiagnosticReporter.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
 #include "MediaPipePoseLog.h"
+#include "MediaPipeQuestHandTypes.h"
 #include "MediaPipeQuestWristCalibrationState.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 void FMediaPipeQuestWristDebugReporter::EmitSnapshotLogs(
 	const FName TargetActorName,

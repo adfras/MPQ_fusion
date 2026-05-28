@@ -1,8 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "HeadMountedDisplayTypes.h"
-#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeQuestHandTypes.h"
 
 namespace MediaPipeQuestFingerSolver
 {

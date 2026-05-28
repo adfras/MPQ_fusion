@@ -4,6 +4,7 @@
 #include "MediaPipeAutoQuestProfilePolicy.h"
 
 #include "MediaPipeMetaHumanProfile.h"
+#include "MediaPipeSkeletonPoseAdapter.h"
 
 #include "Misc/AutomationTest.h"
 
@@ -417,8 +418,8 @@ bool FMediaPipeBodyFusionLeanBackAutomationTest::RunTest(const FString& Paramete
 	FMediaPipeFusedAvatarPose Pose;
 	TestTrue(TEXT("Fusion solve succeeds with HMD and MediaPipe lower body"), FMediaPipeBodyFusionSolver::Solve(Input, Pose));
 	TestTrue(TEXT("Chest follows HMD planar lean instead of staying at the pelvis line"), Pose.Chest.LocationWorld.X < -10.0f);
-	TestTrue(TEXT("Pelvis follows the same HMD lean direction without requiring head/chest stacking"),
-		Pose.Pelvis.LocationWorld.X < 0.0f &&
+	TestTrue(TEXT("Default embodied hips-only pelvis does not consume HMD planar lean"),
+		FMath::IsNearlyEqual(Pose.Pelvis.LocationWorld.X, Input.Profile.DefaultPelvisLocalOffset.X, 0.01f) &&
 		Pose.Chest.LocationWorld.X < Pose.Pelvis.LocationWorld.X);
 	TestTrue(TEXT("Head-to-chest distance stays finite without hard-gating the HMD lean"),
 		FMath::IsFinite(Pose.DebugErrors.HeadToChestCm) && Pose.DebugErrors.HeadToChestCm > 0.0f);
@@ -459,10 +460,10 @@ bool FMediaPipeBodyFusionEmbodiedHipsOnlyPelvisStabilityAutomationTest::RunTest(
 		Pose.Chest.LocationWorld.Y - ProfilePelvisWorld.Y,
 		0.0f);
 
-	TestTrue(TEXT("Embodied hips-only marks the pelvis as fused once HMD upper-body follow contributes"),
-		Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused);
-	TestTrue(TEXT("Embodied hips-only uses MediaPipe vertical hip height as a basis while following the upper body"),
-		Pose.Pelvis.LocationWorld.Z > 96.0f);
+	TestTrue(TEXT("Embodied hips-only keeps MediaPipe authority for vertical-only pelvis tracking"),
+		Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("Embodied hips-only uses MediaPipe vertical hip height without upper-body pelvis follow"),
+		FMath::IsNearlyEqual(Pose.Pelvis.LocationWorld.Z, 96.0f, 0.01f));
 	TestTrue(TEXT("Embodied hips-only does not copy horizontal MediaPipe pelvis drift into the avatar root"),
 		PelvisPlanarDelta.Size() < 10.0f);
 	TestTrue(TEXT("Chest remains upright near the embodied avatar instead of following offset MediaPipe hips"),
@@ -568,10 +569,10 @@ bool FMediaPipeBodyFusionEmbodiedHipsOnlyTorsoAnchorAutomationTest::RunTest(cons
 		Pose.Pelvis.LocationWorld.Z - Input.Profile.DefaultPelvisLocalOffset.Z;
 	TestTrue(TEXT("Embodied hips-only keeps MediaPipe pelvis side drift out of the avatar root"),
 		FMath::Abs(Pose.Pelvis.LocationWorld.Y - Input.Profile.DefaultPelvisLocalOffset.Y) < 0.01f &&
-		PelvisVerticalDeltaCm > 38.0f);
-	TestTrue(TEXT("Embodied hips-only lets the pelvis follow HMD-driven upper-body lean"),
-		Pose.Pelvis.LocationWorld.X < -10.0f &&
-		Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused);
+		FMath::IsNearlyEqual(PelvisVerticalDeltaCm, 38.0f, 0.01f));
+	TestTrue(TEXT("Default embodied hips-only pelvis stays independent of HMD-driven upper-body lean"),
+		FMath::IsNearlyEqual(Pose.Pelvis.LocationWorld.X, Input.Profile.DefaultPelvisLocalOffset.X, 0.01f) &&
+		Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestTrue(TEXT("Embodied hips-only solves the torso toward HMD lean instead of freezing profile chest X"),
 		Pose.Chest.LocationWorld.X < -20.0f);
 	TestTrue(TEXT("Head remains HMD-owned while the torso bridge bends underneath it"),
@@ -631,6 +632,7 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeAvatarEmbodimentProfile MetaHumanProfile = Input.Profile;
 	MetaHumanProfile.SkeletonFamily = EMediaPipeAvatarSkeletonFamily::MetaHuman;
 	MetaHumanProfile.UpperBodyFollowAlpha = 0.70f;
+	MetaHumanProfile.PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::FollowUpperBodyExplicit;
 
 	FMediaPipeBodyFusionSolveInput HmdOnlyMetaHumanInput;
 	HmdOnlyMetaHumanInput.SourceFrame = MakeFreshHmdFrame(FVector(-60.0f, 0.0f, 170.0f));

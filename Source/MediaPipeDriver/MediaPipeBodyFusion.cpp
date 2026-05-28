@@ -4,11 +4,6 @@
 
 namespace
 {
-int32 ToRegionIndex(const EMediaPipeBodyFusionRegion Region)
-{
-	return static_cast<int32>(Region);
-}
-
 bool IsFiniteVector(const FVector& Value)
 {
 	return !Value.ContainsNaN();
@@ -24,12 +19,6 @@ FVector ProjectOntoPlaneSafe(const FVector& Vector, const FVector& PlaneNormal)
 		return Vector;
 	}
 	return FVector::VectorPlaneProject(Vector, Normal);
-}
-
-FVector SafeHorizontalForward(const FVector& Forward, const FVector& Up)
-{
-	const FVector Projected = ProjectOntoPlaneSafe(Forward, Up).GetSafeNormal();
-	return Projected.IsNearlyZero() ? FVector::ForwardVector : Projected;
 }
 
 FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up)
@@ -208,518 +197,25 @@ FVector KeepMediaPipePelvisVerticalOnly(
 	const float VerticalDeltaCm = FVector::DotProduct(MediaPipePelvisWorld - ProfilePelvisWorld, Up);
 	return ProfilePelvisWorld + Up * VerticalDeltaCm;
 }
-}
 
-bool FMediaPipeBodyFusionSourceStatus::IsFresh() const
+FVector ResolveEmbodiedHipsOnlyPelvisWorld(
+	const FMediaPipeAvatarEmbodimentProfile& Profile,
+	const FVector& ProfilePelvisWorld,
+	const FVector& MediaPipePelvisWorld,
+	const FVector& AvatarUpWorld)
 {
-	return State == EMediaPipeBodyFusionSourceState::Fresh;
-}
-
-bool FMediaPipeBodyFusionSourceStatus::IsUsable() const
-{
-	return State == EMediaPipeBodyFusionSourceState::Fresh;
-}
-
-FMediaPipeTrackingSourceFrame::FMediaPipeTrackingSourceFrame()
-{
-	Reset();
-}
-
-void FMediaPipeTrackingSourceFrame::Reset()
-{
-	FrameTimeSeconds = -1.0;
-	bHasHmdPose = false;
-	HmdLocationWorld = FVector::ZeroVector;
-	HmdRotationWorld = FQuat::Identity;
-	TrackingUpWorld = FVector::UpVector;
-	HmdTimestampSeconds = -1.0;
-	HmdConfidence = 1.0f;
-	HmdStatus = FMediaPipeBodyFusionSourceStatus();
-
-	bHasQuestLeftHand = false;
-	bHasQuestRightHand = false;
-	QuestLeftHandWorld = FVector::ZeroVector;
-	QuestRightHandWorld = FVector::ZeroVector;
-	QuestLeftHandTimestampSeconds = -1.0;
-	QuestRightHandTimestampSeconds = -1.0;
-	QuestLeftHandConfidence = 0.0f;
-	QuestRightHandConfidence = 0.0f;
-	QuestLeftHandStatus = FMediaPipeBodyFusionSourceStatus();
-	QuestRightHandStatus = FMediaPipeBodyFusionSourceStatus();
-
-	bHasQuestLeftFullArmChain = false;
-	bHasQuestRightFullArmChain = false;
-	QuestLeftShoulderWorld = FVector::ZeroVector;
-	QuestLeftElbowWorld = FVector::ZeroVector;
-	QuestLeftWristWorld = FVector::ZeroVector;
-	QuestRightShoulderWorld = FVector::ZeroVector;
-	QuestRightElbowWorld = FVector::ZeroVector;
-	QuestRightWristWorld = FVector::ZeroVector;
-	QuestLeftFullArmChainTimestampSeconds = -1.0;
-	QuestRightFullArmChainTimestampSeconds = -1.0;
-	QuestLeftFullArmChainConfidence = 0.0f;
-	QuestRightFullArmChainConfidence = 0.0f;
-	QuestLeftFullArmChainStatus = FMediaPipeBodyFusionSourceStatus();
-	QuestRightFullArmChainStatus = FMediaPipeBodyFusionSourceStatus();
-
-	bHasMediaPipePose = false;
-	MediaPipePoseTimestampSeconds = -1.0;
-	MediaPipePoseConfidence = 0.0f;
-	MediaPipePoseStatus = FMediaPipeBodyFusionSourceStatus();
-	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+	switch (Profile.PelvisAuthorityMode)
 	{
-		MediaPipeLandmarksWorld[Index] = FVector::ZeroVector;
-		MediaPipeLandmarkReliability[Index] = 0.0f;
-		MediaPipeLandmarkValid[Index] = 0;
-	}
-}
-
-void FMediaPipeTrackingSourceFrame::SetMediaPipeLandmark(
-	const EMediaPipePoseLandmark Landmark,
-	const FVector& LocationWorld,
-	const float Reliability)
-{
-	const int32 Index = static_cast<int32>(Landmark);
-	if (Index < 0 || Index >= MediaPipePoseLandmarkCount)
-	{
-		return;
-	}
-
-	MediaPipeLandmarksWorld[Index] = LocationWorld;
-	MediaPipeLandmarkReliability[Index] = FMath::Clamp(Reliability, 0.0f, 1.0f);
-	MediaPipeLandmarkValid[Index] = IsFiniteVector(LocationWorld) ? 1 : 0;
-}
-
-bool FMediaPipeTrackingSourceFrame::TryGetMediaPipeLandmark(
-	const EMediaPipePoseLandmark Landmark,
-	FVector& OutLocationWorld,
-	float* OutReliability) const
-{
-	const int32 Index = static_cast<int32>(Landmark);
-	if (Index < 0 || Index >= MediaPipePoseLandmarkCount || MediaPipeLandmarkValid[Index] == 0)
-	{
-		return false;
-	}
-
-	OutLocationWorld = MediaPipeLandmarksWorld[Index];
-	if (OutReliability)
-	{
-		*OutReliability = MediaPipeLandmarkReliability[Index];
-	}
-	return true;
-}
-
-void FMediaPipeTrackingSourceFrame::UpdateFreshness(const FMediaPipeBodyFusionFreshnessThresholds& Thresholds)
-{
-	HmdStatus = ClassifySource(
-		bHasHmdPose,
-		IsFiniteVector(HmdLocationWorld) && !HmdRotationWorld.ContainsNaN() && !TrackingUpWorld.IsNearlyZero(),
-		HmdTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.HmdMaxAgeSeconds,
-		HmdConfidence,
-		Thresholds.MinHmdConfidence);
-
-	QuestLeftHandStatus = ClassifySource(
-		bHasQuestLeftHand,
-		IsFiniteVector(QuestLeftHandWorld),
-		QuestLeftHandTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.QuestHandMaxAgeSeconds,
-		QuestLeftHandConfidence,
-		Thresholds.MinQuestConfidence);
-	QuestRightHandStatus = ClassifySource(
-		bHasQuestRightHand,
-		IsFiniteVector(QuestRightHandWorld),
-		QuestRightHandTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.QuestHandMaxAgeSeconds,
-		QuestRightHandConfidence,
-		Thresholds.MinQuestConfidence);
-
-	QuestLeftFullArmChainStatus = ClassifySource(
-		bHasQuestLeftFullArmChain,
-		IsFiniteVector(QuestLeftShoulderWorld) && IsFiniteVector(QuestLeftElbowWorld) && IsFiniteVector(QuestLeftWristWorld),
-		QuestLeftFullArmChainTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.QuestFullArmChainMaxAgeSeconds,
-		QuestLeftFullArmChainConfidence,
-		Thresholds.MinQuestConfidence);
-	QuestRightFullArmChainStatus = ClassifySource(
-		bHasQuestRightFullArmChain,
-		IsFiniteVector(QuestRightShoulderWorld) && IsFiniteVector(QuestRightElbowWorld) && IsFiniteVector(QuestRightWristWorld),
-		QuestRightFullArmChainTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.QuestFullArmChainMaxAgeSeconds,
-		QuestRightFullArmChainConfidence,
-		Thresholds.MinQuestConfidence);
-
-	bool bAnyValidMediaPipeLandmark = false;
-	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
-	{
-		if (MediaPipeLandmarkValid[Index] != 0)
-		{
-			bAnyValidMediaPipeLandmark = true;
-			break;
-		}
-	}
-	MediaPipePoseStatus = ClassifySource(
-		bHasMediaPipePose,
-		bAnyValidMediaPipeLandmark,
-		MediaPipePoseTimestampSeconds,
-		FrameTimeSeconds,
-		Thresholds.MediaPipePoseMaxAgeSeconds,
-		MediaPipePoseConfidence,
-		Thresholds.MinMediaPipeConfidence);
-}
-
-FMediaPipeBodyFusionSourceStatus FMediaPipeTrackingSourceFrame::ClassifySource(
-	const bool bHasSample,
-	const bool bSampleValid,
-	const double SampleTimestampSeconds,
-	const double NowSeconds,
-	const float MaxAgeSeconds,
-	const float Confidence,
-	const float MinConfidence)
-{
-	FMediaPipeBodyFusionSourceStatus Status;
-	Status.Confidence = Confidence;
-	if (!bHasSample)
-	{
-		Status.State = EMediaPipeBodyFusionSourceState::Missing;
-		return Status;
-	}
-	if (!bSampleValid || Confidence < MinConfidence || !FMath::IsFinite(Confidence))
-	{
-		Status.State = EMediaPipeBodyFusionSourceState::Invalid;
-		return Status;
-	}
-	if (SampleTimestampSeconds < 0.0 || NowSeconds < 0.0)
-	{
-		Status.State = EMediaPipeBodyFusionSourceState::Invalid;
-		return Status;
-	}
-
-	Status.AgeSeconds = static_cast<float>(NowSeconds - SampleTimestampSeconds);
-	if (Status.AgeSeconds < -KINDA_SMALL_NUMBER)
-	{
-		Status.State = EMediaPipeBodyFusionSourceState::Invalid;
-		return Status;
-	}
-	if (MaxAgeSeconds > 0.0f && Status.AgeSeconds > MaxAgeSeconds)
-	{
-		Status.State = EMediaPipeBodyFusionSourceState::Stale;
-		return Status;
-	}
-
-	Status.State = EMediaPipeBodyFusionSourceState::Fresh;
-	return Status;
-}
-
-void FMediaPipeEmbodimentCalibration::Reset()
-{
-	bHasCalibration = false;
-	YawRotation = FQuat::Identity;
-	Translation = FVector::ZeroVector;
-	Scale = 1.0f;
-	Confidence = 0.0f;
-	TimestampSeconds = -1.0;
-	LastRejectReason.Reset();
-}
-
-bool FMediaPipeEmbodimentCalibration::IsUsable(const float MinConfidence) const
-{
-	return bHasCalibration &&
-		Confidence >= MinConfidence &&
-		Scale > KINDA_SMALL_NUMBER &&
-		!YawRotation.ContainsNaN() &&
-		!Translation.ContainsNaN();
-}
-
-FTransform FMediaPipeEmbodimentCalibration::GetMediaPipeToAvatarTransform() const
-{
-	return FTransform(YawRotation, Translation, FVector(Scale));
-}
-
-FVector FMediaPipeEmbodimentCalibration::TransformMediaPipePoint(const FVector& MediaPipePointWorld) const
-{
-	return GetMediaPipeToAvatarTransform().TransformPosition(MediaPipePointWorld);
-}
-
-bool FMediaPipeEmbodimentCalibration::TryBuildNeutralCalibration(
-	const FMediaPipeEmbodimentCalibrationInput& Input,
-	FMediaPipeEmbodimentCalibration& OutCalibration)
-{
-	OutCalibration.Reset();
-
-	if (!Input.bHmdStable)
-	{
-		OutCalibration.LastRejectReason = TEXT("HMD unstable");
-		return false;
-	}
-	if (!Input.bMediaPipeStable)
-	{
-		OutCalibration.LastRejectReason = TEXT("MediaPipe unstable");
-		return false;
-	}
-	if (Input.Confidence < 0.5f)
-	{
-		OutCalibration.LastRejectReason = TEXT("Low MediaPipe confidence");
-		return false;
-	}
-	if (!IsFiniteVector(Input.MediaPipeHipCenterWorld) ||
-		!IsFiniteVector(Input.AvatarPelvisAnchorWorld) ||
-		Input.MediaPipeForwardWorld.IsNearlyZero() ||
-		Input.AvatarForwardWorld.IsNearlyZero() ||
-		Input.AvatarUpWorld.IsNearlyZero())
-	{
-		OutCalibration.LastRejectReason = TEXT("Invalid calibration vectors");
-		return false;
-	}
-
-	const FVector Up = Input.AvatarUpWorld.GetSafeNormal();
-	const FVector MediaPipeForward = SafeHorizontalForward(Input.MediaPipeForwardWorld, Up);
-	const FVector AvatarForward = SafeHorizontalForward(Input.AvatarForwardWorld, Up);
-	const FQuat MediaPipeYaw = MakeQuatFromForwardUp(MediaPipeForward, Up);
-	const FQuat AvatarYaw = MakeQuatFromForwardUp(AvatarForward, Up);
-	const FQuat DeltaYaw = AvatarYaw * MediaPipeYaw.Inverse();
-
-	float Scale = 1.0f;
-	if (Input.ObservedBodyHeightCm > KINDA_SMALL_NUMBER && Input.AvatarBodyHeightCm > KINDA_SMALL_NUMBER)
-	{
-		Scale = FMath::Clamp(Input.AvatarBodyHeightCm / Input.ObservedBodyHeightCm, 0.5f, 1.8f);
-	}
-
-	OutCalibration.bHasCalibration = true;
-	OutCalibration.YawRotation = DeltaYaw;
-	OutCalibration.Scale = Scale;
-	OutCalibration.Confidence = FMath::Clamp(Input.Confidence, 0.0f, 1.0f);
-	OutCalibration.TimestampSeconds = Input.TimestampSeconds;
-	OutCalibration.Translation = Input.AvatarPelvisAnchorWorld - DeltaYaw.RotateVector(Input.MediaPipeHipCenterWorld * Scale);
-	return OutCalibration.IsUsable();
-}
-
-FMediaPipeBodyFusionAuthority::FMediaPipeBodyFusionAuthority()
-{
-	for (int32 Index = 0; Index < MediaPipeBodyFusionRegionCount; ++Index)
-	{
-		RegionOwners[Index] = EMediaPipeBodyFusionOwner::None;
-	}
-}
-
-FMediaPipeBodyFusionAuthority FMediaPipeBodyFusionAuthority::DefaultHybrid()
-{
-	FMediaPipeBodyFusionAuthority Authority;
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Root, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Eye, EMediaPipeBodyFusionOwner::Hmd);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Head, EMediaPipeBodyFusionOwner::Hmd);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Neck, EMediaPipeBodyFusionOwner::Fused);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Chest, EMediaPipeBodyFusionOwner::Fused);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Spine, EMediaPipeBodyFusionOwner::Fused);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Pelvis, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftShoulder, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftElbow, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftWrist, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightShoulder, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightElbow, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightWrist, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHip, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftKnee, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftAnkle, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftFoot, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHip, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightKnee, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightAnkle, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightFoot, EMediaPipeBodyFusionOwner::MediaPipe);
-	return Authority;
-}
-
-FMediaPipeBodyFusionAuthority FMediaPipeBodyFusionAuthority::DefaultEmbodiedUpperBody()
-{
-	FMediaPipeBodyFusionAuthority Authority = DefaultHybrid();
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Pelvis, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHip, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftKnee, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftAnkle, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftFoot, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHip, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightKnee, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightAnkle, EMediaPipeBodyFusionOwner::AvatarProfile);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightFoot, EMediaPipeBodyFusionOwner::AvatarProfile);
-	return Authority;
-}
-
-FMediaPipeBodyFusionAuthority FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly()
-{
-	FMediaPipeBodyFusionAuthority Authority = DefaultEmbodiedUpperBody();
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::Pelvis, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHip, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHip, EMediaPipeBodyFusionOwner::MediaPipe);
-	return Authority;
-}
-
-EMediaPipeBodyFusionOwner FMediaPipeBodyFusionAuthority::GetOwner(const EMediaPipeBodyFusionRegion Region) const
-{
-	const int32 Index = ToRegionIndex(Region);
-	if (Index < 0 || Index >= MediaPipeBodyFusionRegionCount)
-	{
-		return EMediaPipeBodyFusionOwner::None;
-	}
-	return RegionOwners[Index];
-}
-
-void FMediaPipeBodyFusionAuthority::SetOwner(
-	const EMediaPipeBodyFusionRegion Region,
-	const EMediaPipeBodyFusionOwner Owner)
-{
-	const int32 Index = ToRegionIndex(Region);
-	if (Index < 0 || Index >= MediaPipeBodyFusionRegionCount)
-	{
-		return;
-	}
-	RegionOwners[Index] = Owner;
-}
-
-EMediaPipeBodyFusionOwner FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(
-	const FMediaPipeBodyFusionSourceStatus& QuestStatus,
-	const FMediaPipeBodyFusionSourceStatus& MediaPipeStatus)
-{
-	if (QuestStatus.IsFresh())
-	{
-		return EMediaPipeBodyFusionOwner::Quest;
-	}
-	if (MediaPipeStatus.IsFresh())
-	{
-		return EMediaPipeBodyFusionOwner::MediaPipe;
-	}
-	return EMediaPipeBodyFusionOwner::None;
-}
-
-EMediaPipeBodyFusionOwner FMediaPipeBodyFusionAuthority::ResolveLowerBodyOwner(
-	const FMediaPipeBodyFusionSourceStatus& MediaPipeStatus,
-	const FMediaPipeBodyFusionSourceStatus& QuestStatus)
-{
-	if (MediaPipeStatus.IsFresh())
-	{
-		return EMediaPipeBodyFusionOwner::MediaPipe;
-	}
-	if (QuestStatus.IsFresh())
-	{
-		return EMediaPipeBodyFusionOwner::Quest;
-	}
-	return EMediaPipeBodyFusionOwner::None;
-}
-
-void FMediaPipeBodyFusionDebugErrors::Reset()
-{
-	CameraToEyeCm = 0.0f;
-	CameraToChestCm = 0.0f;
-	HeadToChestCm = 0.0f;
-	ChestToPelvisCm = 0.0f;
-	HmdHorizontalOffsetCm = 0.0f;
-	LeftWristReachCm = 0.0f;
-	RightWristReachCm = 0.0f;
-	LeftFootReliability = 0.0f;
-	RightFootReliability = 0.0f;
-	BodyAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
-	bMediaPipePoseAuthorityAllowed = 0;
-}
-
-void FMediaPipeFusedAvatarPose::Reset()
-{
-	Root = FMediaPipeFusedBodyPoint();
-	Eye = FMediaPipeFusedBodyPoint();
-	Head = FMediaPipeFusedBodyPoint();
-	Neck = FMediaPipeFusedBodyPoint();
-	Chest = FMediaPipeFusedBodyPoint();
-	Spine = FMediaPipeFusedBodyPoint();
-	Pelvis = FMediaPipeFusedBodyPoint();
-	LeftShoulder = FMediaPipeFusedBodyPoint();
-	LeftElbow = FMediaPipeFusedBodyPoint();
-	LeftWrist = FMediaPipeFusedBodyPoint();
-	RightShoulder = FMediaPipeFusedBodyPoint();
-	RightElbow = FMediaPipeFusedBodyPoint();
-	RightWrist = FMediaPipeFusedBodyPoint();
-	LeftHip = FMediaPipeFusedBodyPoint();
-	LeftKnee = FMediaPipeFusedBodyPoint();
-	LeftAnkle = FMediaPipeFusedBodyPoint();
-	LeftFoot = FMediaPipeFusedBodyPoint();
-	RightHip = FMediaPipeFusedBodyPoint();
-	RightKnee = FMediaPipeFusedBodyPoint();
-	RightAnkle = FMediaPipeFusedBodyPoint();
-	RightFoot = FMediaPipeFusedBodyPoint();
-	DebugErrors.Reset();
-}
-
-bool FMediaPipeFusedAvatarPose::IsUsable() const
-{
-	return Eye.bValid && Head.bValid && Chest.bValid && Pelvis.bValid;
-}
-
-const FMediaPipeFusedBodyPoint* FMediaPipeFusedAvatarPose::GetPoint(const EMediaPipeBodyFusionRegion Region) const
-{
-	switch (Region)
-	{
-	case EMediaPipeBodyFusionRegion::Root:
-		return &Root;
-	case EMediaPipeBodyFusionRegion::Eye:
-		return &Eye;
-	case EMediaPipeBodyFusionRegion::Head:
-		return &Head;
-	case EMediaPipeBodyFusionRegion::Neck:
-		return &Neck;
-	case EMediaPipeBodyFusionRegion::Chest:
-		return &Chest;
-	case EMediaPipeBodyFusionRegion::Spine:
-		return &Spine;
-	case EMediaPipeBodyFusionRegion::Pelvis:
-		return &Pelvis;
-	case EMediaPipeBodyFusionRegion::LeftShoulder:
-		return &LeftShoulder;
-	case EMediaPipeBodyFusionRegion::LeftElbow:
-		return &LeftElbow;
-	case EMediaPipeBodyFusionRegion::LeftWrist:
-		return &LeftWrist;
-	case EMediaPipeBodyFusionRegion::RightShoulder:
-		return &RightShoulder;
-	case EMediaPipeBodyFusionRegion::RightElbow:
-		return &RightElbow;
-	case EMediaPipeBodyFusionRegion::RightWrist:
-		return &RightWrist;
-	case EMediaPipeBodyFusionRegion::LeftHip:
-		return &LeftHip;
-	case EMediaPipeBodyFusionRegion::LeftKnee:
-		return &LeftKnee;
-	case EMediaPipeBodyFusionRegion::LeftAnkle:
-		return &LeftAnkle;
-	case EMediaPipeBodyFusionRegion::LeftFoot:
-		return &LeftFoot;
-	case EMediaPipeBodyFusionRegion::RightHip:
-		return &RightHip;
-	case EMediaPipeBodyFusionRegion::RightKnee:
-		return &RightKnee;
-	case EMediaPipeBodyFusionRegion::RightAnkle:
-		return &RightAnkle;
-	case EMediaPipeBodyFusionRegion::RightFoot:
-		return &RightFoot;
+	case EMediaPipePelvisAuthorityMode::ProfileLocked:
+		return ProfilePelvisWorld;
+	case EMediaPipePelvisAuthorityMode::MediaPipeHipsFull:
+		return MediaPipePelvisWorld;
+	case EMediaPipePelvisAuthorityMode::FollowUpperBodyExplicit:
+	case EMediaPipePelvisAuthorityMode::MediaPipeHipsVerticalOnly:
 	default:
-		return nullptr;
+		return KeepMediaPipePelvisVerticalOnly(ProfilePelvisWorld, MediaPipePelvisWorld, AvatarUpWorld);
 	}
 }
-
-FMediaPipeFusedBodyPoint* FMediaPipeFusedAvatarPose::GetMutablePoint(const EMediaPipeBodyFusionRegion Region)
-{
-	return const_cast<FMediaPipeFusedBodyPoint*>(static_cast<const FMediaPipeFusedAvatarPose*>(this)->GetPoint(Region));
-}
-
-void FMediaPipeFusedAvatarPose::SetPoint(
-	const EMediaPipeBodyFusionRegion Region,
-	const FMediaPipeFusedBodyPoint& Point)
-{
-	if (FMediaPipeFusedBodyPoint* TargetPoint = GetMutablePoint(Region))
-	{
-		*TargetPoint = Point;
-	}
 }
 
 bool FMediaPipeBodyFusionSolver::Solve(
@@ -786,12 +282,15 @@ bool FMediaPipeBodyFusionSolver::Solve(
 		bMediaPipeOwnsLowerBody &&
 		TryGetReliableMediaPipeLandmark(Input.SourceFrame, EMediaPipePoseLandmark::LeftHip, MediaPipeLeftHip) &&
 		TryGetReliableMediaPipeLandmark(Input.SourceFrame, EMediaPipePoseLandmark::RightHip, MediaPipeRightHip);
+	const bool bProfileLockedPelvis =
+		bEmbodiedHipsOnly &&
+		Input.Profile.PelvisAuthorityMode == EMediaPipePelvisAuthorityMode::ProfileLocked;
 	if (bUsingReliableMediaPipePelvis)
 	{
 		const FVector MediaPipePelvisWorld =
 			Input.Calibration.TransformMediaPipePoint((MediaPipeLeftHip + MediaPipeRightHip) * 0.5f);
 		PelvisWorld = bEmbodiedHipsOnly
-			? KeepMediaPipePelvisVerticalOnly(ProfilePelvisWorld, MediaPipePelvisWorld, AvatarUpWorld)
+			? ResolveEmbodiedHipsOnlyPelvisWorld(Input.Profile, ProfilePelvisWorld, MediaPipePelvisWorld, AvatarUpWorld)
 			: MediaPipePelvisWorld;
 	}
 
@@ -852,8 +351,11 @@ bool FMediaPipeBodyFusionSolver::Solve(
 			FVector::DotProduct(ChestWorld - ProfileChestWorld, AvatarUpWorld) * AvatarUpWorld;
 		const FVector PelvisFollowDelta =
 			(ChestPlanarDelta + ChestVerticalDelta) * PelvisFollowFromChestAlpha;
-		PelvisWorld += PelvisFollowDelta;
-		bFusedPelvisFromUpperBody = true;
+		if (Input.Profile.PelvisAuthorityMode == EMediaPipePelvisAuthorityMode::FollowUpperBodyExplicit)
+		{
+			PelvisWorld += PelvisFollowDelta;
+			bFusedPelvisFromUpperBody = true;
+		}
 	}
 	else
 	{
@@ -881,13 +383,13 @@ bool FMediaPipeBodyFusionSolver::Solve(
 	SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::Spine, SpineWorld, ResolveConfiguredOwner(Input.Authority, EMediaPipeBodyFusionRegion::Spine, EMediaPipeBodyFusionOwner::Fused), EMediaPipeBodyFusionSourceState::Fresh, 1.0f, AvatarBasis);
 	const EMediaPipeBodyFusionOwner PelvisOwner = bFusedPelvisFromUpperBody
 		? EMediaPipeBodyFusionOwner::Fused
-		: (bUsingReliableMediaPipePelvis ? ConfiguredPelvisOwner : EMediaPipeBodyFusionOwner::AvatarProfile);
+		: (bUsingReliableMediaPipePelvis && !bProfileLockedPelvis ? ConfiguredPelvisOwner : EMediaPipeBodyFusionOwner::AvatarProfile);
 	const EMediaPipeBodyFusionSourceState PelvisState = bFusedPelvisFromUpperBody
 		? EMediaPipeBodyFusionSourceState::Fresh
-		: (bUsingReliableMediaPipePelvis ? Input.SourceFrame.MediaPipePoseStatus.State : EMediaPipeBodyFusionSourceState::Fresh);
+		: (bUsingReliableMediaPipePelvis && !bProfileLockedPelvis ? Input.SourceFrame.MediaPipePoseStatus.State : EMediaPipeBodyFusionSourceState::Fresh);
 	const float PelvisConfidence = bFusedPelvisFromUpperBody
 		? 1.0f
-		: (bUsingReliableMediaPipePelvis ? Input.SourceFrame.MediaPipePoseStatus.Confidence : 1.0f);
+		: (bUsingReliableMediaPipePelvis && !bProfileLockedPelvis ? Input.SourceFrame.MediaPipePoseStatus.Confidence : 1.0f);
 	SetFusedPoint(
 		OutPose,
 		EMediaPipeBodyFusionRegion::Pelvis,
@@ -991,92 +493,4 @@ bool FMediaPipeBodyFusionSolver::Solve(
 	OutPose.DebugErrors.bMediaPipePoseAuthorityAllowed = Input.bAllowMediaPipePoseAuthority ? 1 : 0;
 
 	return OutPose.IsUsable();
-}
-
-FMediaPipeAvatarPoseWritePlan FMediaPipeAvatarPoseWriter::BuildDefaultWritePlan(
-	const FMediaPipeBodyFusionAuthority& Authority)
-{
-	FMediaPipeAvatarPoseWritePlan Plan;
-	Plan.OrderedRegions = {
-		EMediaPipeBodyFusionRegion::Root,
-		EMediaPipeBodyFusionRegion::Pelvis,
-		EMediaPipeBodyFusionRegion::Spine,
-		EMediaPipeBodyFusionRegion::Chest,
-		EMediaPipeBodyFusionRegion::Neck,
-		EMediaPipeBodyFusionRegion::Head,
-		EMediaPipeBodyFusionRegion::LeftHip,
-		EMediaPipeBodyFusionRegion::LeftKnee,
-		EMediaPipeBodyFusionRegion::LeftAnkle,
-		EMediaPipeBodyFusionRegion::LeftFoot,
-		EMediaPipeBodyFusionRegion::RightHip,
-		EMediaPipeBodyFusionRegion::RightKnee,
-		EMediaPipeBodyFusionRegion::RightAnkle,
-		EMediaPipeBodyFusionRegion::RightFoot,
-		EMediaPipeBodyFusionRegion::LeftShoulder,
-		EMediaPipeBodyFusionRegion::LeftElbow,
-		EMediaPipeBodyFusionRegion::LeftWrist,
-		EMediaPipeBodyFusionRegion::RightShoulder,
-		EMediaPipeBodyFusionRegion::RightElbow,
-		EMediaPipeBodyFusionRegion::RightWrist
-	};
-	Plan.bKeepProfileDrivenBoneNames = true;
-	return Plan;
-}
-
-bool FMediaPipeAvatarPoseWriter::CanWritePose(
-	const FMediaPipeFusedAvatarPose& Pose,
-	const FMediaPipeAvatarEmbodimentProfile& Profile)
-{
-	return Profile.IsValid() && Pose.IsUsable();
-}
-
-bool FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(
-	const FMediaPipeFusedAvatarPose& Pose,
-	const bool bIsLeft,
-	FMediaPipeFusedLowerBodySide& OutSide)
-{
-	OutSide = FMediaPipeFusedLowerBodySide();
-
-	auto TryGetMediaPipePoint = [&](const EMediaPipeBodyFusionRegion Region, FVector& OutLocationWorld) -> bool
-	{
-		const FMediaPipeFusedBodyPoint* Point = Pose.GetPoint(Region);
-		if (!Point ||
-			!Point->bValid ||
-			Point->Owner != EMediaPipeBodyFusionOwner::MediaPipe ||
-			Point->SourceState != EMediaPipeBodyFusionSourceState::Fresh)
-		{
-			return false;
-		}
-
-		OutLocationWorld = Point->LocationWorld;
-		return !OutLocationWorld.ContainsNaN();
-	};
-
-	const EMediaPipeBodyFusionRegion HipRegion = bIsLeft
-		? EMediaPipeBodyFusionRegion::LeftHip
-		: EMediaPipeBodyFusionRegion::RightHip;
-	const EMediaPipeBodyFusionRegion KneeRegion = bIsLeft
-		? EMediaPipeBodyFusionRegion::LeftKnee
-		: EMediaPipeBodyFusionRegion::RightKnee;
-	const EMediaPipeBodyFusionRegion AnkleRegion = bIsLeft
-		? EMediaPipeBodyFusionRegion::LeftAnkle
-		: EMediaPipeBodyFusionRegion::RightAnkle;
-	const EMediaPipeBodyFusionRegion FootRegion = bIsLeft
-		? EMediaPipeBodyFusionRegion::LeftFoot
-		: EMediaPipeBodyFusionRegion::RightFoot;
-
-	if (!TryGetMediaPipePoint(HipRegion, OutSide.HipWorld) ||
-		!TryGetMediaPipePoint(KneeRegion, OutSide.KneeWorld) ||
-		!TryGetMediaPipePoint(AnkleRegion, OutSide.AnkleWorld))
-	{
-		OutSide = FMediaPipeFusedLowerBodySide();
-		return false;
-	}
-
-	OutSide.bHasFoot = TryGetMediaPipePoint(FootRegion, OutSide.FootWorld);
-	if (!OutSide.bHasFoot)
-	{
-		OutSide.FootWorld = OutSide.AnkleWorld;
-	}
-	return true;
 }

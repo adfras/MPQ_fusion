@@ -2,8 +2,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "MediaPipePoseDrivenAnimInstance.h"
 #include "MediaPipeQuestWristCalibrationState.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristCalibrationStateResetAutomationTest,

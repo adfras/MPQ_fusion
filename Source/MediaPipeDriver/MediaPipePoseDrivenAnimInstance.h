@@ -8,270 +8,20 @@
 
 #include "MediaPipeFullArmChainProvider.h"
 #include "MediaPipeAvatarEmbodimentProfile.h"
+#include "MediaPipeAvatarProfileResolver.h"
 #include "MediaPipeBodyFusion.h"
-#include "MediaPipeMetaHumanProfile.h"
+#include "MediaPipeEmbodimentPipeline.h"
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseDrivenSolverState.h"
 #include "MediaPipePoseTypes.h"
 #include "MediaPipePoseWrapper.h"
+#include "MediaPipeQuestHandTypes.h"
+#include "MediaPipeQuestWristTraceTypes.h"
 
 #include "MediaPipePoseDrivenAnimInstance.generated.h"
 
 class AActor;
 class UMediaPipePoseTrackerComponent;
-
-static constexpr int32 QuestHandKeypointCount = 26;
-static constexpr int32 QuestFingerBoneCount = 15;
-static constexpr int32 QuestFingerMetacarpalBoneCount = 4;
-
-struct FQuestHandTrackingSnapshot
-{
-	int32 HandTrackerCount = 0;
-	int32 ValidHandTrackerCount = 0;
-	uint8 bHasLeft = 0;
-	uint8 bHasRight = 0;
-	uint8 bLeftTracked = 0;
-	uint8 bRightTracked = 0;
-	TStaticArray<FVector, QuestHandKeypointCount> LeftPositionsWorld;
-	TStaticArray<FQuat, QuestHandKeypointCount> LeftRotationsWorld;
-	TStaticArray<float, QuestHandKeypointCount> LeftRadii;
-	TStaticArray<FVector, QuestHandKeypointCount> RightPositionsWorld;
-	TStaticArray<FQuat, QuestHandKeypointCount> RightRotationsWorld;
-	TStaticArray<float, QuestHandKeypointCount> RightRadii;
-
-	void Reset()
-	{
-		HandTrackerCount = 0;
-		ValidHandTrackerCount = 0;
-		bHasLeft = 0;
-		bHasRight = 0;
-		bLeftTracked = 0;
-		bRightTracked = 0;
-		for (int32 Index = 0; Index < QuestHandKeypointCount; ++Index)
-		{
-			LeftPositionsWorld[Index] = FVector::ZeroVector;
-			LeftRotationsWorld[Index] = FQuat::Identity;
-			LeftRadii[Index] = 0.0f;
-			RightPositionsWorld[Index] = FVector::ZeroVector;
-			RightRotationsWorld[Index] = FQuat::Identity;
-			RightRadii[Index] = 0.0f;
-		}
-	}
-};
-
-struct FQuestWristMappingTrace
-{
-	uint8 bQuestTracked = 0;
-	uint8 bHmdPoseValid = 0;
-	uint8 bMediaHeadValid = 0;
-	uint8 bMapped = 0;
-	uint8 bUsedLiveHmdAnchor = 0;
-	uint8 bUsedLiveHmdTranslationAnchor = 0;
-	uint8 bUsedHeldQuestWrist = 0;
-	uint8 bReachClamped = 0;
-	uint8 bReachAssistApplied = 0;
-	uint8 bUsedUntrackedJointData = 0;
-	uint8 bUsedRelativeWristCalibration = 0;
-	uint8 bRawQuestRejected = 0;
-	uint8 bPositionFilterApplied = 0;
-	uint8 bDriftGuardApplied = 0;
-	uint8 bConstrainedArmSolveApplied = 0;
-	uint8 bConstrainedArmReachScaleApplied = 0;
-	uint8 bConstrainedArmDownFrameCorrectionApplied = 0;
-	uint8 bConstrainedArmPoleContinuityApplied = 0;
-	uint8 bConstrainedArmReachContinuityApplied = 0;
-	uint8 bConstrainedArmDownStraightened = 0;
-	uint8 bConstrainedArmSourceElbowHintApplied = 0;
-	uint8 bConstrainedArmBodyFallbackApplied = 0;
-	uint8 bConstrainedArmBodyFallbackDownStraightened = 0;
-	uint8 bConstrainedArmDropoutDownFallbackApplied = 0;
-	uint8 bConstrainedArmDropoutMediaPipeHintUsed = 0;
-	uint8 bTraceOnly = 0;
-	uint8 bPositionApplied = 0;
-	uint8 bHadApplyCalibration = 0;
-	uint8 bSetApplyCalibration = 0;
-	uint8 bHadTraceCalibration = 0;
-	uint8 bSetTraceCalibration = 0;
-	uint32 RuntimeStateKey = 0;
-	EQuestMediaSpaceCalibrationMode CalibrationMode = EQuestMediaSpaceCalibrationMode::None;
-	float RequestedBlend = 0.0f;
-	float EffectiveBlend = 0.0f;
-	float RawWristToHmdCm = 0.0f;
-	float RawCalibrationDeltaCm = 0.0f;
-	float MappedOffsetFromMediaPipeCm = 0.0f;
-	float PositionFilterAlpha = 0.0f;
-	float PositionFilterSpeedCmSec = 0.0f;
-	float PositionFilterTargetDeltaCm = 0.0f;
-	float PositionFilterFilteredDeltaCm = 0.0f;
-	float HmdAvatarTranslationFilterAlpha = 0.0f;
-	float HmdAvatarTranslationSpeedCmSec = 0.0f;
-	float HmdAvatarTranslationLagCm = 0.0f;
-	float ReachAssistBlend = 0.0f;
-	float ReachAssistElbowMoveCm = 0.0f;
-	float DriftGuardAlpha = 0.0f;
-	float DriftGuardOffsetCm = 0.0f;
-	float DriftGuardReachAssistBlend = 0.0f;
-	float DriftGuardPoleBlend = 0.0f;
-	float ConstrainedArmSolveBlend = 0.0f;
-	float ConstrainedArmWristAuthority = 0.0f;
-	float ConstrainedArmMediaPipeElbowHint = 0.0f;
-	float ConstrainedArmReachScale = 1.0f;
-	float ConstrainedArmReachScaleAlpha = 0.0f;
-	float ConstrainedArmReachScaleObservedMaxCm = 0.0f;
-	float ConstrainedArmReachScaleTargetReachCm = 0.0f;
-	uint8 ArmLengthCalibrationStage = 0;
-	float ArmLengthCalibrationStableSeconds = 0.0f;
-	float ArmLengthCalibrationForwardReachCm = 0.0f;
-	float ArmLengthCalibrationDownDropCm = 0.0f;
-	float ArmLengthCalibrationTargetReachCm = 0.0f;
-	float ConstrainedArmDownFrameScale = 1.0f;
-	float ConstrainedArmDownFrameAlpha = 0.0f;
-	float ConstrainedArmDownFrameObservedDropCm = 0.0f;
-	float ConstrainedArmDownFrameTargetDropCm = 0.0f;
-	float ConstrainedArmCloseReachAlpha = 0.0f;
-	float ConstrainedArmStablePoleDown = 0.0f;
-	float ConstrainedArmElbowMoveCm = 0.0f;
-	float ConstrainedArmWristStepCm = 0.0f;
-	float ConstrainedArmCandidateElbowStepCm = 0.0f;
-	float ConstrainedArmAllowedElbowStepCm = 0.0f;
-	float ConstrainedArmNearFullPoleAlpha = 0.0f;
-	float ConstrainedArmReachContinuityRawReachCm = 0.0f;
-	float ConstrainedArmReachContinuityPreviousReachCm = 0.0f;
-	float ConstrainedArmReachContinuityMaxStepCm = 0.0f;
-	float ConstrainedArmDownStraightenAlpha = 0.0f;
-	float ConstrainedArmBodyFallbackReachFraction = 0.0f;
-	float ConstrainedArmBodyFallbackTargetReachCm = 0.0f;
-	float ConstrainedArmBodyFallbackTargetReachFraction = 0.0f;
-	float ConstrainedArmBodyFallbackDownStraightenAlpha = 0.0f;
-	float ConstrainedArmDropoutDownFallbackAlpha = 0.0f;
-	float ConstrainedArmDropoutDirectReachCm = 0.0f;
-	float ConstrainedArmDropoutTargetReachCm = 0.0f;
-	float ConstrainedArmDropoutDownDominance = 0.0f;
-	float ConstrainedArmDropoutLastTrackedAgeSeconds = 0.0f;
-	float ApplyCalibrationAgeSeconds = 0.0f;
-	float TraceCalibrationAgeSeconds = 0.0f;
-	FVector RawQuestWristWorld = FVector::ZeroVector;
-	FVector MediaPipeWristWorld = FVector::ZeroVector;
-	FVector MediaPipeHeadWorld = FVector::ZeroVector;
-	FVector QuestAnchorWorld = FVector::ZeroVector;
-	FVector MediaAnchorWorld = FVector::ZeroVector;
-	FVector MappedQuestWristWorld = FVector::ZeroVector;
-	FVector FinalWristWorld = FVector::ZeroVector;
-	FVector ReachAssistElbowWorld = FVector::ZeroVector;
-	FVector ConstrainedArmSourceElbowHintWorld = FVector::ZeroVector;
-	FVector ConstrainedArmElbowWorld = FVector::ZeroVector;
-};
-
-struct FQuestHandRotationTrace
-{
-	uint8 bQuestAvailable = 0;
-	uint8 bQuestTracked = 0;
-	uint8 bUsedJointRotation = 0;
-	uint8 bHadCalibration = 0;
-	uint8 bSetCalibration = 0;
-	uint8 bAppliedHandRotation = 0;
-	uint8 bAppliedForearmTwist = 0;
-	uint8 bUsedPalmBasis = 0;
-	uint8 bWristAxisDiagnosticsValid = 0;
-	uint8 bWristAxisDiagnosticsMapped = 0;
-	uint8 bUsedProjectedTwistBasis = 0;
-	uint8 bProjectedTwistUsesJointAxes = 0;
-	uint8 ProjectedTwistAxisIndex = 0;
-	uint8 bUsedAnatomicalRollAxis = 0;
-	uint8 AnatomicalRollAxisIndex = 0;
-	uint8 bQuestHandBasisMapped = 0;
-	uint8 bUsedSemanticRoll = 0;
-	uint8 bUsedForearmLocalSemanticRoll = 0;
-	uint8 bUsedSemanticBasisDelta = 0;
-	uint8 bUsedPalmRollFallback = 0;
-	uint8 bHeldPalmRoll = 0;
-	uint8 bAppliedHandLocalToLowerArm = 0;
-	uint8 bAppliedTwistCorrection = 0;
-	uint8 bLowerArmMainDriven = 0;
-	uint8 bTwistLimitClamped = 0;
-	uint8 bForearmLimitClamped = 0;
-	uint8 bForearmRateClamped = 0;
-	uint8 bUpperArmRateClamped = 0;
-	uint8 bCalibrationRejected = 0;
-	uint8 bCalibratedHandDeltaValid = 0;
-	uint8 CalibrationState = 0;
-	uint8 CalibrationRejectReason = 0;
-	uint8 SemanticRollAxisIndex = 0;
-	int32 CalibrationStableFrameCount = 0;
-	float HandRotationBlend = 0.0f;
-	float CalibrationBasisErrorDeg = 0.0f;
-	float CalibrationStableSeconds = 0.0f;
-	float CalibrationNeutralTwistDeg = 0.0f;
-	float CalibrationHandVelocityCmSec = 0.0f;
-	float CalibrationHandAngularVelocityDegSec = 0.0f;
-	float CalibrationBodyYawDeltaDeg = 0.0f;
-	float CalibrationMannyYawDeltaDeg = 0.0f;
-	float RawTwistDeg = 0.0f;
-	float LimitedTwistDeg = 0.0f;
-	float SourceHandTwistDeg = 0.0f;
-	float TargetForearmTwistDeg = 0.0f;
-	float SmoothedForearmTwistDeg = 0.0f;
-	float ForearmTwistStepDeg = 0.0f;
-	float ForearmTwistMaxStepDeg = 0.0f;
-	float TargetUpperArmTwistDeg = 0.0f;
-	float SmoothedUpperArmTwistDeg = 0.0f;
-	float UpperArmTwistStepDeg = 0.0f;
-	float UpperArmTwistMaxStepDeg = 0.0f;
-	float CalibratedHandDeltaDeg = 0.0f;
-	float ForearmTwistAlpha01 = 0.0f;
-	float ForearmTwistAlpha02 = 0.0f;
-	float ForearmTwistHelperScale = 0.0f;
-	float ForearmTwistApplied01Deg = 0.0f;
-	float ForearmTwistApplied02Deg = 0.0f;
-	float UpperArmTwistAlpha01 = 0.0f;
-	float UpperArmTwistAlpha02 = 0.0f;
-	float UpperArmTwistHelperScale = 0.0f;
-	float UpperArmTwistApplied01Deg = 0.0f;
-	float UpperArmTwistApplied02Deg = 0.0f;
-	float RawSwingDeg = 0.0f;
-	float AppliedSwingDeg = 0.0f;
-	FVector WristJointXRefDots = FVector::ZeroVector;
-	FVector WristJointYRefDots = FVector::ZeroVector;
-	FVector WristJointZRefDots = FVector::ZeroVector;
-	FVector PalmXRefDots = FVector::ZeroVector;
-	FVector PalmYRefDots = FVector::ZeroVector;
-	FVector PalmZRefDots = FVector::ZeroVector;
-	FVector WristJointForearmDots = FVector::ZeroVector;
-	FVector PalmForearmDots = FVector::ZeroVector;
-	FVector ForearmRefDots = FVector::ZeroVector;
-	float AnatomicalRollAxisPalmDot = 0.0f;
-	float AnatomicalRollAxisForearmDot = 0.0f;
-	float SemanticRollAxisScore = 0.0f;
-	float SemanticRollCalibrationOffsetDeg = 0.0f;
-	float SemanticRollCurrentOffsetDeg = 0.0f;
-	float QuestExpectedToMannyDeg = 0.0f;
-	float QuestExpectedToRollTargetDeg = 0.0f;
-	float RollTargetToMannyDeg = 0.0f;
-	float QuestExpectedForwardErrDeg = 0.0f;
-	float QuestExpectedUpErrDeg = 0.0f;
-	float RollTargetForwardErrDeg = 0.0f;
-	float RollTargetUpErrDeg = 0.0f;
-	float QuestBasisToMannyBasisForwardErrDeg = 0.0f;
-	float QuestBasisToMannyBasisUpErrDeg = 0.0f;
-	float QuestBasisToRollBasisForwardErrDeg = 0.0f;
-	float QuestBasisToRollBasisUpErrDeg = 0.0f;
-	FVector QuestExpectedForwardComp = FVector::ZeroVector;
-	FVector QuestExpectedUpComp = FVector::ZeroVector;
-	FVector RollTargetForwardComp = FVector::ZeroVector;
-	FVector RollTargetUpComp = FVector::ZeroVector;
-	FVector MannyAppliedForwardComp = FVector::ZeroVector;
-	FVector MannyAppliedUpComp = FVector::ZeroVector;
-	FVector MediaPipeHandForwardComp = FVector::ZeroVector;
-	FVector MediaPipeHandUpComp = FVector::ZeroVector;
-	FVector QuestBasisForwardComp = FVector::ZeroVector;
-	FVector QuestBasisUpComp = FVector::ZeroVector;
-	FVector RollTargetBasisForwardComp = FVector::ZeroVector;
-	FVector RollTargetBasisUpComp = FVector::ZeroVector;
-	FVector MannyAppliedBasisForwardComp = FVector::ZeroVector;
-	FVector MannyAppliedBasisUpComp = FVector::ZeroVector;
-	FVector MediaPipeBasisForwardComp = FVector::ZeroVector;
-	FVector MediaPipeBasisUpComp = FVector::ZeroVector;
-};
 
 USTRUCT(BlueprintInternalUseOnly)
 struct FAnimNode_MediaPipePoseDriven : public FAnimNode_Base
@@ -480,46 +230,6 @@ public:
 	}
 
 private:
-	// Bone names shared by the target base skeleton.
-	static const FName Bone_Root;
-	static const FName Bone_Pelvis;
-	static const FName Bone_Spine01;
-	static const FName Bone_Spine02;
-	static const FName Bone_Spine03;
-	static const FName Bone_Spine04;
-	static const FName Bone_Spine05;
-	static const FName Bone_Neck;
-	static const FName Bone_Neck02;
-	static const FName Bone_Head;
-
-	static const FName Bone_ClavicleL;
-	static const FName Bone_UpperArmL;
-	static const FName Bone_UpperArmTwist01L;
-	static const FName Bone_UpperArmTwist02L;
-	static const FName Bone_LowerArmL;
-	static const FName Bone_LowerArmTwist01L;
-	static const FName Bone_LowerArmTwist02L;
-	static const FName Bone_HandL;
-
-	static const FName Bone_ClavicleR;
-	static const FName Bone_UpperArmR;
-	static const FName Bone_UpperArmTwist01R;
-	static const FName Bone_UpperArmTwist02R;
-	static const FName Bone_LowerArmR;
-	static const FName Bone_LowerArmTwist01R;
-	static const FName Bone_LowerArmTwist02R;
-	static const FName Bone_HandR;
-
-	static const FName Bone_ThighL;
-	static const FName Bone_CalfL;
-	static const FName Bone_FootL;
-	static const FName Bone_BallL;
-
-	static const FName Bone_ThighR;
-	static const FName Bone_CalfR;
-	static const FName Bone_FootR;
-	static const FName Bone_BallR;
-
 	// Cached bone references (resolved in CacheBones_AnyThread).
 	FBoneReference Root;
 	FBoneReference Pelvis;
@@ -757,7 +467,9 @@ private:
 	FQuestHandTrackingSnapshot QuestHands{};
 	FMediaPipeFullArmChainSnapshot FullArmChain{};
 	FMediaPipeTrackingSourceFrame BodyFusionSourceFrame;
+	FMediaPipeBodyFusionFreshnessThresholds BodyFusionFreshnessThresholds;
 	FMediaPipeFusedAvatarPose LastBodyFusionPose;
+	FMediaPipeEmbodimentPipelineState BodyFusionPipelineState;
 	FMediaPipeBodyFusionAuthority LastBodyFusionAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	FMediaPipeEmbodimentCalibration BodyFusionCalibration;
 	int32 LastBodyFusionCalibrationResetSerial = 0;
@@ -768,6 +480,7 @@ private:
 	FString LastBodyFusionAuthorityReason;
 	uint8 bLastBodyFusionMediaPipeAuthorityAllowed = 0;
 	FMediaPipeResolvedMetaHumanTarget TargetMetaHumanProfile;
+	FMediaPipeAvatarProfileResolverLogState TargetProfileLogState;
 	bool bHasCachedQuestHmdPose = false;
 	FVector CachedQuestHmdWorld = FVector::ZeroVector;
 	FQuat CachedQuestHmdRotWorld = FQuat::Identity;
@@ -821,10 +534,8 @@ private:
 	float GetLandmarkReliability(int32 LmIdx) const;
 	bool TryGetLmWorld(int32 LmIdx, FVector& OutWorld) const;
 	bool BuildReferencePoseCache(const FBoneContainer& RequiredBones);
-	bool TryReadQuestHmdWorldPose_GameThread(FVector& OutLocationWorld, FQuat& OutRotationWorld, FVector* OutTrackingUpWorld = nullptr) const;
 	bool TryGetQuestHmdWorldPose(FVector& OutLocationWorld, FQuat& OutRotationWorld) const;
 	FVector GetCachedQuestTrackingUpWorld() const;
-	void BuildBodyFusionSourceFrame_GameThread(double NowSeconds);
 	bool TryUpdateBodyFusionCalibration_GameThread(double NowSeconds);
 	void EmitBodyFusionDebugLog_GameThread(double NowSeconds);
 	bool TryGetMediaPipeHeadFrameWorld(FVector& OutHeadWorld, FQuat& OutBodyBasisWorld);

@@ -1,7 +1,5 @@
 #include "MediaPipePoseDiagnostics.h"
 
-#include "MediaPipePoseDrivenAnimInstance.h"
-
 const TCHAR* FMediaPipePoseDiagnostics::QuestWristCalibrationStateName(const uint8 State)
 {
 	switch (State)
