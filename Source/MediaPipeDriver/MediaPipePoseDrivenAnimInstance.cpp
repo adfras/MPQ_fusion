@@ -963,7 +963,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		bLastBodyFusionMediaPipeAuthorityAllowed = AuthorityGateDecision.bAllowMediaPipePoseAuthority;
 
 		FMediaPipeBodyFusionSolveInput BodyFusionInput;
-		BodyFusionInput.SourceFrame = BodyFusionSourceFrame.Normalized(BodyFusionFreshnessThresholds);
+		BodyFusionInput.SourceFrame = BodyFusionSourceFrame;
 		BodyFusionInput.Calibration = BodyFusionCalibration;
 		BodyFusionInput.Authority = LastBodyFusionAuthority;
 		BodyFusionInput.Profile = BodyFusionProfile;
@@ -2217,6 +2217,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	// Rotation writes can recompose child component-space positions. Finish with
 	// a parent-to-child translation pass so the BodyFusion chest, neck, and HMD
 	// eye anchors all remain authoritative after deep lean poses.
+	// Regression guard: final translation order is spine/chest -> neck -> neck_02 -> head.
 	ApplyBodyFusionSpineTranslationTargets();
 	ApplyComponentTranslationToBone(Neck, NeckTargetComp);
 	ApplyComponentTranslationToBone(Neck02, Neck02TargetComp);
