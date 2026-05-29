@@ -39,7 +39,10 @@ namespace
 			{
 				Path = FPaths::Combine(FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()), Rel);
 			}
-			else if (Rel.StartsWith(TEXT("Movies/"), ESearchCase::IgnoreCase) || Rel.StartsWith(TEXT("MediaPipe/"), ESearchCase::IgnoreCase))
+			else if (
+				Rel.StartsWith(TEXT("Movies/"), ESearchCase::IgnoreCase) ||
+				Rel.StartsWith(TEXT("MediaPipe/"), ESearchCase::IgnoreCase) ||
+				Rel.StartsWith(TEXT("TestingKit/"), ESearchCase::IgnoreCase))
 			{
 				Path = FPaths::Combine(FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), Rel);
 			}

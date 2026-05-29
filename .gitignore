@@ -1,5 +1,18 @@
 # Unreal generated files
-Content/
+Content/*
+!Content/
+!Content/Codex/
+!Content/Codex/**
+!Content/CodexAgentTests/
+!Content/CodexAgentTests/**
+!Content/MCPBench/
+!Content/MCPBench/**
+!Content/MediaPipe/
+!Content/MediaPipe/**
+!Content/MetaHumanRooms/
+!Content/MetaHumanRooms/**
+!Content/Mirror/
+!Content/Mirror/**
 Binaries/
 Build/
 DerivedDataCache/
