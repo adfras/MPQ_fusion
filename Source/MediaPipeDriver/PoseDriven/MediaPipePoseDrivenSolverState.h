@@ -155,6 +155,8 @@ struct FMediaPipeArmSolverState
 	FVector LastReliableWristWorld = FVector::ZeroVector;
 	bool bHasShoulderHeightReference = false;
 	float ShoulderHeightReferenceCm = 0.0f;
+	bool bHasShoulderScreenHeightReference = false;
+	float ShoulderScreenHeightReference = 0.0f;
 	bool bHasShoulderHeadClearanceReference = false;
 	float ShoulderHeadClearanceReferenceCm = 0.0f;
 	bool bHasSmoothedClavRotCS = false;
@@ -201,6 +203,8 @@ struct FMediaPipeArmSolverState
 		LastReliableWristWorld = FVector::ZeroVector;
 		bHasShoulderHeightReference = false;
 		ShoulderHeightReferenceCm = 0.0f;
+		bHasShoulderScreenHeightReference = false;
+		ShoulderScreenHeightReference = 0.0f;
 		bHasShoulderHeadClearanceReference = false;
 		ShoulderHeadClearanceReferenceCm = 0.0f;
 		bHasSmoothedClavRotCS = false;

@@ -589,6 +589,8 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	float ScreenHeadYawDeg = 0.0f;
 	float ScreenHeadPitchDeg = 0.0f;
 	float ScreenHeadRollDeg = 0.0f;
+	FVector2D ScreenHeadCenterDelta2D = FVector2D::ZeroVector;
+	FVector2D ScreenHeadNoseDelta2D = FVector2D::ZeroVector;
 	if (HeadFaceBlend > KINDA_SMALL_NUMBER)
 	{
 		auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
@@ -665,11 +667,13 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 
 			const FVector2D CenterDelta2D = HeadCenterOffset2D - BodyState.HeadScreenCenterReference;
 			const FVector2D NoseDelta2D = NoseOffset2D - BodyState.HeadScreenNoseReference;
+			ScreenHeadCenterDelta2D = CenterDelta2D;
+			ScreenHeadNoseDelta2D = NoseDelta2D;
 			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - BodyState.HeadScreenRollReferenceDeg);
 			const float ScreenWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
-			ScreenHeadYawDeg = FMath::Clamp((-NoseDelta2D.X * 55.0f - CenterDelta2D.X * 35.0f) * ScreenWeight, -45.0f, 45.0f);
-			ScreenHeadPitchDeg = FMath::Clamp((NoseDelta2D.Y * 50.0f + CenterDelta2D.Y * 30.0f) * ScreenWeight, -35.0f, 35.0f);
-			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight, -35.0f, 35.0f);
+			ScreenHeadYawDeg = FMath::Clamp((-NoseDelta2D.X * 85.0f - CenterDelta2D.X * 60.0f) * ScreenWeight, -60.0f, 60.0f);
+			ScreenHeadPitchDeg = FMath::Clamp((NoseDelta2D.Y * 70.0f + CenterDelta2D.Y * 45.0f) * ScreenWeight, -45.0f, 45.0f);
+			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight, -45.0f, 45.0f);
 
 			FVector ScreenUpComp = CompUp.GetSafeNormal();
 			if (ScreenUpComp.IsNearlyZero())
@@ -693,7 +697,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				FQuat(ScreenForwardComp, FMath::DegreesToRadians(ScreenHeadRollDeg));
 			HeadTargetBasis = (ScreenHeadDelta * HeadTargetBasis).GetNormalized();
 
-			const float ReferenceAlpha = HalfLifeToAlpha(4.0f, DeltaSeconds);
+			const float ReferenceAlpha = HalfLifeToAlpha(12.0f, DeltaSeconds);
 			BodyState.HeadScreenCenterReference = FMath::Lerp(BodyState.HeadScreenCenterReference, HeadCenterOffset2D, ReferenceAlpha);
 			BodyState.HeadScreenNoseReference = FMath::Lerp(BodyState.HeadScreenNoseReference, NoseOffset2D, ReferenceAlpha);
 			BodyState.HeadScreenRollReferenceDeg = FMath::Lerp(BodyState.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
@@ -758,7 +762,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			}
 
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
+				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenCenterDelta=(%.3f,%.3f) screenNoseDelta=(%.3f,%.3f) screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
 				*TargetActorName.ToString(),
 				bHasNose ? 1 : 0,
 				(bHasLeftEar && bHasRightEar) ? 1 : 0,
@@ -766,6 +770,10 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				HeadFaceBlend,
 				FaceTwistWeight,
 				QuatAngularDistanceDegrees(FaceHeadTargetBasis, ChestTargetBasis),
+				ScreenHeadCenterDelta2D.X,
+				ScreenHeadCenterDelta2D.Y,
+				ScreenHeadNoseDelta2D.X,
+				ScreenHeadNoseDelta2D.Y,
 				ScreenHeadYawDeg,
 				ScreenHeadPitchDeg,
 				ScreenHeadRollDeg,
