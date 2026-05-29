@@ -1,3 +1,4 @@
+using System.IO;
 using UnrealBuildTool;
 
 public class MediaPipeDriver : ModuleRules
@@ -6,7 +7,21 @@ public class MediaPipeDriver : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		bUseUnity = false;
-		PublicIncludePaths.Add(ModuleDirectory);
+		PublicIncludePaths.AddRange(new string[]
+		{
+			ModuleDirectory,
+			Path.Combine(ModuleDirectory, "Avatar"),
+			Path.Combine(ModuleDirectory, "BodyFusion"),
+			Path.Combine(ModuleDirectory, "Core"),
+			Path.Combine(ModuleDirectory, "Diagnostics"),
+			Path.Combine(ModuleDirectory, "Embodiment"),
+			Path.Combine(ModuleDirectory, "PoseDriven"),
+			Path.Combine(ModuleDirectory, "PoseDriven", "Inline"),
+			Path.Combine(ModuleDirectory, "Quest"),
+			Path.Combine(ModuleDirectory, "Runtime"),
+			Path.Combine(ModuleDirectory, "Tests"),
+			Path.Combine(ModuleDirectory, "Tracking")
+		});
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
