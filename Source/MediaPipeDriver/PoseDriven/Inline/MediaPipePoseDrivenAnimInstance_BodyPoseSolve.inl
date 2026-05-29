@@ -510,6 +510,18 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		BodyState.bHasSmoothedNeckRotCS = false;
 		BodyState.bHasSmoothedNeck02RotCS = false;
 		BodyState.bHasSmoothedHeadRotCS = false;
+		if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+		{
+			const double NowSeconds = FPlatformTime::Seconds();
+			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, DiagnosticsState.LastHeadDiagnosticLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.HeadDebug: actor=%s enabled=0 faceBlend=%.2f twistWeight=%.2f reason=HeadFaceBlendAndHeadTwistWeightAreZero"),
+					*TargetActorName.ToString(),
+					HeadFaceBlend,
+					FaceTwistWeight);
+			}
+		}
 		return;
 	}
 
@@ -573,11 +585,195 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		!HeadRightComp.IsNearlyZero() ? HeadRightComp : ChestRightComp,
 		!HeadUpComp.IsNearlyZero() ? HeadUpComp : UpComp,
 		!HeadForwardComp.IsNearlyZero() ? HeadForwardComp : PoseFwdComp);
-	const FQuat HeadTargetBasis = FQuat::Slerp(ChestTargetBasis, FaceHeadTargetBasis, FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f)).GetNormalized();
+	FQuat HeadTargetBasis = FQuat::Slerp(ChestTargetBasis, FaceHeadTargetBasis, FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f)).GetNormalized();
+	float ScreenHeadYawDeg = 0.0f;
+	float ScreenHeadPitchDeg = 0.0f;
+	float ScreenHeadRollDeg = 0.0f;
+	if (HeadFaceBlend > KINDA_SMALL_NUMBER)
+	{
+		auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
+		{
+			if (LmIdx < 0 || !PoseFrame.Normalized.IsValidIndex(LmIdx))
+			{
+				return false;
+			}
+			const FMediaPipePoseLandmark& Lm = PoseFrame.Normalized.Points[LmIdx];
+			if (Lm.Presence <= KINDA_SMALL_NUMBER && Lm.Visibility <= KINDA_SMALL_NUMBER && Lm.Reliability <= KINDA_SMALL_NUMBER)
+			{
+				return false;
+			}
+			Out = FVector2D(Lm.X, Lm.Y);
+			return true;
+		};
+
+		FVector2D LShoulder2D = FVector2D::ZeroVector;
+		FVector2D RShoulder2D = FVector2D::ZeroVector;
+		FVector2D Nose2D = FVector2D::ZeroVector;
+		FVector2D LEye2D = FVector2D::ZeroVector;
+		FVector2D REye2D = FVector2D::ZeroVector;
+		FVector2D LEar2D = FVector2D::ZeroVector;
+		FVector2D REar2D = FVector2D::ZeroVector;
+		const bool bHasShoulders2D =
+			TryGetNormalizedXY(LShoulderLm, LShoulder2D) &&
+			TryGetNormalizedXY(RShoulderLm, RShoulder2D);
+		const bool bHasNose2D = TryGetNormalizedXY((int32)EMediaPipePoseLandmark::Nose, Nose2D);
+		const bool bHasEyes2D =
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, LEye2D) &&
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, REye2D);
+		const bool bHasEars2D =
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LEar2D) &&
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, REar2D);
+
+		if (bHasShoulders2D && (bHasNose2D || bHasEyes2D || bHasEars2D))
+		{
+			const FVector2D ShoulderMid2D = (LShoulder2D + RShoulder2D) * 0.5f;
+			const float ShoulderSpan2D = FMath::Max(FVector2D::Distance(LShoulder2D, RShoulder2D), 0.05f);
+			FVector2D HeadCenter2D = bHasNose2D ? Nose2D : ShoulderMid2D;
+			float FaceSpan2D = ShoulderSpan2D * 0.35f;
+			if (bHasEars2D)
+			{
+				HeadCenter2D = (LEar2D + REar2D) * 0.5f;
+				FaceSpan2D = FMath::Max(FVector2D::Distance(LEar2D, REar2D), FaceSpan2D);
+			}
+			else if (bHasEyes2D)
+			{
+				HeadCenter2D = (LEye2D + REye2D) * 0.5f;
+				FaceSpan2D = FMath::Max(FVector2D::Distance(LEye2D, REye2D), FaceSpan2D);
+			}
+
+			const FVector2D HeadCenterOffset2D = (HeadCenter2D - ShoulderMid2D) / ShoulderSpan2D;
+			const FVector2D NoseOffset2D = bHasNose2D
+				? (Nose2D - HeadCenter2D) / FMath::Max(FaceSpan2D, 0.02f)
+				: FVector2D::ZeroVector;
+			float EyeRollDeg = 0.0f;
+			if (bHasEyes2D)
+			{
+				const FVector2D EyeRight2D = REye2D - LEye2D;
+				if (!EyeRight2D.IsNearlyZero())
+				{
+					EyeRollDeg = FRotator::NormalizeAxis(FMath::RadiansToDegrees(FMath::Atan2(EyeRight2D.Y, EyeRight2D.X)));
+				}
+			}
+
+			if (!BodyState.bHasHeadScreenReference)
+			{
+				BodyState.bHasHeadScreenReference = true;
+				BodyState.HeadScreenCenterReference = HeadCenterOffset2D;
+				BodyState.HeadScreenNoseReference = NoseOffset2D;
+				BodyState.HeadScreenRollReferenceDeg = EyeRollDeg;
+			}
+
+			const FVector2D CenterDelta2D = HeadCenterOffset2D - BodyState.HeadScreenCenterReference;
+			const FVector2D NoseDelta2D = NoseOffset2D - BodyState.HeadScreenNoseReference;
+			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - BodyState.HeadScreenRollReferenceDeg);
+			const float ScreenWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
+			ScreenHeadYawDeg = FMath::Clamp((-NoseDelta2D.X * 55.0f - CenterDelta2D.X * 35.0f) * ScreenWeight, -45.0f, 45.0f);
+			ScreenHeadPitchDeg = FMath::Clamp((NoseDelta2D.Y * 50.0f + CenterDelta2D.Y * 30.0f) * ScreenWeight, -35.0f, 35.0f);
+			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight, -35.0f, 35.0f);
+
+			FVector ScreenUpComp = CompUp.GetSafeNormal();
+			if (ScreenUpComp.IsNearlyZero())
+			{
+				ScreenUpComp = FVector::UpVector;
+			}
+			FVector ScreenRightComp = ChestRightComp.GetSafeNormal();
+			if (ScreenRightComp.IsNearlyZero())
+			{
+				ScreenRightComp = FVector::RightVector;
+			}
+			FVector ScreenForwardComp = PoseFwdComp.GetSafeNormal();
+			if (ScreenForwardComp.IsNearlyZero())
+			{
+				ScreenForwardComp = FVector::ForwardVector;
+			}
+
+			const FQuat ScreenHeadDelta =
+				FQuat(ScreenUpComp, FMath::DegreesToRadians(ScreenHeadYawDeg)) *
+				FQuat(ScreenRightComp, FMath::DegreesToRadians(ScreenHeadPitchDeg)) *
+				FQuat(ScreenForwardComp, FMath::DegreesToRadians(ScreenHeadRollDeg));
+			HeadTargetBasis = (ScreenHeadDelta * HeadTargetBasis).GetNormalized();
+
+			const float ReferenceAlpha = HalfLifeToAlpha(4.0f, DeltaSeconds);
+			BodyState.HeadScreenCenterReference = FMath::Lerp(BodyState.HeadScreenCenterReference, HeadCenterOffset2D, ReferenceAlpha);
+			BodyState.HeadScreenNoseReference = FMath::Lerp(BodyState.HeadScreenNoseReference, NoseOffset2D, ReferenceAlpha);
+			BodyState.HeadScreenRollReferenceDeg = FMath::Lerp(BodyState.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
+		}
+	}
 	const FQuat NeckTargetBasis = FQuat::Slerp(ChestTargetBasis, HeadTargetBasis, 0.5f).GetNormalized();
 	const FQuat Neck02TargetBasis = FQuat::Slerp(NeckTargetBasis, HeadTargetBasis, 0.5f).GetNormalized();
 
-	ApplySemanticBasisSwingTwist(Neck, RefNeckComp, RefNeckBasisComp, NeckTargetBasis, CompUp, 0.65f, 0.35f * FaceTwistWeight, BodyState.bHasSmoothedNeckRotCS, BodyState.SmoothedNeckRotCS);
-	ApplySemanticBasisSwingTwist(Neck02, RefNeck02Comp, RefNeck02BasisComp, Neck02TargetBasis, CompUp, 0.75f, 0.35f * FaceTwistWeight, BodyState.bHasSmoothedNeck02RotCS, BodyState.SmoothedNeck02RotCS);
-	ApplySemanticBasisSwingTwist(Head, RefHeadComp, RefHeadBasisComp, HeadTargetBasis, CompUp, 0.85f, 0.35f * FaceTwistWeight, BodyState.bHasSmoothedHeadRotCS, BodyState.SmoothedHeadRotCS);
+	auto ApplyFaceDeltaFromChest = [&](const FBoneReference& Bone, const FQuat& RefBoneComp, const FQuat& RefBasisComp,
+		const FQuat& TargetBasisComp, const float SwingWeight, const float TwistWeight,
+		bool& bHasSmoothedRot, FQuat& InOutSmoothedRotCS)
+	{
+		if (!Bone.IsValidToEvaluate() || ChestTargetBasis.IsIdentity() || TargetBasisComp.IsIdentity() || RefBasisComp.IsIdentity())
+		{
+			return;
+		}
+
+		FVector TwistAxis = CompUp.GetSafeNormal();
+		if (TwistAxis.IsNearlyZero())
+		{
+			TwistAxis = FVector::UpVector;
+		}
+
+		const FQuat BaseTargetRotCS = ((ChestTargetBasis * RefBasisComp.Inverse()) * RefBoneComp).GetNormalized();
+		const FQuat FaceDeltaCS = (TargetBasisComp * ChestTargetBasis.Inverse()).GetNormalized();
+		FQuat Swing = FQuat::Identity;
+		FQuat Twist = FQuat::Identity;
+		FaceDeltaCS.ToSwingTwist(TwistAxis, Swing, Twist);
+
+		const FQuat SwingScaled = FQuat::Slerp(FQuat::Identity, Swing, FMath::Clamp(SwingWeight, 0.0f, 1.0f)).GetNormalized();
+		const FQuat TwistScaled = FQuat::Slerp(FQuat::Identity, Twist, FMath::Clamp(TwistWeight, 0.0f, 1.0f)).GetNormalized();
+		const FQuat TargetRotCS = (SwingScaled * TwistScaled * BaseTargetRotCS).GetNormalized();
+
+		float MaxHeadStepDegrees = HeadRotationMaxStepDegrees;
+		if (HeadRotationMaxSpeedDegreesPerSecond > 0.0f && DeltaSeconds > 0.0f)
+		{
+			const float MaxSpeedStepDegrees = HeadRotationMaxSpeedDegreesPerSecond * DeltaSeconds;
+			MaxHeadStepDegrees = MaxHeadStepDegrees > 0.0f
+				? FMath::Min(MaxHeadStepDegrees, MaxSpeedStepDegrees)
+				: MaxSpeedStepDegrees;
+		}
+		UpdateSmoothedRotation(bHasSmoothedRot, InOutSmoothedRotCS, TargetRotCS, HeadRotAlpha, MaxHeadStepDegrees);
+		ApplyRotationCS(CSPose, Bone, InOutSmoothedRotCS);
+	};
+
+	ApplyFaceDeltaFromChest(Neck, RefNeckComp, RefNeckBasisComp, NeckTargetBasis, 0.45f, 0.25f * FaceTwistWeight, BodyState.bHasSmoothedNeckRotCS, BodyState.SmoothedNeckRotCS);
+	ApplyFaceDeltaFromChest(Neck02, RefNeck02Comp, RefNeck02BasisComp, Neck02TargetBasis, 0.75f, 0.50f * FaceTwistWeight, BodyState.bHasSmoothedNeck02RotCS, BodyState.SmoothedNeck02RotCS);
+	ApplyFaceDeltaFromChest(Head, RefHeadComp, RefHeadBasisComp, HeadTargetBasis, 1.0f, FaceTwistWeight, BodyState.bHasSmoothedHeadRotCS, BodyState.SmoothedHeadRotCS);
+
+	if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+	{
+		const double NowSeconds = FPlatformTime::Seconds();
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, DiagnosticsState.LastHeadDiagnosticLogTimeSeconds))
+		{
+			float EffectiveMaxHeadStepDegrees = HeadRotationMaxStepDegrees;
+			if (HeadRotationMaxSpeedDegreesPerSecond > 0.0f && DeltaSeconds > 0.0f)
+			{
+				const float MaxSpeedStepDegrees = HeadRotationMaxSpeedDegreesPerSecond * DeltaSeconds;
+				EffectiveMaxHeadStepDegrees = EffectiveMaxHeadStepDegrees > 0.0f
+					? FMath::Min(EffectiveMaxHeadStepDegrees, MaxSpeedStepDegrees)
+					: MaxSpeedStepDegrees;
+			}
+
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
+				*TargetActorName.ToString(),
+				bHasNose ? 1 : 0,
+				(bHasLeftEar && bHasRightEar) ? 1 : 0,
+				(bHasLeftEye && bHasRightEye) ? 1 : 0,
+				HeadFaceBlend,
+				FaceTwistWeight,
+				QuatAngularDistanceDegrees(FaceHeadTargetBasis, ChestTargetBasis),
+				ScreenHeadYawDeg,
+				ScreenHeadPitchDeg,
+				ScreenHeadRollDeg,
+				BodyState.bHasSmoothedNeckRotCS ? QuatAngularDistanceDegrees(BodyState.SmoothedNeckRotCS, RefNeckComp) : 0.0f,
+				BodyState.bHasSmoothedNeck02RotCS ? QuatAngularDistanceDegrees(BodyState.SmoothedNeck02RotCS, RefNeck02Comp) : 0.0f,
+				BodyState.bHasSmoothedHeadRotCS ? QuatAngularDistanceDegrees(BodyState.SmoothedHeadRotCS, RefHeadComp) : 0.0f,
+				EffectiveMaxHeadStepDegrees,
+				HeadRotationMaxSpeedDegreesPerSecond);
+		}
+	}
 }

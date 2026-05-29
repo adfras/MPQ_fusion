@@ -46,6 +46,7 @@ struct FMediaPipeLiveCycleState
 	bool bHands = false;
 	bool bMirrorLandmarks = true;
 	bool bCaptureDevice = false;
+	bool bLoopClip = false;
 	FString ModelSelector;
 	FString CaptureDeviceUrl;
 	FString CaptureDeviceLabel;
@@ -310,6 +311,62 @@ TArray<FMediaPipeLiveClip> BuildDefaultClips()
 		{ TEXT("lunges"), TEXT("Saved/Videos/09_08_lunges_workout.mp4") },
 		{ TEXT("pose"), TEXT("Saved/Videos/pose.mp4") },
 	};
+}
+
+FString UnquoteArgValue(FString Value)
+{
+	Value.TrimStartAndEndInline();
+	if (Value.Len() >= 2)
+	{
+		const TCHAR First = Value[0];
+		const TCHAR Last = Value[Value.Len() - 1];
+		if ((First == TEXT('"') && Last == TEXT('"')) || (First == TEXT('\'') && Last == TEXT('\'')))
+		{
+			Value = Value.Mid(1, Value.Len() - 2);
+			Value.TrimStartAndEndInline();
+		}
+	}
+	return Value;
+}
+
+FString ResolveLiveClipPath(const FString& ClipPath)
+{
+	const FString CleanPath = UnquoteArgValue(ClipPath);
+	if (FPaths::IsRelative(CleanPath))
+	{
+		const FString ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		return FPaths::ConvertRelativePathToFull(FPaths::Combine(ProjectDir, CleanPath));
+	}
+	return FPaths::ConvertRelativePathToFull(CleanPath);
+}
+
+bool TryMakeLiveClipFromPath(const FString& Value, FMediaPipeLiveClip& OutClip)
+{
+	const FString CleanValue = UnquoteArgValue(Value);
+	if (CleanValue.IsEmpty())
+	{
+		return false;
+	}
+
+	const bool bLooksLikePath =
+		CleanValue.Contains(TEXT("/")) ||
+		CleanValue.Contains(TEXT("\\")) ||
+		!FPaths::GetExtension(CleanValue).IsEmpty();
+	if (!bLooksLikePath)
+	{
+		return false;
+	}
+
+	const FString FullPath = ResolveLiveClipPath(CleanValue);
+	if (!FPaths::FileExists(FullPath))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.PlayMediaPipeVisualCycle: requested video file does not exist: %s"), *FullPath);
+		return false;
+	}
+
+	OutClip.Label = FPaths::GetBaseFilename(FullPath);
+	OutClip.RelativePath = CleanValue;
+	return true;
 }
 
 FString NormalizeClipSelector(FString Selector)
@@ -990,12 +1047,25 @@ void ApplyArgs(const TArray<FString>& Args, FMediaPipeLiveCycleState& State)
 		{
 			State.bMirrorLandmarks = FCString::Atoi(*Value) != 0;
 		}
+		else if (Key.Equals(TEXT("loop"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("repeat"), ESearchCase::IgnoreCase))
+		{
+			State.bLoopClip = FCString::Atoi(*Value) != 0;
+		}
 		else if (Key.Equals(TEXT("model"), ESearchCase::IgnoreCase))
 		{
 			State.ModelSelector = Value;
 		}
 		else if (Key.Equals(TEXT("clip"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("video"), ESearchCase::IgnoreCase))
 		{
+			FMediaPipeLiveClip FileClip;
+			if (TryMakeLiveClipFromPath(Value, FileClip))
+			{
+				State.Clips.Reset();
+				State.Clips.Add(MoveTemp(FileClip));
+				State.ClipIndex = 0;
+				continue;
+			}
+
 			TArray<FMediaPipeLiveClip> FilteredClips;
 			for (const FMediaPipeLiveClip& Clip : State.Clips)
 			{
@@ -1049,8 +1119,7 @@ bool StartCurrentClip(UWorld* World)
 	}
 
 	const FMediaPipeLiveClip& Clip = GLiveCycle->Clips[GLiveCycle->ClipIndex];
-	const FString ProjectDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-	const FString VideoPath = FPaths::ConvertRelativePathToFull(FPaths::Combine(ProjectDir, Clip.RelativePath));
+	const FString VideoPath = ResolveLiveClipPath(Clip.RelativePath);
 	if (!FPaths::FileExists(VideoPath))
 	{
 		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.PlayMediaPipeVisualCycle: missing clip %s"), *VideoPath);
@@ -1059,7 +1128,7 @@ bool StartCurrentClip(UWorld* World)
 
 	VideoActor->ConfigureVideoFile(VideoPath);
 	VideoActor->bAutoPlay = true;
-	VideoActor->bLoop = false;
+	VideoActor->bLoop = GLiveCycle->bLoopClip;
 	VideoActor->WorldScale = 100.0f;
 	VideoActor->bMirrorLandmarksLR = GLiveCycle->bMirrorLandmarks;
 	ApplyTrackerSettings(VideoActor->PoseTracker, *GLiveCycle);
@@ -1068,6 +1137,7 @@ bool StartCurrentClip(UWorld* World)
 
 	if (UMediaPlayer* MediaPlayer = VideoActor->GetMediaPlayer())
 	{
+		MediaPlayer->SetLooping(GLiveCycle->bLoopClip);
 		MediaPlayer->SetRate(GLiveCycle->Speed);
 	}
 
@@ -1587,6 +1657,15 @@ bool TickLiveCycle(float DeltaSeconds)
 		return true;
 	}
 
+	if (GLiveCycle->bLoopClip && !VideoActor->IsSeekPending() && (bFinished || bStoppedAfterPlayback))
+	{
+		VideoActor->RequestVideoSeekSeconds(0.0f, true);
+		GLiveCycle->ClipStartedAt = Now;
+		GLiveCycle->LastMediaTimeSeconds = -1.0;
+		GLiveCycle->MediaTimeStalledAt = Now;
+		return true;
+	}
+
 	if (bFinished || bStoppedAfterPlayback)
 	{
 		++GLiveCycle->ClipIndex;
@@ -1797,7 +1876,7 @@ void HandleStopWebcam(const TArray<FString>&, UWorld*)
 
 FAutoConsoleCommandWithWorldAndArgs GPlayMediaPipeVisualCycleCmd(
 	TEXT("mp.PlayMediaPipeVisualCycle"),
-	TEXT("Start/restart the TestingKit3 MediaPipe-only live video cycle. Usage: mp.PlayMediaPipeVisualCycle [clip=riverbank|riverside|barefoot|lunges|pose] [hz=30] [speed=1] [model=full|lite|default|path] [hands=0] [conditioning=1] [async=1] [mirror=1]"),
+	TEXT("Start/restart the TestingKit3 MediaPipe-only live video cycle. Usage: mp.PlayMediaPipeVisualCycle [clip=riverbank|riverside|barefoot|lunges|pose] [video=relative-or-absolute-file] [loop=0|1] [hz=30] [speed=1] [model=full|lite|default|path] [hands=0] [conditioning=1] [async=1] [mirror=1]"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandlePlayVisualCycle));
 
 FAutoConsoleCommandWithWorldAndArgs GListMediaPipeWebcamsCmd(
