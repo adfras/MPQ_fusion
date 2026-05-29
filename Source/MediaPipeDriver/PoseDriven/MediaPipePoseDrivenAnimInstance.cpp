@@ -1739,6 +1739,19 @@ float FAnimNode_MediaPipePoseDriven::HalfLifeToAlpha(float HalfLifeSeconds, floa
 	return A;
 }
 
+float FAnimNode_MediaPipePoseDriven::QuatAngularDistanceDegrees(const FQuat& A, const FQuat& B)
+{
+	const FQuat NA = A.GetNormalized();
+	const FQuat NB = B.GetNormalized();
+	const float Dot = FMath::Abs(
+		NA.X * NB.X +
+		NA.Y * NB.Y +
+		NA.Z * NB.Z +
+		NA.W * NB.W);
+	const float ClampedDot = FMath::Clamp(Dot, 0.0f, 1.0f);
+	return FMath::RadiansToDegrees(2.0f * FMath::Acos(ClampedDot));
+}
+
 void FAnimNode_MediaPipePoseDriven::UpdateSmoothedRotation(bool& bInOutHasValue, FQuat& InOutValueCS, const FQuat& TargetCS, float Alpha, float MaxStepDegrees)
 {
 	FQuat Target = TargetCS.GetNormalized();

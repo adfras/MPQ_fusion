@@ -38,6 +38,10 @@ struct FMediaPipeBodySolverState
 	FQuat SmoothedNeck02RotCS = FQuat::Identity;
 	bool bHasSmoothedHeadRotCS = false;
 	FQuat SmoothedHeadRotCS = FQuat::Identity;
+	bool bHasHeadScreenReference = false;
+	FVector2D HeadScreenCenterReference = FVector2D::ZeroVector;
+	FVector2D HeadScreenNoseReference = FVector2D::ZeroVector;
+	float HeadScreenRollReferenceDeg = 0.0f;
 
 	void ResetTracking()
 	{
@@ -72,6 +76,10 @@ struct FMediaPipeBodySolverState
 		SmoothedNeck02RotCS = FQuat::Identity;
 		bHasSmoothedHeadRotCS = false;
 		SmoothedHeadRotCS = FQuat::Identity;
+		bHasHeadScreenReference = false;
+		HeadScreenCenterReference = FVector2D::ZeroVector;
+		HeadScreenNoseReference = FVector2D::ZeroVector;
+		HeadScreenRollReferenceDeg = 0.0f;
 	}
 };
 
@@ -145,6 +153,10 @@ struct FMediaPipeArmSolverState
 	FVector LastReliableShoulderWorld = FVector::ZeroVector;
 	FVector LastReliableElbowWorld = FVector::ZeroVector;
 	FVector LastReliableWristWorld = FVector::ZeroVector;
+	bool bHasShoulderHeightReference = false;
+	float ShoulderHeightReferenceCm = 0.0f;
+	bool bHasShoulderHeadClearanceReference = false;
+	float ShoulderHeadClearanceReferenceCm = 0.0f;
 	bool bHasSmoothedClavRotCS = false;
 	FQuat SmoothedClavRotCS = FQuat::Identity;
 	bool bHasSmoothedUpperArmRotCS = false;
@@ -187,6 +199,10 @@ struct FMediaPipeArmSolverState
 		LastReliableShoulderWorld = FVector::ZeroVector;
 		LastReliableElbowWorld = FVector::ZeroVector;
 		LastReliableWristWorld = FVector::ZeroVector;
+		bHasShoulderHeightReference = false;
+		ShoulderHeightReferenceCm = 0.0f;
+		bHasShoulderHeadClearanceReference = false;
+		ShoulderHeadClearanceReferenceCm = 0.0f;
 		bHasSmoothedClavRotCS = false;
 		SmoothedClavRotCS = FQuat::Identity;
 		bHasSmoothedUpperArmRotCS = false;
@@ -334,6 +350,9 @@ struct FMediaPipeDiagnosticsState
 	double LastQuestFingerSolveLogTimeSecondsL = -1.0;
 	double LastQuestFingerSolveLogTimeSecondsR = -1.0;
 	double LastTorsoDiagnosticLogTimeSeconds = -1.0;
+	double LastHeadDiagnosticLogTimeSeconds = -1.0;
+	double LastClavicleDiagnosticLogTimeSecondsL = -1.0;
+	double LastClavicleDiagnosticLogTimeSecondsR = -1.0;
 	double LastArmDiagnosticLogTimeSecondsL = -1.0;
 	double LastArmDiagnosticLogTimeSecondsR = -1.0;
 	double LastMetaHumanArmSanityLogTimeSecondsL = -1.0;
@@ -361,6 +380,9 @@ struct FMediaPipeDiagnosticsState
 		LastQuestFingerSolveLogTimeSecondsL = -1.0;
 		LastQuestFingerSolveLogTimeSecondsR = -1.0;
 		LastTorsoDiagnosticLogTimeSeconds = -1.0;
+		LastHeadDiagnosticLogTimeSeconds = -1.0;
+		LastClavicleDiagnosticLogTimeSecondsL = -1.0;
+		LastClavicleDiagnosticLogTimeSecondsR = -1.0;
 		LastArmDiagnosticLogTimeSecondsL = -1.0;
 		LastArmDiagnosticLogTimeSecondsR = -1.0;
 		LastMetaHumanArmSanityLogTimeSecondsL = -1.0;

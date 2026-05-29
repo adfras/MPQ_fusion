@@ -521,6 +521,7 @@ private:
 	static FVector LerpNormalized(const FVector& A, const FVector& B, float Alpha);
 	static FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up);
 	static float HalfLifeToAlpha(float HalfLifeSeconds, float DeltaSeconds);
+	static float QuatAngularDistanceDegrees(const FQuat& A, const FQuat& B);
 	static void UpdateSmoothedRotation(bool& bInOutHasValue, FQuat& InOutValueCS, const FQuat& TargetCS, float Alpha, float MaxStepDegrees = 0.0f);
 	FVector GetTargetForwardWorld() const;
 	void ApplyReferencePoseProportionsToTargetProfile();

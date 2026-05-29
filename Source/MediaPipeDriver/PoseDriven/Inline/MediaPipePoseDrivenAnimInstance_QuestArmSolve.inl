@@ -1628,6 +1628,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	}
 
 	const bool bHasRefClav = bIsLeft ? bHasRefClavL : bHasRefClavR;
+	double& LastClavicleDiagnosticLogTimeSeconds = bIsLeft
+		? DiagnosticsState.LastClavicleDiagnosticLogTimeSecondsL
+		: DiagnosticsState.LastClavicleDiagnosticLogTimeSecondsR;
+	const TCHAR* ClavicleSideLabel = bIsLeft ? TEXT("L") : TEXT("R");
 	if (!bDriveClavicles)
 	{
 		if (bIsLeft)
@@ -1637,6 +1641,18 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		else
 		{
 			RightArmState.bHasSmoothedClavRotCS = false;
+		}
+		if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+		{
+			const double NowSeconds = FPlatformTime::Seconds();
+			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastClavicleDiagnosticLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=0 hasRef=%d reason=DriveClaviclesOff"),
+					*TargetActorName.ToString(),
+					ClavicleSideLabel,
+					bHasRefClav ? 1 : 0);
+			}
 		}
 	}
 	else if (bHasRefClav)
@@ -1662,7 +1678,94 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 
 			const float ArmUp = FMath::Clamp(FVector::DotProduct(PoseUpperComp, UpComp), -1.0f, 1.0f);
 			const float ArmForward = FMath::Clamp(FVector::DotProduct(PoseUpperComp, ForwardComp), -1.0f, 1.0f);
-			const float UpW = FMath::Clamp(ArmUp, 0.0f, 1.0f) * 0.35f;
+			float ShoulderShrugCm = 0.0f;
+			float ShoulderShrugW = 0.0f;
+			const float ClavicleShrugWeight = FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
+			if (ClavicleShrugWeight > KINDA_SMALL_NUMBER && bHasTorsoBasis)
+			{
+				FVector LeftHipWorld = FVector::ZeroVector;
+				FVector RightHipWorld = FVector::ZeroVector;
+				const FVector UpWorldSafe = UpWorld.GetSafeNormal();
+				if (!UpWorldSafe.IsNearlyZero() &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
+				{
+					const FVector HipMidWorld = (LeftHipWorld + RightHipWorld) * 0.5f;
+					const float ShoulderHeightCm = FVector::DotProduct(ShoulderWorld - HipMidWorld, UpWorldSafe);
+					if (ShoulderHeightCm > KINDA_SMALL_NUMBER)
+					{
+						FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
+						if (!ClavicleArmState.bHasShoulderHeightReference || ClavicleArmState.ShoulderHeightReferenceCm <= KINDA_SMALL_NUMBER)
+						{
+							ClavicleArmState.bHasShoulderHeightReference = true;
+							ClavicleArmState.ShoulderHeightReferenceCm = ShoulderHeightCm;
+						}
+
+						const float ReferenceHalfLifeSeconds =
+							ShoulderHeightCm < ClavicleArmState.ShoulderHeightReferenceCm ? 0.25f : 6.0f;
+						const float ReferenceAlpha = HalfLifeToAlpha(ReferenceHalfLifeSeconds, DeltaSeconds);
+						ClavicleArmState.ShoulderHeightReferenceCm = FMath::Lerp(
+							ClavicleArmState.ShoulderHeightReferenceCm,
+							ShoulderHeightCm,
+							ReferenceAlpha);
+
+						const float ShrugStartCm = FMath::Max(0.0f, CVarMediaPipeClavicleShrugMinCm.GetValueOnAnyThread());
+						const float ShrugFullCm = FMath::Max(
+							ShrugStartCm + 0.5f,
+							CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
+						ShoulderShrugCm = FMath::Max(0.0f, ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm);
+						ShoulderShrugW = RemapClamped(ShoulderShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
+					}
+
+					const int32 EarLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEar : (int32)EMediaPipePoseLandmark::RightEar;
+					const int32 EyeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEye : (int32)EMediaPipePoseLandmark::RightEye;
+					FVector HeadSideWorld = FVector::ZeroVector;
+					if (!TryGetLmWorld(EarLm, HeadSideWorld) &&
+						!TryGetLmWorld(EyeLm, HeadSideWorld) &&
+						!TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, HeadSideWorld))
+					{
+						HeadSideWorld = FVector::ZeroVector;
+					}
+
+					if (!HeadSideWorld.IsNearlyZero())
+					{
+						FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
+						const float HeadClearanceCm = FVector::DotProduct(HeadSideWorld - ShoulderWorld, UpWorldSafe);
+						if (HeadClearanceCm > KINDA_SMALL_NUMBER)
+						{
+							if (!ClavicleArmState.bHasShoulderHeadClearanceReference ||
+								ClavicleArmState.ShoulderHeadClearanceReferenceCm <= KINDA_SMALL_NUMBER)
+							{
+								ClavicleArmState.bHasShoulderHeadClearanceReference = true;
+								ClavicleArmState.ShoulderHeadClearanceReferenceCm = HeadClearanceCm;
+							}
+
+							const float ClearanceReferenceHalfLifeSeconds =
+								HeadClearanceCm > ClavicleArmState.ShoulderHeadClearanceReferenceCm ? 0.25f : 8.0f;
+							const float ClearanceReferenceAlpha = HalfLifeToAlpha(ClearanceReferenceHalfLifeSeconds, DeltaSeconds);
+							ClavicleArmState.ShoulderHeadClearanceReferenceCm = FMath::Lerp(
+								ClavicleArmState.ShoulderHeadClearanceReferenceCm,
+								HeadClearanceCm,
+								ClearanceReferenceAlpha);
+
+							const float ShrugStartCm = FMath::Max(0.0f, CVarMediaPipeClavicleShrugMinCm.GetValueOnAnyThread());
+							const float ShrugFullCm = FMath::Max(
+								ShrugStartCm + 0.5f,
+								CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
+							const float ClearanceShrugCm = FMath::Max(
+								0.0f,
+								ClavicleArmState.ShoulderHeadClearanceReferenceCm - HeadClearanceCm);
+							if (ClearanceShrugCm > ShoulderShrugCm)
+							{
+								ShoulderShrugCm = ClearanceShrugCm;
+								ShoulderShrugW = RemapClamped(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
+							}
+						}
+					}
+				}
+			}
+
+			const float UpW = FMath::Clamp((FMath::Clamp(ArmUp, 0.0f, 1.0f) * 0.35f) + ShoulderShrugW, 0.0f, 1.25f);
 			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.25f;
 
 			FVector DesiredClavDir = (Outward + UpComp * UpW + ForwardComp * FwdW).GetSafeNormal();
@@ -1677,6 +1780,50 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			FQuat& SmoothedClavRotCS = bIsLeft ? LeftArmState.SmoothedClavRotCS : RightArmState.SmoothedClavRotCS;
 			UpdateSmoothedRotation(bHasSmoothedClavRot, SmoothedClavRotCS, TargetClavRotCS, ClavAlpha, ArmMaxStepDegrees);
 			ApplyRotationCS(CSPose, ClavBone, SmoothedClavRotCS);
+
+			if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+			{
+				const double NowSeconds = FPlatformTime::Seconds();
+				if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastClavicleDiagnosticLogTimeSeconds))
+				{
+					UE_LOG(LogMediaPipePose, Log,
+						TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=1 valid=1 armUp=%.2f armForward=%.2f shrugCm=%.1f shrugWeight=%.2f upWeight=%.2f forwardWeight=%.2f targetDeg=%.1f appliedDeg=%.1f alpha=%.2f maxStepDeg=%.1f"),
+						*TargetActorName.ToString(),
+						ClavicleSideLabel,
+						ArmUp,
+						ArmForward,
+						ShoulderShrugCm,
+						ShoulderShrugW,
+						UpW,
+						FwdW,
+						QuatAngularDistanceDegrees(TargetClavRotCS, RefClavComp),
+						QuatAngularDistanceDegrees(SmoothedClavRotCS, RefClavComp),
+						ClavAlpha,
+						ArmMaxStepDegrees);
+				}
+			}
+		}
+		else if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+		{
+			const double NowSeconds = FPlatformTime::Seconds();
+			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastClavicleDiagnosticLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=1 valid=0 hasRef=1 reason=BoneInvalid"),
+					*TargetActorName.ToString(),
+					ClavicleSideLabel);
+			}
+		}
+	}
+	else if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
+	{
+		const double NowSeconds = FPlatformTime::Seconds();
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastClavicleDiagnosticLogTimeSeconds))
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=1 valid=0 hasRef=0 reason=NoReferenceClavicle"),
+				*TargetActorName.ToString(),
+				ClavicleSideLabel);
 		}
 	}
 

@@ -106,6 +106,11 @@ TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandsInputMaxDimension(
 	512,
 	TEXT("Maximum webcam frame dimension for the automatic Quest webcam mirror profile. Default 512 preserves the stable MediaPipe pose quality baseline; lower values are performance diagnostics only."));
 
+TAutoConsoleVariable<FString> CVarPlacedEmbodiedVideoFile(
+	TEXT("mp.PlacedEmbodiedVideoFile"),
+	TEXT(""),
+	TEXT("Optional relative or absolute video file path to use instead of a webcam for mp.StartPlacedEmbodiedTracking."));
+
 TAutoConsoleVariable<float> CVarAutoQuestMirrorDistanceCm(
 	TEXT("mp.AutoQuestMirrorDistanceCm"),
 	200.0f,
@@ -527,6 +532,9 @@ void ApplyStableMediaPipeRetargetProfile()
 	SetConsoleFloat(TEXT("mp.MediaPipeArmRejectedSampleAlpha"), 0.20f);
 	SetConsoleFloat(TEXT("mp.MediaPipeArmRotationMaxStepDegrees"), 22.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeArmRotationMaxSpeedDegreesPerSecond"), 360.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeSpineRotationHalfLife"), 0.14f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.18f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadTwistWeight"), 0.0f);
@@ -546,6 +554,18 @@ void ApplyStableMediaPipeRetargetProfile()
 void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 {
 	ApplyStableMediaPipeRetargetProfile();
+	SetConsoleInt(TEXT("mp.MediaPipeDriveSpine"), 1);
+	SetConsoleInt(TEXT("mp.MediaPipeDriveClavicles"), 1);
+	SetConsoleFloat(TEXT("mp.MediaPipeTorsoUprightBlend"), 0.25f);
+	SetConsoleFloat(TEXT("mp.MediaPipeTorsoMaxTiltDegrees"), 45.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.65f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.04f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 1.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadTwistWeight"), 0.75f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"), 30.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxSpeedDegreesPerSecond"), 1440.0f);
 	SetConsoleInt(TEXT("mp.AutoQuestArmReachAssistProfile"), 0);
 	SetConsoleInt(TEXT("mp.QuestHandTracking"), 0);
 	SetConsoleInt(TEXT("mp.QuestHandDriveFingerBones"), 0);
@@ -1158,6 +1178,23 @@ AActor* FindOrSpawnMetaHumanSelfViewActor(
 
 bool TryResolveCaptureDevice(FString& OutUrl, FString& OutLabel)
 {
+	FString VideoFile = CVarPlacedEmbodiedVideoFile.GetValueOnGameThread();
+	VideoFile.TrimStartAndEndInline();
+	if (!VideoFile.IsEmpty())
+	{
+		const FString ResolvedVideoFile = FPaths::IsRelative(VideoFile)
+			? FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), VideoFile))
+			: FPaths::ConvertRelativePathToFull(VideoFile);
+		if (FPaths::FileExists(ResolvedVideoFile))
+		{
+			OutUrl = ResolvedVideoFile;
+			OutLabel = FPaths::GetBaseFilename(ResolvedVideoFile);
+			return true;
+		}
+
+		UE_LOG(LogMediaPipePose, Warning, TEXT("Auto Quest webcam: mp.PlacedEmbodiedVideoFile does not exist: %s"), *ResolvedVideoFile);
+	}
+
 	FModuleManager::LoadModulePtr<IModuleInterface>(TEXT("WmfMedia"));
 
 	TArray<FMediaCaptureDeviceInfo> Devices;
@@ -3718,13 +3755,30 @@ void HandleSpawnAutoQuestCommand(const TArray<FString>&, UWorld* World)
 	SpawnAutoQuestWebcamHandsNextTick(World);
 }
 
-void HandleStartPlacedEmbodiedTrackingCommand(const TArray<FString>&, UWorld* WorldArg)
+void HandleStartPlacedEmbodiedTrackingCommand(const TArray<FString>& Args, UWorld* WorldArg)
 {
 	UWorld* World = ResolveAutoQuestCommandWorld(WorldArg);
 	if (!IsAutoQuestWorld(World))
 	{
 		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.StartPlacedEmbodiedTracking: start PIE first, then run this command from the Unreal console."));
 		return;
+	}
+
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+
+		Key.TrimStartAndEndInline();
+		Value.TrimStartAndEndInline();
+		if (Key.Equals(TEXT("video"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("file"), ESearchCase::IgnoreCase))
+		{
+			CVarPlacedEmbodiedVideoFile.AsVariable()->Set(*Value, ECVF_SetByConsole);
+		}
 	}
 
 	AMediaPipeEmbodiedAvatarPawn* PlacedPawn = FindPlacedEmbodiedAvatarPawn(World);
@@ -3749,6 +3803,6 @@ FAutoConsoleCommandWithWorldAndArgs GSpawnAutoQuestWebcamHandsCmd(
 
 FAutoConsoleCommandWithWorldAndArgs GStartPlacedEmbodiedTrackingCmd(
 	TEXT("mp.StartPlacedEmbodiedTracking"),
-	TEXT("Start the placed embodied MediaPipe avatar pawn in the current PIE/game world."),
+	TEXT("Start the placed embodied MediaPipe avatar pawn in the current PIE/game world. Usage: mp.StartPlacedEmbodiedTracking [video=relative-or-absolute-file]"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleStartPlacedEmbodiedTrackingCommand));
 }

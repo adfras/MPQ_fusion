@@ -6,6 +6,7 @@
 #include "HAL/IConsoleManager.h"
 #include "MediaPlayer.h"
 #include "MediaTexture.h"
+#include "Misc/Paths.h"
 
 AMediaPipeQuestWebcamSourceActor::AMediaPipeQuestWebcamSourceActor()
 {
@@ -139,8 +140,25 @@ void AMediaPipeQuestWebcamSourceActor::OpenConfiguredCaptureDevice()
 	}
 
 	MediaPlayer->Close();
-	MediaPlayer->SetLooping(false);
 	MediaPlayer->PlayOnOpen = bAutoPlay;
+
+	const FString ResolvedMediaFile = FPaths::IsRelative(CaptureDeviceUrl)
+		? FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), CaptureDeviceUrl))
+		: FPaths::ConvertRelativePathToFull(CaptureDeviceUrl);
+	if (FPaths::FileExists(ResolvedMediaFile))
+	{
+		MediaPlayer->SetLooping(true);
+		if (!MediaPlayer->OpenFile(ResolvedMediaFile))
+		{
+			UE_LOG(LogMediaPipePose, Error, TEXT("Quest webcam source: failed to open video file: %s"), *ResolvedMediaFile);
+			return;
+		}
+
+		UE_LOG(LogMediaPipePose, Log, TEXT("Quest webcam source using video file: %s"), *ResolvedMediaFile);
+		return;
+	}
+
+	MediaPlayer->SetLooping(false);
 	if (!MediaPlayer->OpenUrl(CaptureDeviceUrl))
 	{
 		UE_LOG(LogMediaPipePose, Error, TEXT("Quest webcam source: failed to open capture device: %s"), *CaptureDeviceUrl);

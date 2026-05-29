@@ -1131,6 +1131,21 @@ namespace MediaPipeRuntimeCVars
 		480.0f,
 		TEXT("Maximum upper/lower arm component-space rotation speed. 0 disables this time-scaled clamp."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugWeight(
+		TEXT("mp.MediaPipeClavicleShrugWeight"),
+		0.0f,
+		TEXT("Additional clavicle lift from shoulder-height change relative to a slowly tracked rest height. 0 disables shrug response."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugMinCm(
+		TEXT("mp.MediaPipeClavicleShrugMinCm"),
+		2.0f,
+		TEXT("Shoulder-height rise in centimeters before MediaPipe clavicle shrug response starts."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugFullCm(
+		TEXT("mp.MediaPipeClavicleShrugFullCm"),
+		8.0f,
+		TEXT("Shoulder-height rise in centimeters that reaches full MediaPipe clavicle shrug response."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeShoulderRollbackTrace(
 		TEXT("mp.MediaPipeShoulderRollbackTrace"),
 		0,
