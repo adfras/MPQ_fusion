@@ -589,8 +589,12 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	float ScreenHeadYawDeg = 0.0f;
 	float ScreenHeadPitchDeg = 0.0f;
 	float ScreenHeadRollDeg = 0.0f;
+	float ScreenHeadLateralAngleDeltaDeg = 0.0f;
+	float ScreenHeadSideBendDeg = 0.0f;
 	FVector2D ScreenHeadCenterDelta2D = FVector2D::ZeroVector;
 	FVector2D ScreenHeadNoseDelta2D = FVector2D::ZeroVector;
+	FVector2D ScreenHeadShoulderNoseDelta2D = FVector2D::ZeroVector;
+	FVector2D ScreenHeadShoulderNoseAbs2D = FVector2D::ZeroVector;
 	if (HeadFaceBlend > KINDA_SMALL_NUMBER)
 	{
 		auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
@@ -647,6 +651,13 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			const FVector2D NoseOffset2D = bHasNose2D
 				? (Nose2D - HeadCenter2D) / FMath::Max(FaceSpan2D, 0.02f)
 				: FVector2D::ZeroVector;
+			const FVector2D NoseShoulderOffset2D = bHasNose2D
+				? (Nose2D - ShoulderMid2D) / ShoulderSpan2D
+				: HeadCenterOffset2D;
+			const float HeadLateralAngleDeg = FRotator::NormalizeAxis(
+				FMath::RadiansToDegrees(FMath::Atan2(
+					NoseShoulderOffset2D.X,
+					FMath::Max(-NoseShoulderOffset2D.Y, 0.05f))));
 			float EyeRollDeg = 0.0f;
 			if (bHasEyes2D)
 			{
@@ -662,18 +673,29 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				BodyState.bHasHeadScreenReference = true;
 				BodyState.HeadScreenCenterReference = HeadCenterOffset2D;
 				BodyState.HeadScreenNoseReference = NoseOffset2D;
+				BodyState.HeadScreenShoulderNoseReference = NoseShoulderOffset2D;
+				BodyState.HeadScreenLateralAngleReferenceDeg = HeadLateralAngleDeg;
 				BodyState.HeadScreenRollReferenceDeg = EyeRollDeg;
 			}
 
 			const FVector2D CenterDelta2D = HeadCenterOffset2D - BodyState.HeadScreenCenterReference;
 			const FVector2D NoseDelta2D = NoseOffset2D - BodyState.HeadScreenNoseReference;
+			const FVector2D ShoulderNoseDelta2D = NoseShoulderOffset2D - BodyState.HeadScreenShoulderNoseReference;
 			ScreenHeadCenterDelta2D = CenterDelta2D;
 			ScreenHeadNoseDelta2D = NoseDelta2D;
+			ScreenHeadShoulderNoseDelta2D = ShoulderNoseDelta2D;
+			ScreenHeadShoulderNoseAbs2D = NoseShoulderOffset2D;
+			const float LateralAngleDeltaDeg = FRotator::NormalizeAxis(HeadLateralAngleDeg - BodyState.HeadScreenLateralAngleReferenceDeg);
+			ScreenHeadLateralAngleDeltaDeg = LateralAngleDeltaDeg;
 			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - BodyState.HeadScreenRollReferenceDeg);
 			const float ScreenWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
-			ScreenHeadYawDeg = FMath::Clamp((-NoseDelta2D.X * 85.0f - CenterDelta2D.X * 60.0f) * ScreenWeight, -60.0f, 60.0f);
-			ScreenHeadPitchDeg = FMath::Clamp((NoseDelta2D.Y * 70.0f + CenterDelta2D.Y * 45.0f) * ScreenWeight, -45.0f, 45.0f);
-			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight, -45.0f, 45.0f);
+			const float ShoulderNoseYawInput = FMath::Abs(ShoulderNoseDelta2D.X) > 0.005f
+				? ShoulderNoseDelta2D.X
+				: NoseShoulderOffset2D.X;
+			ScreenHeadYawDeg = FMath::Clamp((LateralAngleDeltaDeg * 1.2f + ShoulderNoseYawInput * 25.0f + NoseDelta2D.X * 18.0f + CenterDelta2D.X * 12.0f) * ScreenWeight, -85.0f, 85.0f);
+			ScreenHeadPitchDeg = FMath::Clamp((ShoulderNoseDelta2D.Y * 70.0f + NoseDelta2D.Y * 45.0f + CenterDelta2D.Y * 30.0f) * ScreenWeight, -45.0f, 45.0f);
+			ScreenHeadSideBendDeg = (LateralAngleDeltaDeg * 0.95f + ShoulderNoseYawInput * 120.0f + CenterDelta2D.X * 35.0f) * ScreenWeight;
+			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight + ScreenHeadSideBendDeg, -45.0f, 45.0f);
 
 			FVector ScreenUpComp = CompUp.GetSafeNormal();
 			if (ScreenUpComp.IsNearlyZero())
@@ -700,6 +722,10 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			const float ReferenceAlpha = HalfLifeToAlpha(12.0f, DeltaSeconds);
 			BodyState.HeadScreenCenterReference = FMath::Lerp(BodyState.HeadScreenCenterReference, HeadCenterOffset2D, ReferenceAlpha);
 			BodyState.HeadScreenNoseReference = FMath::Lerp(BodyState.HeadScreenNoseReference, NoseOffset2D, ReferenceAlpha);
+			BodyState.HeadScreenShoulderNoseReference = FMath::Lerp(BodyState.HeadScreenShoulderNoseReference, NoseShoulderOffset2D, ReferenceAlpha);
+			BodyState.HeadScreenLateralAngleReferenceDeg = FRotator::NormalizeAxis(
+				BodyState.HeadScreenLateralAngleReferenceDeg +
+				FRotator::NormalizeAxis(HeadLateralAngleDeg - BodyState.HeadScreenLateralAngleReferenceDeg) * ReferenceAlpha);
 			BodyState.HeadScreenRollReferenceDeg = FMath::Lerp(BodyState.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
 		}
 	}
@@ -762,7 +788,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			}
 
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenCenterDelta=(%.3f,%.3f) screenNoseDelta=(%.3f,%.3f) screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
+				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenCenterDelta=(%.3f,%.3f) screenNoseDelta=(%.3f,%.3f) screenShoulderNoseDelta=(%.3f,%.3f) screenShoulderNoseAbs=(%.3f,%.3f) screenAngleDelta=%.1f screenSideBend=%.1f screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
 				*TargetActorName.ToString(),
 				bHasNose ? 1 : 0,
 				(bHasLeftEar && bHasRightEar) ? 1 : 0,
@@ -774,6 +800,12 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				ScreenHeadCenterDelta2D.Y,
 				ScreenHeadNoseDelta2D.X,
 				ScreenHeadNoseDelta2D.Y,
+				ScreenHeadShoulderNoseDelta2D.X,
+				ScreenHeadShoulderNoseDelta2D.Y,
+				ScreenHeadShoulderNoseAbs2D.X,
+				ScreenHeadShoulderNoseAbs2D.Y,
+				ScreenHeadLateralAngleDeltaDeg,
+				ScreenHeadSideBendDeg,
 				ScreenHeadYawDeg,
 				ScreenHeadPitchDeg,
 				ScreenHeadRollDeg,

@@ -41,6 +41,8 @@ struct FMediaPipeBodySolverState
 	bool bHasHeadScreenReference = false;
 	FVector2D HeadScreenCenterReference = FVector2D::ZeroVector;
 	FVector2D HeadScreenNoseReference = FVector2D::ZeroVector;
+	FVector2D HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+	float HeadScreenLateralAngleReferenceDeg = 0.0f;
 	float HeadScreenRollReferenceDeg = 0.0f;
 
 	void ResetTracking()
@@ -79,6 +81,8 @@ struct FMediaPipeBodySolverState
 		bHasHeadScreenReference = false;
 		HeadScreenCenterReference = FVector2D::ZeroVector;
 		HeadScreenNoseReference = FVector2D::ZeroVector;
+		HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+		HeadScreenLateralAngleReferenceDeg = 0.0f;
 		HeadScreenRollReferenceDeg = 0.0f;
 	}
 };
@@ -159,6 +163,8 @@ struct FMediaPipeArmSolverState
 	float ShoulderScreenHeightReference = 0.0f;
 	bool bHasShoulderHeadClearanceReference = false;
 	float ShoulderHeadClearanceReferenceCm = 0.0f;
+	bool bHasSmoothedClavicleShrugWeight = false;
+	float SmoothedClavicleShrugWeight = 0.0f;
 	bool bHasSmoothedClavRotCS = false;
 	FQuat SmoothedClavRotCS = FQuat::Identity;
 	bool bHasSmoothedUpperArmRotCS = false;
@@ -207,6 +213,8 @@ struct FMediaPipeArmSolverState
 		ShoulderScreenHeightReference = 0.0f;
 		bHasShoulderHeadClearanceReference = false;
 		ShoulderHeadClearanceReferenceCm = 0.0f;
+		bHasSmoothedClavicleShrugWeight = false;
+		SmoothedClavicleShrugWeight = 0.0f;
 		bHasSmoothedClavRotCS = false;
 		SmoothedClavRotCS = FQuat::Identity;
 		bHasSmoothedUpperArmRotCS = false;

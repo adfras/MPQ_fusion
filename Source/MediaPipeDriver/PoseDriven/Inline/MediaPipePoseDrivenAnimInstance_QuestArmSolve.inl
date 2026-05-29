@@ -1680,6 +1680,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			const float ArmForward = FMath::Clamp(FVector::DotProduct(PoseUpperComp, ForwardComp), -1.0f, 1.0f);
 			float ShoulderShrugCm = 0.0f;
 			float ShoulderShrugW = 0.0f;
+			float ShoulderSignedLiftCm = 0.0f;
+			float ShoulderSignedLiftW = 0.0f;
 			float ShoulderRelativeLiftCm = 0.0f;
 			float ShoulderRelativeLiftW = 0.0f;
 			float ShoulderScreenLift = 0.0f;
@@ -1723,16 +1725,20 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							ClavicleArmState.ShoulderHeightReferenceCm = ShoulderHeightCm;
 						}
 
-						const float ReferenceHalfLifeSeconds =
-							ShoulderHeightCm < ClavicleArmState.ShoulderHeightReferenceCm ? 0.25f : 6.0f;
+						const float ReferenceHalfLifeSeconds = 8.0f;
 						const float ReferenceAlpha = HalfLifeToAlpha(ReferenceHalfLifeSeconds, DeltaSeconds);
 						ClavicleArmState.ShoulderHeightReferenceCm = FMath::Lerp(
 							ClavicleArmState.ShoulderHeightReferenceCm,
 							ShoulderHeightCm,
 							ReferenceAlpha);
 
-						ShoulderShrugCm = FMath::Max(0.0f, ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm);
-						ShoulderShrugW = RemapClamped(ShoulderShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
+						ShoulderSignedLiftCm = ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm;
+						ShoulderSignedLiftW =
+							RemapSignedUnbounded(ShoulderSignedLiftCm, ShrugStartCm, ShrugFullCm) *
+							ClavicleShrugWeight *
+							0.30f;
+						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderSignedLiftCm));
+						ShoulderShrugW += ShoulderSignedLiftW;
 					}
 
 					const int32 OppositeShoulderLm = bIsLeft
@@ -1743,21 +1749,17 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					{
 						const float ShoulderWidthCm = FVector::Dist(ShoulderWorld, OppositeShoulderWorld);
 						const float RelativeLiftFullCm = FMath::Max(
-							ShrugStartCm + 0.5f,
-							FMath::Min(10.0f, ShoulderWidthCm * 0.18f));
-						const float RelativeLiftStartCm = FMath::Min(ShrugStartCm, 0.75f);
-						ShoulderRelativeLiftCm = FMath::Max(
-							0.0f,
-							FVector::DotProduct(ShoulderWorld - OppositeShoulderWorld, UpWorldSafe));
+							2.5f,
+							FMath::Min(6.0f, ShoulderWidthCm * 0.14f));
+						const float RelativeLiftStartCm = FMath::Min(ShrugStartCm, 0.45f);
+						const float SignedRelativeLiftCm = FVector::DotProduct(ShoulderWorld - OppositeShoulderWorld, UpWorldSafe);
+						ShoulderRelativeLiftCm = SignedRelativeLiftCm;
 						ShoulderRelativeLiftW =
-							RemapClamped(ShoulderRelativeLiftCm, RelativeLiftStartCm, RelativeLiftFullCm) *
+							RemapSignedUnbounded(ShoulderRelativeLiftCm, RelativeLiftStartCm, RelativeLiftFullCm) *
 							ClavicleShrugWeight *
-							0.45f;
-						if (ShoulderRelativeLiftW > ShoulderShrugW)
-						{
-							ShoulderShrugCm = ShoulderRelativeLiftCm;
-							ShoulderShrugW = ShoulderRelativeLiftW;
-						}
+							0.12f;
+						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderRelativeLiftCm));
+						ShoulderShrugW += ShoulderRelativeLiftW;
 
 						FVector2D Shoulder2D = FVector2D::ZeroVector;
 						FVector2D OppositeShoulder2D = FVector2D::ZeroVector;
@@ -1778,30 +1780,27 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 								ClavicleArmState.ShoulderScreenHeightReference = ShoulderHeight2D;
 							}
 
-							const float ScreenReferenceHalfLifeSeconds =
-								ShoulderHeight2D < ClavicleArmState.ShoulderScreenHeightReference ? 0.25f : 10.0f;
+							const float ScreenReferenceHalfLifeSeconds = 10.0f;
 							const float ScreenReferenceAlpha = HalfLifeToAlpha(ScreenReferenceHalfLifeSeconds, DeltaSeconds);
 							ClavicleArmState.ShoulderScreenHeightReference = FMath::Lerp(
 								ClavicleArmState.ShoulderScreenHeightReference,
 								ShoulderHeight2D,
 								ScreenReferenceAlpha);
 
-							const float AbsoluteScreenLift = FMath::Max(
-								0.0f,
-								ShoulderHeight2D - ClavicleArmState.ShoulderScreenHeightReference);
-							const float RelativeScreenLift = FMath::Max(
-								0.0f,
-								(OppositeShoulder2D.Y - Shoulder2D.Y) / ShoulderSpan2D);
-							ShoulderScreenLift = FMath::Max(AbsoluteScreenLift, RelativeScreenLift * 0.75f);
-							ShoulderScreenLiftW =
-								RemapClamped(ShoulderScreenLift, 0.012f, 0.075f) *
-								ClavicleShrugWeight *
-								0.65f;
-							if (ShoulderScreenLiftW > ShoulderShrugW)
-							{
-								ShoulderShrugCm = ShoulderScreenLift * ShoulderWidthCm;
-								ShoulderShrugW = ShoulderScreenLiftW;
-							}
+							const float AbsoluteScreenLift = ShoulderHeight2D - ClavicleArmState.ShoulderScreenHeightReference;
+							const float RelativeScreenLift = (OppositeShoulder2D.Y - Shoulder2D.Y) / ShoulderSpan2D;
+							const float AbsoluteScreenLiftCm = AbsoluteScreenLift * ShoulderWidthCm;
+							const float RelativeScreenLiftCm = RelativeScreenLift * ShoulderWidthCm;
+							const float AbsoluteScreenLiftW =
+								RemapSignedUnbounded(AbsoluteScreenLiftCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight;
+							const float RelativeScreenLiftW =
+								RemapSignedUnbounded(RelativeScreenLiftCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight;
+							ShoulderScreenLift = AbsoluteScreenLift;
+							ShoulderScreenLiftW = AbsoluteScreenLiftW * 0.85f + RelativeScreenLiftW * 0.10f;
+							ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Max(FMath::Abs(AbsoluteScreenLiftCm), FMath::Abs(RelativeScreenLiftCm)));
+							ShoulderShrugW += ShoulderScreenLiftW;
 						}
 					}
 
@@ -1842,15 +1841,44 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							if (ClearanceShrugCm > ShoulderShrugCm)
 							{
 								ShoulderShrugCm = ClearanceShrugCm;
-								ShoulderShrugW = RemapClamped(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
 							}
+							ShoulderShrugW +=
+								RemapPositiveUnbounded(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight *
+								0.15f;
 						}
 					}
 				}
 			}
 
-			const float UpW = FMath::Clamp((FMath::Clamp(ArmUp, 0.0f, 1.0f) * 0.45f) + ShoulderShrugW, 0.0f, 1.45f);
-			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.25f;
+			FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
+			const float ShrugWeightAlpha = HalfLifeToAlpha(
+				ShoulderShrugW > ClavicleArmState.SmoothedClavicleShrugWeight ? 0.12f : 0.18f,
+				DeltaSeconds);
+			if (!ClavicleArmState.bHasSmoothedClavicleShrugWeight)
+			{
+				ClavicleArmState.bHasSmoothedClavicleShrugWeight = true;
+				ClavicleArmState.SmoothedClavicleShrugWeight = ShoulderShrugW;
+			}
+			else
+			{
+				const float PreviousShrugWeight = ClavicleArmState.SmoothedClavicleShrugWeight;
+				const float DesiredShrugWeight = FMath::Lerp(
+					ClavicleArmState.SmoothedClavicleShrugWeight,
+					ShoulderShrugW,
+					ShrugWeightAlpha);
+				const float MaxShrugStep = FMath::Max(0.015f, 1.4f * FMath::Max(DeltaSeconds, 0.0f));
+				ClavicleArmState.SmoothedClavicleShrugWeight = FMath::Clamp(
+					DesiredShrugWeight,
+					PreviousShrugWeight - MaxShrugStep,
+					PreviousShrugWeight + MaxShrugStep);
+			}
+			ShoulderShrugW = ClavicleArmState.SmoothedClavicleShrugWeight;
+
+			const float ArmDrivenClavicleUpW = FMath::Pow(FMath::Clamp(ArmUp, 0.0f, 1.0f), 1.35f) * 0.18f;
+			const float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW, -0.25f, 0.75f);
+			const float UpW = FMath::Clamp(ArmDrivenClavicleUpW + ShrugDrivenClavicleUpW, -0.25f, 0.85f);
+			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.14f;
 
 			FVector DesiredClavDir = (Outward + UpComp * UpW + ForwardComp * FwdW).GetSafeNormal();
 			if (DesiredClavDir.IsNearlyZero())

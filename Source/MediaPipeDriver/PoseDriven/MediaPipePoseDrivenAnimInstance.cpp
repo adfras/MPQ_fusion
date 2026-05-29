@@ -1708,6 +1708,28 @@ static float RemapClamped(float Value, float InMin, float InMax)
 	return FMath::Clamp((Value - InMin) / (InMax - InMin), 0.0f, 1.0f);
 }
 
+static float RemapPositiveUnbounded(float Value, float InMin, float InFull)
+{
+	if (FMath::IsNearlyEqual(InMin, InFull))
+	{
+		return Value >= InFull ? 1.0f : 0.0f;
+	}
+
+	return FMath::Max(0.0f, (Value - InMin) / (InFull - InMin));
+}
+
+static float RemapSignedUnbounded(float Value, float DeadZone, float Full)
+{
+	const float AbsValue = FMath::Abs(Value);
+	if (FMath::IsNearlyEqual(DeadZone, Full))
+	{
+		return AbsValue >= Full ? FMath::Sign(Value) : 0.0f;
+	}
+
+	const float Magnitude = FMath::Max(0.0f, (AbsValue - DeadZone) / (Full - DeadZone));
+	return FMath::Sign(Value) * Magnitude;
+}
+
 static FVector BuildArmSurfaceUpHint(const FVector& BodyUp, const FVector& BodyForward, const FVector& SegmentDir)
 {
 	const FVector UpN = BodyUp.GetSafeNormal();
