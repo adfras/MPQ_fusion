@@ -14,6 +14,7 @@ extern "C" {
 
 static const int kMpPoseLandmarkCount = 33;
 static const int kMpHandLandmarkCount = 21;
+static const int kMpFaceLandmarkMaxCount = 478;
 
 struct MP_Landmark {
   float x;
@@ -73,7 +74,26 @@ struct MP_HandPair {
   MP_HandLandmarks right_world;
 };
 
+struct MP_FaceLandmarks {
+  int32_t count;
+  MP_Landmark landmarks[kMpFaceLandmarkMaxCount];
+};
+
+struct MP_FacePose {
+  uint8_t has_face;
+  uint8_t has_transform;
+  uint8_t reserved[2];
+  float score;
+  MP_FaceLandmarks normalized;
+// Row-major 4x4 facial transformation matrix when the backend provides one.
+float facial_transform[16];
+};
+
+// Extended init that uses MediaPipe HolisticLandmarker when holistic_model_path is provided.
+// This keeps MP_Init/MP_Init2/MP_Init3 backward compatible for existing callers.
+MP_EXPORT bool MP_Init4(const char* pose_model_path, const char* hand_model_path, const char* holistic_model_path, const MP_InitOptions* options);
 MP_EXPORT bool MP_GetHandLandmarks(MP_HandPair* out_hands);
+MP_EXPORT bool MP_GetFacePose(MP_FacePose* out_face);
 MP_EXPORT void MP_Shutdown();
 
 #ifdef __cplusplus

@@ -56,6 +56,8 @@ AgentBridge/node_modules/
 *.dll
 *.png
 Test*.txt
+ThirdParty/mediapipe_wrapper/_mediapipe/
+ThirdParty/mediapipe_wrapper/tools/bazelisk.exe
 
 # Python caches
 __pycache__/

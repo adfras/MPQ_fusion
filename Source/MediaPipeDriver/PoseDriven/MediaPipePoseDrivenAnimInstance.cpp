@@ -140,6 +140,18 @@ namespace
 		float HeadWorldForwardPitchReferenceDeg = 0.0f;
 		float HeadScreenLateralAngleReferenceDeg = 0.0f;
 		float HeadScreenRollReferenceDeg = 0.0f;
+		bool bHasDenseFaceReference = false;
+		float DenseFacePitchReference = 0.0f;
+		float DenseFaceYawReference = 0.0f;
+		float DenseFaceRollReferenceDeg = 0.0f;
+		bool bHasValidDenseFacePitchDelta = false;
+		float LastValidDenseFacePitchDelta = 0.0f;
+		bool bHasValidDenseHeadLocalEuler = false;
+		float LastDenseHeadLocalPitchDeg = 0.0f;
+		float LastDenseHeadLocalYawDeg = 0.0f;
+		float LastDenseHeadLocalRollDeg = 0.0f;
+		bool bHasValidDenseHeadTargetBasis = false;
+		FQuat LastDenseHeadTargetBasis = FQuat::Identity;
 		bool bHasBilateralShoulderHeadClearanceReference = false;
 		float BilateralShoulderHeadClearanceReferenceCm = 0.0f;
 		int64 LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
@@ -163,6 +175,18 @@ namespace
 			HeadWorldForwardPitchReferenceDeg = 0.0f;
 			HeadScreenLateralAngleReferenceDeg = 0.0f;
 			HeadScreenRollReferenceDeg = 0.0f;
+			bHasDenseFaceReference = false;
+			DenseFacePitchReference = 0.0f;
+			DenseFaceYawReference = 0.0f;
+			DenseFaceRollReferenceDeg = 0.0f;
+			bHasValidDenseFacePitchDelta = false;
+			LastValidDenseFacePitchDelta = 0.0f;
+			bHasValidDenseHeadLocalEuler = false;
+			LastDenseHeadLocalPitchDeg = 0.0f;
+			LastDenseHeadLocalYawDeg = 0.0f;
+			LastDenseHeadLocalRollDeg = 0.0f;
+			bHasValidDenseHeadTargetBasis = false;
+			LastDenseHeadTargetBasis = FQuat::Identity;
 			bHasBilateralShoulderHeadClearanceReference = false;
 			BilateralShoulderHeadClearanceReferenceCm = 0.0f;
 			LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
@@ -599,6 +623,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	TargetEyeLocalOffset = FVector::ZeroVector;
 	TargetEmbodiedCameraForwardOffsetCm = 0.0f;
 	RuntimeStateKey = 0;
+	LatestSignalSnapshot.Reset();
 	QuestHands.Reset();
 	FullArmChain.Reset();
 	BodyFusionSourceFrame.Reset();
@@ -620,6 +645,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		return;
 	}
 	RuntimeStateKey = SkelComp->GetUniqueID();
+	LatestSignalSnapshot.RuntimeStateKey = RuntimeStateKey;
 	TargetCompTransform = SkelComp->GetComponentTransform();
 
 	if (AActor* TargetActor = SkelComp->GetOwner())
@@ -2844,6 +2870,13 @@ void UMediaPipePoseDrivenAnimInstance::ResetRetargetState()
 	Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
 }
 
+bool UMediaPipePoseDrivenAnimInstance::GetLatestSignalSnapshot(FMediaPipePoseDrivenSignalSnapshot& OutSnapshot)
+{
+	FMediaPipePoseDrivenAnimInstanceProxy& Proxy = GetProxyOnGameThread<FMediaPipePoseDrivenAnimInstanceProxy>();
+	OutSnapshot = Proxy.PoseNode.LatestSignalSnapshot;
+	return OutSnapshot.bValid;
+}
+
 void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 {
 	FMediaPipePoseDrivenAnimInstanceProxy& Proxy = GetProxyOnGameThread<FMediaPipePoseDrivenAnimInstanceProxy>();
@@ -2867,6 +2900,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	const float NewHeadRotationHalfLifeSeconds = FMath::Max(0.0f, CVarMediaPipeHeadRotationHalfLife.GetValueOnGameThread());
 	const float NewHeadTwistWeight = FMath::Clamp(CVarMediaPipeHeadTwistWeight.GetValueOnGameThread(), 0.0f, 1.0f);
 	const float NewHeadFaceBlend = FMath::Clamp(CVarMediaPipeHeadFaceBlend.GetValueOnGameThread(), 0.0f, 1.0f);
+	const float NewHeadPitchScale = FMath::Clamp(CVarMediaPipeHeadPitchScale.GetValueOnGameThread(), 0.0f, 3.0f);
 	const float NewHeadRotationMaxStepDegrees = FMath::Max(0.0f, CVarMediaPipeHeadRotationMaxStepDegrees.GetValueOnGameThread());
 	const float NewHeadRotationMaxSpeedDegreesPerSecond = FMath::Max(0.0f, CVarMediaPipeHeadRotationMaxSpeedDegreesPerSecond.GetValueOnGameThread());
 
@@ -2889,6 +2923,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 		!FMath::IsNearlyEqual(PoseNode.HeadRotationHalfLifeSeconds, NewHeadRotationHalfLifeSeconds, 0.001f) ||
 		!FMath::IsNearlyEqual(PoseNode.HeadTwistWeight, NewHeadTwistWeight, 0.001f) ||
 		!FMath::IsNearlyEqual(PoseNode.HeadFaceBlend, NewHeadFaceBlend, 0.001f) ||
+		!FMath::IsNearlyEqual(PoseNode.HeadPitchScale, NewHeadPitchScale, 0.001f) ||
 		!FMath::IsNearlyEqual(PoseNode.HeadRotationMaxStepDegrees, NewHeadRotationMaxStepDegrees, 0.001f) ||
 		!FMath::IsNearlyEqual(PoseNode.HeadRotationMaxSpeedDegreesPerSecond, NewHeadRotationMaxSpeedDegreesPerSecond, 0.001f);
 
@@ -2910,6 +2945,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	PoseNode.HeadRotationHalfLifeSeconds = NewHeadRotationHalfLifeSeconds;
 	PoseNode.HeadTwistWeight = NewHeadTwistWeight;
 	PoseNode.HeadFaceBlend = NewHeadFaceBlend;
+	PoseNode.HeadPitchScale = NewHeadPitchScale;
 	PoseNode.HeadRotationMaxStepDegrees = NewHeadRotationMaxStepDegrees;
 	PoseNode.HeadRotationMaxSpeedDegreesPerSecond = NewHeadRotationMaxSpeedDegreesPerSecond;
 

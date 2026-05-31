@@ -21,11 +21,71 @@
 
 class AActor;
 class UMediaPipePoseTrackerComponent;
+class UMediaPipePoseDrivenAnimInstance;
+
+struct FMediaPipePoseDrivenHeadSignalSnapshot
+{
+	bool bHasDenseFace = false;
+	float DenseFacePitchRatio = 0.0f;
+	float DenseFaceYawRatio = 0.0f;
+	float DenseFaceRollDeg = 0.0f;
+	float DenseFacePitchDelta = 0.0f;
+	float DenseFaceYawDelta = 0.0f;
+	float DenseFaceRollDeltaDeg = 0.0f;
+	float ComputedPitchDeg = 0.0f;
+	float ComputedYawDeg = 0.0f;
+	float ComputedRollDeg = 0.0f;
+	float ScreenPitchDeg = 0.0f;
+	float ScreenYawDeg = 0.0f;
+	float ScreenRollDeg = 0.0f;
+};
+
+struct FMediaPipePoseDrivenShoulderSignalSnapshot
+{
+	bool bValid = false;
+	float ShoulderSignedLiftCm = 0.0f;
+	float ShoulderRelativeLiftCm = 0.0f;
+	float ShoulderPositiveLiftEvidenceCm = 0.0f;
+	float ShoulderHeadClearanceCm = 0.0f;
+	float ShoulderHeadClearanceShrugCm = 0.0f;
+	float BilateralShoulderHeadClearanceCm = 0.0f;
+	float BilateralShoulderHeadClearanceReferenceCm = 0.0f;
+	float BilateralShoulderHeadClearanceShrugCm = 0.0f;
+	float ComputedShrugWeight = 0.0f;
+	float SmoothedShrugWeight = 0.0f;
+	float ComputedLiftTranslationCm = 0.0f;
+	float SmoothedLiftTranslationCm = 0.0f;
+	float AppliedClavicleLiftCm = 0.0f;
+	float AppliedUpperLiftCm = 0.0f;
+	float UpWeight = 0.0f;
+	float ForwardWeight = 0.0f;
+};
+
+struct FMediaPipePoseDrivenSignalSnapshot
+{
+	bool bValid = false;
+	uint32 RuntimeStateKey = 0;
+	int64 PoseTimestampUs = -1;
+	FMediaPipePoseDrivenHeadSignalSnapshot Head;
+	FMediaPipePoseDrivenShoulderSignalSnapshot LeftShoulder;
+	FMediaPipePoseDrivenShoulderSignalSnapshot RightShoulder;
+
+	void Reset()
+	{
+		bValid = false;
+		RuntimeStateKey = 0;
+		PoseTimestampUs = -1;
+		Head = FMediaPipePoseDrivenHeadSignalSnapshot();
+		LeftShoulder = FMediaPipePoseDrivenShoulderSignalSnapshot();
+		RightShoulder = FMediaPipePoseDrivenShoulderSignalSnapshot();
+	}
+};
 
 USTRUCT(BlueprintInternalUseOnly)
 struct FAnimNode_MediaPipePoseDriven : public FAnimNode_Base
 {
 	GENERATED_BODY()
+	friend class UMediaPipePoseDrivenAnimInstance;
 
 public:
 	FAnimNode_MediaPipePoseDriven();
@@ -141,6 +201,10 @@ public:
 	// Blend from chest-aligned head basis to face-landmark head basis. 0 avoids noisy live face flips.
 	UPROPERTY(EditAnywhere, Category="MediaPipe|Spine", meta=(ClampMin="0.0", ClampMax="1.0"))
 	float HeadFaceBlend = 0.0f;
+
+	// Expressiveness multiplier for face-derived pitch/nod only. Yaw, roll, and twist use separate gates.
+	UPROPERTY(EditAnywhere, Category="MediaPipe|Spine", meta=(ClampMin="0.0", ClampMax="3.0"))
+	float HeadPitchScale = 1.0f;
 
 	// Maximum neck/head component-space rotation step per evaluated frame. 0 disables this fixed-step clamp.
 	UPROPERTY(EditAnywhere, Category="MediaPipe|Spine", meta=(ClampMin="0.0"))
@@ -463,6 +527,7 @@ private:
 	FVector TargetEyeLocalOffset = FVector::ZeroVector;
 	float TargetEmbodiedCameraForwardOffsetCm = 0.0f;
 	uint32 RuntimeStateKey = 0;
+	FMediaPipePoseDrivenSignalSnapshot LatestSignalSnapshot;
 	bool bHasPoseHands = false;
 	int64 PoseHandsTimestampUs = 0;
 	FMediaPipeRawHandPair PoseHands{};
@@ -609,6 +674,7 @@ public:
 	void SetDriveHandRotation(bool bInDriveHandRotation);
 	void SetUseQuestHandTracking(bool bInUseQuestHandTracking);
 	void SetDriveQuestFingerBones(bool bInDriveQuestFingerBones);
+	bool GetLatestSignalSnapshot(FMediaPipePoseDrivenSignalSnapshot& OutSnapshot);
 
 protected:
 	virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;

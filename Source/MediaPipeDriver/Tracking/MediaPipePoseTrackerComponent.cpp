@@ -133,6 +133,7 @@ UMediaPipePoseTrackerComponent::UMediaPipePoseTrackerComponent()
 	PrimaryComponentTick.bStartWithTickEnabled = true;
 	PrimaryComponentTick.bTickEvenWhenPaused = true;
 	bTickInEditor = true;
+	SourceConditioner = MakeUnique<FMediaPipeSourceConditioner>();
 }
 
 void UMediaPipePoseTrackerComponent::BeginPlay()
@@ -166,10 +167,15 @@ bool UMediaPipePoseTrackerComponent::Initialize()
 	const FString ResolvedHandModelPath = bEnableHandLandmarker
 		? NormalizeProjectFilePath(HandModelPath.IsEmpty() ? ResolveDefaultHandModelPath() : HandModelPath)
 		: FString();
+	const bool bWantsHolistic = bEnableHolisticLandmarker || bEnableFaceLandmarker;
+	const FString RequestedHolisticModelPath = HolisticModelPath.IsEmpty() ? FaceModelPath : HolisticModelPath;
+	const FString ResolvedHolisticModelPath = bWantsHolistic
+		? NormalizeProjectFilePath(RequestedHolisticModelPath.IsEmpty() ? ResolveDefaultHolisticModelPath() : RequestedHolisticModelPath)
+		: FString();
 	const FMediaPipePoseNativeOptions NativeOptions = BuildNativeOptions();
 
 	Tracker = MakeUnique<FMediaPipePoseTracker>();
-	if (!Tracker->Initialize(DllPath, ModelPath, ResolvedHandModelPath, NativeOptions, bUseMockWrapper))
+	if (!Tracker->Initialize(DllPath, ModelPath, ResolvedHandModelPath, ResolvedHolisticModelPath, NativeOptions, bUseMockWrapper))
 	{
 		UE_LOG(LogMediaPipePose, Error, TEXT("Failed to initialize MediaPipe tracker."));
 		Tracker.Reset();
@@ -788,27 +794,34 @@ bool UMediaPipePoseTrackerComponent::GetLatestFrame(FMediaPipePoseFrame& OutFram
 
 	FMediaPipeSourceConditionerOptions Options = FMediaPipeSourceConditioner::MakeDefaultOptions();
 	Options.bEnabled = Options.bEnabled && bUseSourceConditioning;
-	if (!Options.bEnabled || RawFrame.bSourceConditioned || (bRawFrameWasInjected && !bConditionInjectedFrames))
+	const bool bAdaptiveOutput = Options.bAdaptivePoseConditioning || Options.bAdaptivePosePrediction;
+	if (!Options.bEnabled || (RawFrame.bSourceConditioned && !bAdaptiveOutput) || (bRawFrameWasInjected && !bConditionInjectedFrames))
 	{
 		OutFrame = RawFrame;
 		return OutFrame.bValid;
 	}
 
 	FScopeLock ConditionerLock(&SourceConditionerMutex);
+	if (!SourceConditioner)
+	{
+		SourceConditioner = MakeUnique<FMediaPipeSourceConditioner>();
+	}
 	if (bHasConditionedFrameCache
 		&& ConditionedFrameInputTimestampUs == RawFrame.TimestampUs
-		&& ConditionedFrameInputSerial == RawFrameSerial)
+		&& ConditionedFrameInputSerial == RawFrameSerial
+		&& !bAdaptiveOutput)
 	{
 		OutFrame = ConditionedFrameCache;
 		return OutFrame.bValid;
 	}
 
-	if (!SourceConditioner.ConditionFrame(RawFrame, WorldScale, bMirrorLandmarksLR, Options, ConditionedFrameCache))
+	if (!SourceConditioner->ConditionFrame(RawFrame, WorldScale, bMirrorLandmarksLR, Options, ConditionedFrameCache, FPlatformTime::Seconds()))
 	{
 		bHasConditionedFrameCache = false;
 		OutFrame = RawFrame;
 		return false;
 	}
+	ConditionedFrameCache.ConditioningDiagnostics.SourceVideoFps = RuntimeStats.LastMediaFrameRate;
 
 	ConditionedFrameInputTimestampUs = RawFrame.TimestampUs;
 	ConditionedFrameInputSerial = RawFrameSerial;
@@ -907,7 +920,10 @@ void UMediaPipePoseTrackerComponent::ResetLandmarkFilter()
 {
 	{
 		FScopeLock ConditionerLock(&SourceConditionerMutex);
-		SourceConditioner.Reset();
+		if (SourceConditioner)
+		{
+			SourceConditioner->Reset();
+		}
 		bHasConditionedFrameCache = false;
 		ConditionedFrameInputTimestampUs = 0;
 		ConditionedFrameInputSerial = 0;
@@ -988,6 +1004,19 @@ FString UMediaPipePoseTrackerComponent::ResolveDefaultHandModelPath() const
 
 	const FString Hand = FPaths::Combine(ContentDir, TEXT("MediaPipe/hand_landmarker.task"));
 	return FPaths::FileExists(Hand) ? Hand : FString();
+}
+
+FString UMediaPipePoseTrackerComponent::ResolveDefaultHolisticModelPath() const
+{
+	FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir());
+	const FString ProjectRoot = GetMediaPipeDriverProjectRoot();
+	if (!ProjectRoot.IsEmpty())
+	{
+		ContentDir = FPaths::Combine(ProjectRoot, TEXT("Content"));
+	}
+
+	const FString Holistic = FPaths::Combine(ContentDir, TEXT("MediaPipe/holistic_landmarker.task"));
+	return FPaths::FileExists(Holistic) ? Holistic : FString();
 }
 
 FMediaPipePoseNativeOptions UMediaPipePoseTrackerComponent::BuildNativeOptions() const

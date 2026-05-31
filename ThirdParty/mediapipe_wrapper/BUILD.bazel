@@ -1,0 +1,18 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "ump_shared",
+    srcs = ["ump_shared.cc", "ump_shared.h"],
+    linkshared = 1,
+    linkstatic = 1,
+    deps = [
+        "//mediapipe/framework/formats:image",
+        "//mediapipe/framework/formats:image_frame",
+        "//mediapipe/tasks/cc/vision/pose_landmarker:pose_landmarker",
+        "//mediapipe/tasks/cc/vision/hand_landmarker:hand_landmarker",
+        "//mediapipe/tasks/cc/vision/holistic_landmarker:holistic_landmarker",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)

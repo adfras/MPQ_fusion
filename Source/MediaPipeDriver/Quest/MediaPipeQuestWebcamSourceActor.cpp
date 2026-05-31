@@ -75,6 +75,7 @@ void AMediaPipeQuestWebcamSourceActor::ConfigureLowLoadDefaults(float MaxHz, con
 		PoseTracker->MaxProcessRateHz = MaxHz;
 		PoseTracker->ConfigPath = ModelPath;
 		PoseTracker->bEnableHandLandmarker = false;
+		PoseTracker->bEnableHolisticLandmarker = true;
 		PoseTracker->bAsyncMediaTextureReadback = true;
 		PoseTracker->bUseSourceConditioning = true;
 	}

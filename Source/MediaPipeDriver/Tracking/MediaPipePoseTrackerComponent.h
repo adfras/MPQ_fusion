@@ -100,6 +100,18 @@ public:
 	UPROPERTY(EditAnywhere, Category="MediaPipe|Native Options", meta=(EditCondition="bEnableHandLandmarker"))
 	FString HandModelPath;
 
+	UPROPERTY(EditAnywhere, Category="MediaPipe|Native Options")
+	bool bEnableHolisticLandmarker = false;
+
+	UPROPERTY(EditAnywhere, Category="MediaPipe|Native Options", meta=(EditCondition="bEnableHolisticLandmarker"))
+	FString HolisticModelPath;
+
+	UPROPERTY()
+	bool bEnableFaceLandmarker = false;
+
+	UPROPERTY()
+	FString FaceModelPath;
+
 	UPROPERTY(EditAnywhere, Category="MediaPipe|Native Options", meta=(ClampMin="1", ClampMax="4"))
 	int32 NumPoses = 1;
 
@@ -132,6 +144,7 @@ private:
 	FString ResolveDefaultDllPath() const;
 	FString ResolveDefaultConfigPath() const;
 	FString ResolveDefaultHandModelPath() const;
+	FString ResolveDefaultHolisticModelPath() const;
 	FMediaPipePoseNativeOptions BuildNativeOptions() const;
 	UTextureRenderTarget2D* GetOrCreateMediaTextureInferenceRenderTarget(FIntPoint SourceSize, int32 MaxDimension, FIntPoint& OutInferenceSize);
 	bool DrawMediaTextureToInferenceRenderTarget(UMediaTexture* MediaTexture, UTextureRenderTarget2D* RenderTarget);
@@ -144,7 +157,7 @@ private:
 	mutable FMediaPipePoseFrame InjectedRawFrame;
 
 	mutable FCriticalSection SourceConditionerMutex;
-	mutable FMediaPipeSourceConditioner SourceConditioner;
+	mutable TUniquePtr<FMediaPipeSourceConditioner> SourceConditioner;
 	mutable bool bHasConditionedFrameCache = false;
 	mutable int64 ConditionedFrameInputTimestampUs = 0;
 	mutable uint64 ConditionedFrameInputSerial = 0;

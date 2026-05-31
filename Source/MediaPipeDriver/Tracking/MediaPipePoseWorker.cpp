@@ -98,6 +98,10 @@ uint32 FMediaPipePoseWorker::Run()
 		{
 			Output.bHasHands = Wrapper.GetHandLandmarks(Output.Hands);
 		}
+		if (Output.bValid && Wrapper.IsFaceEnabled())
+		{
+			Output.bHasFace = Wrapper.GetFacePose(Output.Face) && Output.Face.bHasFace != 0;
+		}
 		const double LandmarkMs = FMath::Max(0.0, (FPlatformTime::Seconds() - LandmarkStartSeconds) * 1000.0);
 		{
 			FScopeLock StatsLock(&StatsMutex);

@@ -90,7 +90,7 @@ bool FMediaPipePoseFrameWorkerAutomationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Worker records two invalid input rejects"), WorkerStats.WorkerInvalidInputCount, int64(2));
 
 	FMediaPipePoseTracker Tracker;
-	TestTrue(TEXT("Mock tracker initializes without native DLL"), Tracker.Initialize(FString(), FString(), FString(), FMediaPipePoseNativeOptions(), true));
+	TestTrue(TEXT("Mock tracker initializes without native DLL"), Tracker.Initialize(FString(), FString(), FString(), FString(), FMediaPipePoseNativeOptions(), true));
 
 	TArray<uint8> ShortRgb;
 	ShortRgb.SetNumZeroed(11);

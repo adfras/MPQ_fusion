@@ -16,6 +16,7 @@ bool FMediaPipePoseTracker::Initialize(
 	const FString& DllPath,
 	const FString& PoseModelPath,
 	const FString& HandModelPath,
+	const FString& HolisticModelPath,
 	const FMediaPipePoseNativeOptions& NativeOptions,
 	bool bUseMock)
 {
@@ -38,17 +39,18 @@ bool FMediaPipePoseTracker::Initialize(
 			return false;
 		}
 
-		if (!Wrapper.Init(PoseModelPath, HandModelPath, NativeOptions))
+		if (!Wrapper.Init(PoseModelPath, HandModelPath, HolisticModelPath, NativeOptions))
 		{
 			Wrapper.Unload();
 			return false;
 		}
 	}
 
-	UE_LOG(LogMediaPipePose, Log, TEXT("MediaPipe tracker initialized (mock=%s poseModel=%s handModel=%s)"),
+	UE_LOG(LogMediaPipePose, Log, TEXT("MediaPipe tracker initialized (mock=%s poseModel=%s handModel=%s holisticModel=%s)"),
 		bUseMock ? TEXT("true") : TEXT("false"),
 		*PoseModelPath,
-		HandModelPath.IsEmpty() ? TEXT("none") : *HandModelPath);
+		HandModelPath.IsEmpty() ? TEXT("none") : *HandModelPath,
+		HolisticModelPath.IsEmpty() ? TEXT("none") : *HolisticModelPath);
 
 	Worker = MakeUnique<FMediaPipePoseWorker>(Wrapper, [this](const FMediaPipePoseFrame& Frame, const int32 SourceEpoch)
 	{
