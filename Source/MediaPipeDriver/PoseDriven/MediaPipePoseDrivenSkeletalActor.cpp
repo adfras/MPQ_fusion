@@ -15,7 +15,13 @@
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
+#include "Dom/JsonObject.h"
 #include "HAL/IConsoleManager.h"
+#include "MediaPlayer.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace
@@ -51,6 +57,256 @@ const AActor* ResolveTrackingSourceActor(const AActor* SourceActor)
 }
 
 const FName LiveMannyTag(TEXT("TestingKit3_MediaPipeLiveManny"));
+const TCHAR* MannyRecorderBones[] = {
+	TEXT("pelvis"),
+	TEXT("spine_01"),
+	TEXT("spine_02"),
+	TEXT("spine_03"),
+	TEXT("spine_04"),
+	TEXT("spine_05"),
+	TEXT("neck_01"),
+	TEXT("neck_02"),
+	TEXT("head"),
+	TEXT("clavicle_l"),
+	TEXT("clavicle_r"),
+	TEXT("upperarm_l"),
+	TEXT("upperarm_r"),
+	TEXT("upperarm_twist_01_l"),
+	TEXT("upperarm_twist_02_l"),
+	TEXT("upperarm_twist_01_r"),
+	TEXT("upperarm_twist_02_r"),
+	TEXT("lowerarm_l"),
+	TEXT("lowerarm_r"),
+	TEXT("lowerarm_twist_01_l"),
+	TEXT("lowerarm_twist_02_l"),
+	TEXT("lowerarm_twist_01_r"),
+	TEXT("lowerarm_twist_02_r"),
+	TEXT("hand_l"),
+	TEXT("hand_r"),
+};
+
+struct FMannyBoneTimeseriesRecorder
+{
+	bool bActive = false;
+	FString OutputPath;
+	double StartSeconds = 0.0;
+	double DurationSeconds = 0.0;
+	int32 SampleCount = 0;
+	TArray<TSharedPtr<FJsonValue>> Samples;
+};
+
+FMannyBoneTimeseriesRecorder GMannyBoneTimeseriesRecorder;
+
+TArray<TSharedPtr<FJsonValue>> JsonVector(const FVector& Value)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(3);
+	Result.Add(MakeShared<FJsonValueNumber>(Value.X));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Y));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Z));
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonRotator(const FRotator& Value)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(3);
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Pitch));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Yaw));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Roll));
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonQuat(const FQuat& Value)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(4);
+	Result.Add(MakeShared<FJsonValueNumber>(Value.X));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Y));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.Z));
+	Result.Add(MakeShared<FJsonValueNumber>(Value.W));
+	return Result;
+}
+
+void WriteMannyBoneTimeseries()
+{
+	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("schema"), TEXT("manny_visible_bone_timeseries_v2"));
+	Root->SetStringField(TEXT("status"), TEXT("complete"));
+	Root->SetNumberField(TEXT("duration"), GMannyBoneTimeseriesRecorder.DurationSeconds);
+	Root->SetNumberField(TEXT("sample_count"), GMannyBoneTimeseriesRecorder.SampleCount);
+	Root->SetArrayField(TEXT("samples"), GMannyBoneTimeseriesRecorder.Samples);
+
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Json);
+	if (!FJsonSerializer::Serialize(Root, Writer))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordMannyBoneTimeseries: failed to serialize %d samples."), GMannyBoneTimeseriesRecorder.SampleCount);
+		return;
+	}
+
+	const FString Directory = FPaths::GetPath(GMannyBoneTimeseriesRecorder.OutputPath);
+	if (!Directory.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*Directory, true);
+	}
+	if (!FFileHelper::SaveStringToFile(Json, *GMannyBoneTimeseriesRecorder.OutputPath))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordMannyBoneTimeseries: failed to write %s."), *GMannyBoneTimeseriesRecorder.OutputPath);
+		return;
+	}
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordMannyBoneTimeseries: wrote %d samples duration=%.3fs path=%s"),
+		GMannyBoneTimeseriesRecorder.SampleCount,
+		GMannyBoneTimeseriesRecorder.DurationSeconds,
+		*GMannyBoneTimeseriesRecorder.OutputPath);
+}
+
+void StopMannyBoneTimeseries()
+{
+	if (!GMannyBoneTimeseriesRecorder.bActive)
+	{
+		return;
+	}
+	GMannyBoneTimeseriesRecorder.bActive = false;
+	WriteMannyBoneTimeseries();
+}
+
+FString ResolveRecorderPath(const FString& Path)
+{
+	if (Path.IsEmpty())
+	{
+		return FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("CodexAgent/Diagnostics/manny_bone_timeseries.json")));
+	}
+	return FPaths::ConvertRelativePathToFull(
+		FPaths::IsRelative(Path) ? FPaths::Combine(FPaths::ProjectDir(), Path) : Path);
+}
+
+void StartMannyBoneTimeseries(const TArray<FString>& Args)
+{
+	FString OutputPath;
+	double DurationSeconds = 10.0;
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+		if (Key.Equals(TEXT("path"), ESearchCase::IgnoreCase))
+		{
+			OutputPath = Value;
+		}
+		else if (Key.Equals(TEXT("duration"), ESearchCase::IgnoreCase))
+		{
+			DurationSeconds = FMath::Clamp(FCString::Atod(*Value), 0.1, 120.0);
+		}
+	}
+
+	GMannyBoneTimeseriesRecorder.bActive = true;
+	GMannyBoneTimeseriesRecorder.OutputPath = ResolveRecorderPath(OutputPath);
+	GMannyBoneTimeseriesRecorder.StartSeconds = FPlatformTime::Seconds();
+	GMannyBoneTimeseriesRecorder.DurationSeconds = DurationSeconds;
+	GMannyBoneTimeseriesRecorder.SampleCount = 0;
+	GMannyBoneTimeseriesRecorder.Samples.Reset();
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s"),
+		DurationSeconds,
+		*GMannyBoneTimeseriesRecorder.OutputPath);
+}
+
+void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Actor, USkeletalMeshComponent* DrivenMesh, const float DeltaSeconds)
+{
+	if (!GMannyBoneTimeseriesRecorder.bActive || !Actor || !DrivenMesh || !Actor->Tags.Contains(LiveMannyTag))
+	{
+		return;
+	}
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	const double ElapsedSeconds = FMath::Max(0.0, NowSeconds - GMannyBoneTimeseriesRecorder.StartSeconds);
+	if (ElapsedSeconds > GMannyBoneTimeseriesRecorder.DurationSeconds)
+	{
+		StopMannyBoneTimeseries();
+		return;
+	}
+
+	double MediaSeconds = ElapsedSeconds;
+	if (Actor->Source)
+	{
+		if (const UMediaPlayer* MediaPlayer = FindObject<UMediaPlayer>(Actor->Source, TEXT("MediaPlayer")))
+		{
+			MediaSeconds = MediaPlayer->GetTime().GetTotalSeconds();
+		}
+	}
+
+	FMediaPipePoseFrame LatestPoseFrame;
+	bool bHasLatestPoseFrame = false;
+	if (const AActor* TrackingSourceActor = ResolveTrackingSourceActor(Actor->Source))
+	{
+		if (const UMediaPipePoseTrackerComponent* Tracker = TrackingSourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>())
+		{
+			bHasLatestPoseFrame = Tracker->GetLatestFrame(LatestPoseFrame) && LatestPoseFrame.bValid;
+		}
+	}
+	const double PoseSeconds = bHasLatestPoseFrame
+		? static_cast<double>(LatestPoseFrame.TimestampUs) * 1.0e-6
+		: MediaSeconds;
+	const double SampleSeconds = bHasLatestPoseFrame ? PoseSeconds : MediaSeconds;
+
+	TSharedRef<FJsonObject> Sample = MakeShared<FJsonObject>();
+	Sample->SetNumberField(TEXT("t"), SampleSeconds);
+	Sample->SetNumberField(TEXT("wall_t"), ElapsedSeconds);
+	Sample->SetNumberField(TEXT("delta"), DeltaSeconds);
+	Sample->SetNumberField(TEXT("media_t"), MediaSeconds);
+	if (bHasLatestPoseFrame)
+	{
+		Sample->SetNumberField(TEXT("pose_t"), PoseSeconds);
+		Sample->SetNumberField(TEXT("pose_timestamp_us"), static_cast<double>(LatestPoseFrame.TimestampUs));
+		Sample->SetNumberField(TEXT("media_minus_pose_t"), MediaSeconds - PoseSeconds);
+	}
+
+	TSharedRef<FJsonObject> ActorObject = MakeShared<FJsonObject>();
+	ActorObject->SetStringField(TEXT("label"), Actor->GetActorLabel());
+	ActorObject->SetArrayField(TEXT("loc"), JsonVector(Actor->GetActorLocation()));
+	ActorObject->SetArrayField(TEXT("rot"), JsonRotator(Actor->GetActorRotation()));
+	Sample->SetObjectField(TEXT("actor"), ActorObject);
+
+	TSharedRef<FJsonObject> Live = MakeShared<FJsonObject>();
+	for (const TCHAR* BoneNameText : MannyRecorderBones)
+	{
+		const FName BoneName(BoneNameText);
+		if (DrivenMesh->GetBoneIndex(BoneName) == INDEX_NONE)
+		{
+			continue;
+		}
+
+		const FTransform ComponentTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_Component);
+		const FTransform ParentTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_ParentBoneSpace);
+		TSharedRef<FJsonObject> Bone = MakeShared<FJsonObject>();
+		Bone->SetArrayField(TEXT("loc"), JsonVector(ComponentTransform.GetLocation()));
+		Bone->SetArrayField(TEXT("rot"), JsonRotator(ComponentTransform.GetRotation().Rotator()));
+		Bone->SetArrayField(TEXT("quat"), JsonQuat(ComponentTransform.GetRotation()));
+		Bone->SetArrayField(TEXT("local_rot"), JsonRotator(ParentTransform.GetRotation().Rotator()));
+		Bone->SetArrayField(TEXT("local_quat"), JsonQuat(ParentTransform.GetRotation()));
+		Live->SetObjectField(BoneNameText, Bone);
+	}
+
+	Sample->SetObjectField(TEXT("live"), Live);
+	GMannyBoneTimeseriesRecorder.Samples.Add(MakeShared<FJsonValueObject>(Sample));
+	++GMannyBoneTimeseriesRecorder.SampleCount;
+}
+
+FAutoConsoleCommand GMannyBoneTimeseriesCommand(
+	TEXT("mp.RecordMannyBoneTimeseries"),
+	TEXT("Record live Manny bone transforms to JSON. Usage: mp.RecordMannyBoneTimeseries duration=8.7 path=Saved/CodexAgent/Diagnostics/out.json"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMannyBoneTimeseries));
 
 int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeletalMeshComponent* PresentationMesh)
 {
@@ -634,6 +890,8 @@ void AMediaPipePoseDrivenSkeletalActor::Tick(float DeltaSeconds)
 		MediaPipeAnim->SetSourceActor(AnimSourceActor);
 		MediaPipeAnim->ApplyRetargetQualitySettings();
 	}
+
+	RecordMannyBoneTimeseriesSample(this, DrivenMesh, DeltaSeconds);
 
 	if (!AnimSourceActor)
 	{

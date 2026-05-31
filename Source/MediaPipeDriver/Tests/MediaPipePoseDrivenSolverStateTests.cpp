@@ -33,6 +33,10 @@ bool FMediaPipePoseDrivenBodySolverStateResetAutomationTest::RunTest(const FStri
 	State.SmoothedNeck02RotCS = FQuat(FVector::RightVector, 0.25f);
 	State.bHasSmoothedHeadRotCS = true;
 	State.SmoothedHeadRotCS = FQuat(FVector::UpVector, 0.25f);
+	State.bHasHeadScreenReference = true;
+	State.HeadScreenCenterReference = FVector2D(1.0f, 2.0f);
+	State.bHasBilateralShoulderHeadClearanceReference = true;
+	State.BilateralShoulderHeadClearanceReferenceCm = 42.0f;
 
 	State.ResetTracking();
 	TestEqual(TEXT("Reference rig height is preserved"), State.ReferenceRigHipHeightCm, 100.0f);
@@ -42,12 +46,19 @@ bool FMediaPipePoseDrivenBodySolverStateResetAutomationTest::RunTest(const FStri
 	TestTrue(TEXT("Pelvis offset resets"), State.SmoothedPelvisOffsetComp.IsNearlyZero());
 	TestFalse(TEXT("FK root ground offset flag resets"), State.bHasSmoothedFkRootGroundOffset);
 	TestTrue(TEXT("FK root ground offset resets"), State.SmoothedFkRootGroundOffsetComp.IsNearlyZero());
+	TestFalse(TEXT("Head screen reference resets with tracking"), State.bHasHeadScreenReference);
+	TestFalse(TEXT("Bilateral clearance reference resets with tracking"), State.bHasBilateralShoulderHeadClearanceReference);
 
 	State.ResetTorsoStability();
 	TestFalse(TEXT("Torso forward flag resets"), State.bHasStableTorsoForwardWorld);
 	TestTrue(TEXT("Torso forward resets"), State.StableTorsoForwardWorld.IsNearlyZero());
 	TestFalse(TEXT("Torso up flag resets"), State.bHasStableTorsoUpWorld);
 	TestTrue(TEXT("Torso up resets"), State.StableTorsoUpWorld.IsNearlyZero());
+
+	State.bHasHeadScreenReference = true;
+	State.HeadScreenCenterReference = FVector2D(3.0f, 4.0f);
+	State.bHasBilateralShoulderHeadClearanceReference = true;
+	State.BilateralShoulderHeadClearanceReferenceCm = 40.0f;
 
 	State.ResetRotationSmoothing();
 	TestFalse(TEXT("Pelvis rotation flag resets"), State.bHasSmoothedPelvisRotCS);
@@ -60,6 +71,10 @@ bool FMediaPipePoseDrivenBodySolverStateResetAutomationTest::RunTest(const FStri
 	TestTrue(TEXT("Neck02 rotation resets"), State.SmoothedNeck02RotCS.Equals(FQuat::Identity));
 	TestFalse(TEXT("Head rotation flag resets"), State.bHasSmoothedHeadRotCS);
 	TestTrue(TEXT("Head rotation resets"), State.SmoothedHeadRotCS.Equals(FQuat::Identity));
+	TestTrue(TEXT("Head screen reference survives rotation smoothing reset"), State.bHasHeadScreenReference);
+	TestEqual(TEXT("Head screen reference value survives rotation smoothing reset"), State.HeadScreenCenterReference, FVector2D(3.0f, 4.0f));
+	TestTrue(TEXT("Bilateral clearance reference survives rotation smoothing reset"), State.bHasBilateralShoulderHeadClearanceReference);
+	TestEqual(TEXT("Bilateral clearance value survives rotation smoothing reset"), State.BilateralShoulderHeadClearanceReferenceCm, 40.0f);
 
 	return true;
 }

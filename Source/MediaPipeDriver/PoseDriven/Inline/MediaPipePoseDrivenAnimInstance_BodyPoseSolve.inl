@@ -541,6 +541,11 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	const bool bHasLeftEye = TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftEyeWorld);
 	const bool bHasRightEye = TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEye, RightEyeWorld);
 
+	FVector LeftMouthWorld = FVector::ZeroVector;
+	FVector RightMouthWorld = FVector::ZeroVector;
+	const bool bHasLeftMouth = TryGetLmWorld((int32)EMediaPipePoseLandmark::MouthLeft, LeftMouthWorld);
+	const bool bHasRightMouth = TryGetLmWorld((int32)EMediaPipePoseLandmark::MouthRight, RightMouthWorld);
+
 	FVector HeadCenterWorld = ShoulderMidWorld + UpWorld * 20.0f;
 	if (bHasLeftEar && bHasRightEar)
 	{
@@ -591,6 +596,32 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	float ScreenHeadRollDeg = 0.0f;
 	float ScreenHeadLateralAngleDeltaDeg = 0.0f;
 	float ScreenHeadSideBendDeg = 0.0f;
+	float ScreenHeadFacePitchInput = 0.0f;
+	float ScreenHeadNoseEyePitchDelta = 0.0f;
+	float ScreenHeadMouthEyePitchDelta = 0.0f;
+	float ScreenHeadMouthEarPitchDelta = 0.0f;
+	float ScreenHeadNoseEarPitchDelta = 0.0f;
+	float ScreenHeadNoseEyePitchProxy = 0.0f;
+	float ScreenHeadMouthEyePitchProxy = 0.0f;
+	float ScreenHeadMouthEarPitchProxy = 0.0f;
+	float ScreenHeadNoseEarPitchProxy = 0.0f;
+	float HeadWorldMouthEyePitchDelta = 0.0f;
+	float HeadWorldNoseEyePitchDelta = 0.0f;
+	float HeadWorldMouthEarPitchDelta = 0.0f;
+	float HeadWorldNoseEarPitchDelta = 0.0f;
+	float HeadWorldForwardPitchDeltaDeg = 0.0f;
+	float HeadWorldMouthEyePitchProxy = 0.0f;
+	float HeadWorldNoseEyePitchProxy = 0.0f;
+	float HeadWorldMouthEarPitchProxy = 0.0f;
+	float HeadWorldNoseEarPitchProxy = 0.0f;
+	float HeadWorldForwardPitchProxyDeg = 0.0f;
+	int32 bScreenHasShoulders2D = 0;
+	int32 bScreenHasNose2D = 0;
+	int32 bScreenHasEyes2D = 0;
+	int32 bScreenHasEars2D = 0;
+	int32 bScreenHasMouth2D = 0;
+	int32 ScreenHeadHadReference = 0;
+	int32 ScreenHeadInitializedReference = 0;
 	FVector2D ScreenHeadCenterDelta2D = FVector2D::ZeroVector;
 	FVector2D ScreenHeadNoseDelta2D = FVector2D::ZeroVector;
 	FVector2D ScreenHeadShoulderNoseDelta2D = FVector2D::ZeroVector;
@@ -599,12 +630,12 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	{
 		auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
 		{
-			if (LmIdx < 0 || !PoseFrame.Normalized.IsValidIndex(LmIdx))
+			if (LmIdx < 0 || !bHasPoseFrame || !IsMeasured(LmIdx) || !PoseFrame.Normalized.IsValidIndex(LmIdx))
 			{
 				return false;
 			}
 			const FMediaPipePoseLandmark& Lm = PoseFrame.Normalized.Points[LmIdx];
-			if (Lm.Presence <= KINDA_SMALL_NUMBER && Lm.Visibility <= KINDA_SMALL_NUMBER && Lm.Reliability <= KINDA_SMALL_NUMBER)
+			if (!FMath::IsFinite(Lm.X) || !FMath::IsFinite(Lm.Y))
 			{
 				return false;
 			}
@@ -619,6 +650,8 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		FVector2D REye2D = FVector2D::ZeroVector;
 		FVector2D LEar2D = FVector2D::ZeroVector;
 		FVector2D REar2D = FVector2D::ZeroVector;
+		FVector2D LMouth2D = FVector2D::ZeroVector;
+		FVector2D RMouth2D = FVector2D::ZeroVector;
 		const bool bHasShoulders2D =
 			TryGetNormalizedXY(LShoulderLm, LShoulder2D) &&
 			TryGetNormalizedXY(RShoulderLm, RShoulder2D);
@@ -629,6 +662,14 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		const bool bHasEars2D =
 			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LEar2D) &&
 			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, REar2D);
+		const bool bHasMouth2D =
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::MouthLeft, LMouth2D) &&
+			TryGetNormalizedXY((int32)EMediaPipePoseLandmark::MouthRight, RMouth2D);
+		bScreenHasShoulders2D = bHasShoulders2D ? 1 : 0;
+		bScreenHasNose2D = bHasNose2D ? 1 : 0;
+		bScreenHasEyes2D = bHasEyes2D ? 1 : 0;
+		bScreenHasEars2D = bHasEars2D ? 1 : 0;
+		bScreenHasMouth2D = bHasMouth2D ? 1 : 0;
 
 		if (bHasShoulders2D && (bHasNose2D || bHasEyes2D || bHasEars2D))
 		{
@@ -668,32 +709,260 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				}
 			}
 
-			if (!BodyState.bHasHeadScreenReference)
+			float CurrentNoseEyePitch = 0.0f;
+			float CurrentMouthEyePitch = 0.0f;
+			float CurrentMouthEarPitch = 0.0f;
+			float CurrentNoseEarPitch = 0.0f;
+			bool bHasNoseEyePitch = false;
+			bool bHasMouthEyePitch = false;
+			bool bHasMouthEarPitch = false;
+			bool bHasNoseEarPitch = false;
+			if (bHasEyes2D)
 			{
-				BodyState.bHasHeadScreenReference = true;
-				BodyState.HeadScreenCenterReference = HeadCenterOffset2D;
-				BodyState.HeadScreenNoseReference = NoseOffset2D;
-				BodyState.HeadScreenShoulderNoseReference = NoseShoulderOffset2D;
-				BodyState.HeadScreenLateralAngleReferenceDeg = HeadLateralAngleDeg;
-				BodyState.HeadScreenRollReferenceDeg = EyeRollDeg;
+				const FVector2D EyeMid2D = (LEye2D + REye2D) * 0.5f;
+				const float EyeSpan2D = FMath::Max(FVector2D::Distance(LEye2D, REye2D), 0.02f);
+				if (bHasNose2D)
+				{
+					CurrentNoseEyePitch = (Nose2D.Y - EyeMid2D.Y) / EyeSpan2D;
+					bHasNoseEyePitch = true;
+				}
+				if (bHasMouth2D)
+				{
+					const FVector2D Mouth2D = (LMouth2D + RMouth2D) * 0.5f;
+					CurrentMouthEyePitch = (Mouth2D.Y - EyeMid2D.Y) / EyeSpan2D;
+					bHasMouthEyePitch = true;
+				}
+			}
+			if (bHasEars2D && bHasMouth2D)
+			{
+				const FVector2D EarMid2D = (LEar2D + REar2D) * 0.5f;
+				const float EarSpan2D = FMath::Max(FVector2D::Distance(LEar2D, REar2D), 0.02f);
+				const FVector2D Mouth2D = (LMouth2D + RMouth2D) * 0.5f;
+				CurrentMouthEarPitch = (Mouth2D.Y - EarMid2D.Y) / EarSpan2D;
+				bHasMouthEarPitch = true;
+			}
+			if (bHasEars2D && bHasNose2D)
+			{
+				const FVector2D EarMid2D = (LEar2D + REar2D) * 0.5f;
+				const float EarSpan2D = FMath::Max(FVector2D::Distance(LEar2D, REar2D), 0.02f);
+				CurrentNoseEarPitch = (Nose2D.Y - EarMid2D.Y) / EarSpan2D;
+				bHasNoseEarPitch = true;
+			}
+			ScreenHeadNoseEyePitchProxy = CurrentNoseEyePitch;
+			ScreenHeadMouthEyePitchProxy = CurrentMouthEyePitch;
+			ScreenHeadMouthEarPitchProxy = CurrentMouthEarPitch;
+			ScreenHeadNoseEarPitchProxy = CurrentNoseEarPitch;
+
+			float CurrentWorldMouthEyePitch = 0.0f;
+			float CurrentWorldNoseEyePitch = 0.0f;
+			float CurrentWorldMouthEarPitch = 0.0f;
+			float CurrentWorldNoseEarPitch = 0.0f;
+			bool bHasWorldMouthEyePitch = false;
+			bool bHasWorldNoseEyePitch = false;
+			bool bHasWorldMouthEarPitch = false;
+			bool bHasWorldNoseEarPitch = false;
+			const FVector FaceUpWorld = UpWorld.GetSafeNormal();
+			if (!FaceUpWorld.IsNearlyZero())
+			{
+				if (bHasLeftEye && bHasRightEye)
+				{
+					const FVector EyeMidWorld = (LeftEyeWorld + RightEyeWorld) * 0.5f;
+					const float EyeSpanWorld = FMath::Max(FVector::Distance(LeftEyeWorld, RightEyeWorld), 0.02f);
+					if (bHasLeftMouth && bHasRightMouth)
+					{
+						const FVector MouthWorld = (LeftMouthWorld + RightMouthWorld) * 0.5f;
+						CurrentWorldMouthEyePitch = FVector::DotProduct(MouthWorld - EyeMidWorld, FaceUpWorld) / EyeSpanWorld;
+						bHasWorldMouthEyePitch = FMath::IsFinite(CurrentWorldMouthEyePitch);
+					}
+					if (bHasNose)
+					{
+						CurrentWorldNoseEyePitch = FVector::DotProduct(NoseWorld - EyeMidWorld, FaceUpWorld) / EyeSpanWorld;
+						bHasWorldNoseEyePitch = FMath::IsFinite(CurrentWorldNoseEyePitch);
+					}
+				}
+				if (bHasLeftEar && bHasRightEar)
+				{
+					const FVector EarMidWorld = (LeftEarWorld + RightEarWorld) * 0.5f;
+					const float EarSpanWorld = FMath::Max(FVector::Distance(LeftEarWorld, RightEarWorld), 0.02f);
+					if (bHasLeftMouth && bHasRightMouth)
+					{
+						const FVector MouthWorld = (LeftMouthWorld + RightMouthWorld) * 0.5f;
+						CurrentWorldMouthEarPitch = FVector::DotProduct(MouthWorld - EarMidWorld, FaceUpWorld) / EarSpanWorld;
+						bHasWorldMouthEarPitch = FMath::IsFinite(CurrentWorldMouthEarPitch);
+					}
+					if (bHasNose)
+					{
+						CurrentWorldNoseEarPitch = FVector::DotProduct(NoseWorld - EarMidWorld, FaceUpWorld) / EarSpanWorld;
+						bHasWorldNoseEarPitch = FMath::IsFinite(CurrentWorldNoseEarPitch);
+					}
+				}
+			}
+			HeadWorldMouthEyePitchProxy = CurrentWorldMouthEyePitch;
+			HeadWorldNoseEyePitchProxy = CurrentWorldNoseEyePitch;
+			HeadWorldMouthEarPitchProxy = CurrentWorldMouthEarPitch;
+			HeadWorldNoseEarPitchProxy = CurrentWorldNoseEarPitch;
+			float CurrentWorldForwardPitchDeg = 0.0f;
+			bool bHasWorldForwardPitch = false;
+			const FVector ForwardPitchRightWorld = HeadRightWorld.GetSafeNormal();
+			const FVector ForwardPitchUpWorld = HeadUpWorld.GetSafeNormal();
+			const FVector ForwardPitchForwardWorld = HeadForwardWorld.GetSafeNormal();
+			if (!ForwardPitchRightWorld.IsNearlyZero() && !ForwardPitchUpWorld.IsNearlyZero() && !ForwardPitchForwardWorld.IsNearlyZero())
+			{
+				FVector ForwardNoRight = ForwardPitchForwardWorld -
+					FVector::DotProduct(ForwardPitchForwardWorld, ForwardPitchRightWorld) * ForwardPitchRightWorld;
+				ForwardNoRight.Normalize();
+				FVector BodyForwardWorld = FVector::CrossProduct(ForwardPitchRightWorld, ForwardPitchUpWorld).GetSafeNormal();
+				if (!ForwardNoRight.IsNearlyZero() && !BodyForwardWorld.IsNearlyZero())
+				{
+					if (FVector::DotProduct(ForwardNoRight, BodyForwardWorld) < 0.0f)
+					{
+						BodyForwardWorld *= -1.0f;
+					}
+					CurrentWorldForwardPitchDeg = FMath::RadiansToDegrees(FMath::Atan2(
+						FVector::DotProduct(ForwardNoRight, ForwardPitchUpWorld),
+						FMath::Max(FMath::Abs(FVector::DotProduct(ForwardNoRight, BodyForwardWorld)), KINDA_SMALL_NUMBER)));
+					bHasWorldForwardPitch = FMath::IsFinite(CurrentWorldForwardPitchDeg);
+				}
+			}
+			HeadWorldForwardPitchProxyDeg = CurrentWorldForwardPitchDeg;
+
+			FDerivedSignalRuntimeState& DerivedSignals = GetDerivedSignalRuntimeState(RuntimeStateKey);
+			ScreenHeadHadReference = DerivedSignals.bHasHeadScreenReference ? 1 : 0;
+			if (!DerivedSignals.bHasHeadScreenReference)
+			{
+				ScreenHeadInitializedReference = 1;
+				DerivedSignals.bHasHeadScreenReference = true;
+				DerivedSignals.HeadScreenCenterReference = HeadCenterOffset2D;
+				DerivedSignals.HeadScreenNoseReference = NoseOffset2D;
+				DerivedSignals.HeadScreenShoulderNoseReference = NoseShoulderOffset2D;
+				DerivedSignals.HeadScreenNoseEyePitchReference = CurrentNoseEyePitch;
+				DerivedSignals.HeadScreenMouthEyePitchReference = CurrentMouthEyePitch;
+				DerivedSignals.HeadScreenMouthEarPitchReference = CurrentMouthEarPitch;
+				DerivedSignals.HeadScreenNoseEarPitchReference = CurrentNoseEarPitch;
+				DerivedSignals.HeadWorldMouthEyePitchReference = CurrentWorldMouthEyePitch;
+				DerivedSignals.HeadWorldNoseEyePitchReference = CurrentWorldNoseEyePitch;
+				DerivedSignals.HeadWorldMouthEarPitchReference = CurrentWorldMouthEarPitch;
+				DerivedSignals.HeadWorldNoseEarPitchReference = CurrentWorldNoseEarPitch;
+				DerivedSignals.HeadWorldForwardPitchReferenceDeg = CurrentWorldForwardPitchDeg;
+				DerivedSignals.HeadScreenLateralAngleReferenceDeg = HeadLateralAngleDeg;
+				DerivedSignals.HeadScreenRollReferenceDeg = EyeRollDeg;
 			}
 
-			const FVector2D CenterDelta2D = HeadCenterOffset2D - BodyState.HeadScreenCenterReference;
-			const FVector2D NoseDelta2D = NoseOffset2D - BodyState.HeadScreenNoseReference;
-			const FVector2D ShoulderNoseDelta2D = NoseShoulderOffset2D - BodyState.HeadScreenShoulderNoseReference;
+			const FVector2D CenterDelta2D = HeadCenterOffset2D - DerivedSignals.HeadScreenCenterReference;
+			const FVector2D NoseDelta2D = NoseOffset2D - DerivedSignals.HeadScreenNoseReference;
+			const FVector2D ShoulderNoseDelta2D = NoseShoulderOffset2D - DerivedSignals.HeadScreenShoulderNoseReference;
+			const float NoseEyePitchDelta = bHasNoseEyePitch ? CurrentNoseEyePitch - DerivedSignals.HeadScreenNoseEyePitchReference : 0.0f;
+			const float MouthEyePitchDelta = bHasMouthEyePitch ? CurrentMouthEyePitch - DerivedSignals.HeadScreenMouthEyePitchReference : 0.0f;
+			const float MouthEarPitchDelta = bHasMouthEarPitch ? CurrentMouthEarPitch - DerivedSignals.HeadScreenMouthEarPitchReference : 0.0f;
+			const float NoseEarPitchDelta = bHasNoseEarPitch ? CurrentNoseEarPitch - DerivedSignals.HeadScreenNoseEarPitchReference : 0.0f;
+			const float WorldMouthEyePitchDelta = bHasWorldMouthEyePitch ? CurrentWorldMouthEyePitch - DerivedSignals.HeadWorldMouthEyePitchReference : 0.0f;
+			const float WorldNoseEyePitchDelta = bHasWorldNoseEyePitch ? CurrentWorldNoseEyePitch - DerivedSignals.HeadWorldNoseEyePitchReference : 0.0f;
+			const float WorldMouthEarPitchDelta = bHasWorldMouthEarPitch ? CurrentWorldMouthEarPitch - DerivedSignals.HeadWorldMouthEarPitchReference : 0.0f;
+			const float WorldNoseEarPitchDelta = bHasWorldNoseEarPitch ? CurrentWorldNoseEarPitch - DerivedSignals.HeadWorldNoseEarPitchReference : 0.0f;
+			const float WorldForwardPitchDeltaDeg = bHasWorldForwardPitch
+				? FRotator::NormalizeAxis(CurrentWorldForwardPitchDeg - DerivedSignals.HeadWorldForwardPitchReferenceDeg)
+				: 0.0f;
+			ScreenHeadNoseEyePitchDelta = NoseEyePitchDelta;
+			ScreenHeadMouthEyePitchDelta = MouthEyePitchDelta;
+			ScreenHeadMouthEarPitchDelta = MouthEarPitchDelta;
+			ScreenHeadNoseEarPitchDelta = NoseEarPitchDelta;
+			HeadWorldMouthEyePitchDelta = WorldMouthEyePitchDelta;
+			HeadWorldNoseEyePitchDelta = WorldNoseEyePitchDelta;
+			HeadWorldMouthEarPitchDelta = WorldMouthEarPitchDelta;
+			HeadWorldNoseEarPitchDelta = WorldNoseEarPitchDelta;
+			HeadWorldForwardPitchDeltaDeg = WorldForwardPitchDeltaDeg;
 			ScreenHeadCenterDelta2D = CenterDelta2D;
 			ScreenHeadNoseDelta2D = NoseDelta2D;
 			ScreenHeadShoulderNoseDelta2D = ShoulderNoseDelta2D;
 			ScreenHeadShoulderNoseAbs2D = NoseShoulderOffset2D;
-			const float LateralAngleDeltaDeg = FRotator::NormalizeAxis(HeadLateralAngleDeg - BodyState.HeadScreenLateralAngleReferenceDeg);
+			const float LateralAngleDeltaDeg = FRotator::NormalizeAxis(HeadLateralAngleDeg - DerivedSignals.HeadScreenLateralAngleReferenceDeg);
 			ScreenHeadLateralAngleDeltaDeg = LateralAngleDeltaDeg;
-			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - BodyState.HeadScreenRollReferenceDeg);
+			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - DerivedSignals.HeadScreenRollReferenceDeg);
 			const float ScreenWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
 			const float ShoulderNoseYawInput = FMath::Abs(ShoulderNoseDelta2D.X) > 0.005f
 				? ShoulderNoseDelta2D.X
 				: NoseShoulderOffset2D.X;
+			float FacePitchInput = 0.0f;
+			const auto ResolveEarPitchInput = [&]() -> float
+			{
+				if (bHasWorldNoseEarPitch)
+				{
+					return WorldNoseEarPitchDelta;
+				}
+				if (bHasWorldMouthEarPitch)
+				{
+					return WorldMouthEarPitchDelta;
+				}
+				if (bHasNoseEarPitch)
+				{
+					return NoseEarPitchDelta;
+				}
+				if (bHasMouthEarPitch)
+				{
+					return MouthEarPitchDelta;
+				}
+				return 0.0f;
+			};
+			if (bHasWorldMouthEyePitch)
+			{
+				FacePitchInput = WorldMouthEyePitchDelta;
+			}
+			else if (bHasWorldNoseEyePitch)
+			{
+				FacePitchInput = WorldNoseEyePitchDelta;
+			}
+			else if (bHasNoseEarPitch)
+			{
+				FacePitchInput = NoseEarPitchDelta;
+			}
+			else if (bHasMouthEyePitch && bHasNoseEyePitch)
+			{
+				const bool bFacePitchDeltasAgree =
+					MouthEyePitchDelta * NoseEyePitchDelta >= 0.0f;
+				FacePitchInput = bFacePitchDeltasAgree
+					? (MouthEyePitchDelta + NoseEyePitchDelta) * 0.5f
+					: ResolveEarPitchInput();
+			}
+			else if (bHasMouthEyePitch)
+			{
+				FacePitchInput = MouthEyePitchDelta;
+			}
+			else if (bHasNoseEyePitch)
+			{
+				FacePitchInput = NoseEyePitchDelta;
+			}
+			else
+			{
+				FacePitchInput = MouthEarPitchDelta;
+			}
+
+			// Reject non-physical face-pitch glitches before the x65 amplification.
+			// FacePitchInput is a normalized pitch ratio; the +-45 deg output clamp below
+			// saturates at |input| = 45/65 ~= 0.69, so legitimate motion never needs more
+			// than that. Momentary world mouth/eye landmark degeneracy can spike it well
+			// past saturation (observed |input| ~= 7..25), which rails the head pitch to
+			// the +-45 limit for ~0.5s -- a visible snap no downstream smoothing can reject.
+			// Gate at the saturation point itself and hold the last in-range (non-railing)
+			// value through the glitch, so a glitch can never rail the head. Legit deep nods
+			// (which the clamp already caps at 45 deg) are preserved to within ~0.2 deg.
+			constexpr float FacePitchInputPlausibleMax = 45.0f / 65.0f; // output clamp saturation (~0.69)
+			if (FMath::IsFinite(FacePitchInput) && FMath::Abs(FacePitchInput) <= FacePitchInputPlausibleMax)
+			{
+				DerivedSignals.LastValidScreenFacePitchInput = FacePitchInput;
+				DerivedSignals.bHasValidScreenFacePitchInput = true;
+			}
+			else if (DerivedSignals.bHasValidScreenFacePitchInput)
+			{
+				FacePitchInput = DerivedSignals.LastValidScreenFacePitchInput;
+			}
+			else
+			{
+				FacePitchInput = 0.0f;
+			}
+			ScreenHeadFacePitchInput = FacePitchInput;
 			ScreenHeadYawDeg = FMath::Clamp((LateralAngleDeltaDeg * 1.2f + ShoulderNoseYawInput * 25.0f + NoseDelta2D.X * 18.0f + CenterDelta2D.X * 12.0f) * ScreenWeight, -85.0f, 85.0f);
-			ScreenHeadPitchDeg = FMath::Clamp((ShoulderNoseDelta2D.Y * 70.0f + NoseDelta2D.Y * 45.0f + CenterDelta2D.Y * 30.0f) * ScreenWeight, -45.0f, 45.0f);
+			const float FacePitchDeg = FacePitchInput * 65.0f;
+			ScreenHeadPitchDeg = FMath::Clamp(FacePitchDeg * ScreenWeight, -45.0f, 45.0f);
 			ScreenHeadSideBendDeg = (LateralAngleDeltaDeg * 0.95f + ShoulderNoseYawInput * 120.0f + CenterDelta2D.X * 35.0f) * ScreenWeight;
 			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight + ScreenHeadSideBendDeg, -45.0f, 45.0f);
 
@@ -713,6 +982,12 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				ScreenForwardComp = FVector::ForwardVector;
 			}
 
+			FQuat FaceDeltaWithoutWorldPitch = (HeadTargetBasis * ChestTargetBasis.Inverse()).GetNormalized();
+			FQuat FaceSwingWithoutWorldPitch = FQuat::Identity;
+			FQuat FaceWorldPitchTwist = FQuat::Identity;
+			FaceDeltaWithoutWorldPitch.ToSwingTwist(ScreenRightComp, FaceSwingWithoutWorldPitch, FaceWorldPitchTwist);
+			HeadTargetBasis = (FaceSwingWithoutWorldPitch * ChestTargetBasis).GetNormalized();
+
 			const FQuat ScreenHeadDelta =
 				FQuat(ScreenUpComp, FMath::DegreesToRadians(ScreenHeadYawDeg)) *
 				FQuat(ScreenRightComp, FMath::DegreesToRadians(ScreenHeadPitchDeg)) *
@@ -720,13 +995,50 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			HeadTargetBasis = (ScreenHeadDelta * HeadTargetBasis).GetNormalized();
 
 			const float ReferenceAlpha = HalfLifeToAlpha(12.0f, DeltaSeconds);
-			BodyState.HeadScreenCenterReference = FMath::Lerp(BodyState.HeadScreenCenterReference, HeadCenterOffset2D, ReferenceAlpha);
-			BodyState.HeadScreenNoseReference = FMath::Lerp(BodyState.HeadScreenNoseReference, NoseOffset2D, ReferenceAlpha);
-			BodyState.HeadScreenShoulderNoseReference = FMath::Lerp(BodyState.HeadScreenShoulderNoseReference, NoseShoulderOffset2D, ReferenceAlpha);
-			BodyState.HeadScreenLateralAngleReferenceDeg = FRotator::NormalizeAxis(
-				BodyState.HeadScreenLateralAngleReferenceDeg +
-				FRotator::NormalizeAxis(HeadLateralAngleDeg - BodyState.HeadScreenLateralAngleReferenceDeg) * ReferenceAlpha);
-			BodyState.HeadScreenRollReferenceDeg = FMath::Lerp(BodyState.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
+			DerivedSignals.HeadScreenCenterReference = FMath::Lerp(DerivedSignals.HeadScreenCenterReference, HeadCenterOffset2D, ReferenceAlpha);
+			DerivedSignals.HeadScreenNoseReference = FMath::Lerp(DerivedSignals.HeadScreenNoseReference, NoseOffset2D, ReferenceAlpha);
+			DerivedSignals.HeadScreenShoulderNoseReference = FMath::Lerp(DerivedSignals.HeadScreenShoulderNoseReference, NoseShoulderOffset2D, ReferenceAlpha);
+			if (bHasNoseEyePitch)
+			{
+				DerivedSignals.HeadScreenNoseEyePitchReference += NoseEyePitchDelta * ReferenceAlpha;
+			}
+			if (bHasMouthEyePitch)
+			{
+				DerivedSignals.HeadScreenMouthEyePitchReference += MouthEyePitchDelta * ReferenceAlpha;
+			}
+			if (bHasMouthEarPitch)
+			{
+				DerivedSignals.HeadScreenMouthEarPitchReference += MouthEarPitchDelta * ReferenceAlpha;
+			}
+			if (bHasNoseEarPitch)
+			{
+				DerivedSignals.HeadScreenNoseEarPitchReference += NoseEarPitchDelta * ReferenceAlpha;
+			}
+			if (bHasWorldMouthEyePitch)
+			{
+				DerivedSignals.HeadWorldMouthEyePitchReference += WorldMouthEyePitchDelta * ReferenceAlpha;
+			}
+			if (bHasWorldNoseEyePitch)
+			{
+				DerivedSignals.HeadWorldNoseEyePitchReference += WorldNoseEyePitchDelta * ReferenceAlpha;
+			}
+			if (bHasWorldMouthEarPitch)
+			{
+				DerivedSignals.HeadWorldMouthEarPitchReference += WorldMouthEarPitchDelta * ReferenceAlpha;
+			}
+			if (bHasWorldNoseEarPitch)
+			{
+				DerivedSignals.HeadWorldNoseEarPitchReference += WorldNoseEarPitchDelta * ReferenceAlpha;
+			}
+			if (bHasWorldForwardPitch)
+			{
+				DerivedSignals.HeadWorldForwardPitchReferenceDeg = FRotator::NormalizeAxis(
+					DerivedSignals.HeadWorldForwardPitchReferenceDeg + WorldForwardPitchDeltaDeg * ReferenceAlpha);
+			}
+			DerivedSignals.HeadScreenLateralAngleReferenceDeg = FRotator::NormalizeAxis(
+				DerivedSignals.HeadScreenLateralAngleReferenceDeg +
+				FRotator::NormalizeAxis(HeadLateralAngleDeg - DerivedSignals.HeadScreenLateralAngleReferenceDeg) * ReferenceAlpha);
+			DerivedSignals.HeadScreenRollReferenceDeg = FMath::Lerp(DerivedSignals.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
 		}
 	}
 	const FQuat NeckTargetBasis = FQuat::Slerp(ChestTargetBasis, HeadTargetBasis, 0.5f).GetNormalized();
@@ -788,11 +1100,19 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			}
 
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.HeadDebug: actor=%s enabled=1 nose=%d ears=%d eyes=%d faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenCenterDelta=(%.3f,%.3f) screenNoseDelta=(%.3f,%.3f) screenShoulderNoseDelta=(%.3f,%.3f) screenShoulderNoseAbs=(%.3f,%.3f) screenAngleDelta=%.1f screenSideBend=%.1f screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
+				TEXT("mp.HeadDebug: actor=%s enabled=1 runtimeKey=%u refHad=%d refInit=%d nose=%d ears=%d eyes=%d screen2d=(shoulders=%d nose=%d eyes=%d ears=%d mouth=%d) faceBlend=%.2f twistWeight=%.2f faceFromChestDeg=%.1f screenCenterDelta=(%.3f,%.3f) screenNoseDelta=(%.3f,%.3f) screenShoulderNoseDelta=(%.3f,%.3f) screenShoulderNoseAbs=(%.3f,%.3f) facePitch=%.3f noseEyePitch=%.3f mouthEyePitch=%.3f mouthEarPitch=%.3f noseEarPitch=%.3f worldMouthEyePitch=%.3f worldNoseEyePitch=%.3f worldMouthEarPitch=%.3f worldNoseEarPitch=%.3f worldForwardPitch=%.1f noseEyeProxy=%.3f mouthEyeProxy=%.3f mouthEarProxy=%.3f noseEarProxy=%.3f worldMouthEyeProxy=%.3f worldNoseEyeProxy=%.3f worldMouthEarProxy=%.3f worldNoseEarProxy=%.3f worldForwardPitchProxy=%.1f screenAngleDelta=%.1f screenSideBend=%.1f screenYaw=%.1f screenPitch=%.1f screenRoll=%.1f neckAppliedDeg=%.1f neck02AppliedDeg=%.1f headAppliedDeg=%.1f maxStepDeg=%.1f maxSpeedDegPerSec=%.1f"),
 				*TargetActorName.ToString(),
+				RuntimeStateKey,
+				ScreenHeadHadReference,
+				ScreenHeadInitializedReference,
 				bHasNose ? 1 : 0,
 				(bHasLeftEar && bHasRightEar) ? 1 : 0,
 				(bHasLeftEye && bHasRightEye) ? 1 : 0,
+				bScreenHasShoulders2D,
+				bScreenHasNose2D,
+				bScreenHasEyes2D,
+				bScreenHasEars2D,
+				bScreenHasMouth2D,
 				HeadFaceBlend,
 				FaceTwistWeight,
 				QuatAngularDistanceDegrees(FaceHeadTargetBasis, ChestTargetBasis),
@@ -804,6 +1124,25 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				ScreenHeadShoulderNoseDelta2D.Y,
 				ScreenHeadShoulderNoseAbs2D.X,
 				ScreenHeadShoulderNoseAbs2D.Y,
+				ScreenHeadFacePitchInput,
+				ScreenHeadNoseEyePitchDelta,
+				ScreenHeadMouthEyePitchDelta,
+				ScreenHeadMouthEarPitchDelta,
+				ScreenHeadNoseEarPitchDelta,
+				HeadWorldMouthEyePitchDelta,
+				HeadWorldNoseEyePitchDelta,
+				HeadWorldMouthEarPitchDelta,
+				HeadWorldNoseEarPitchDelta,
+				HeadWorldForwardPitchDeltaDeg,
+				ScreenHeadNoseEyePitchProxy,
+				ScreenHeadMouthEyePitchProxy,
+				ScreenHeadMouthEarPitchProxy,
+				ScreenHeadNoseEarPitchProxy,
+				HeadWorldMouthEyePitchProxy,
+				HeadWorldNoseEyePitchProxy,
+				HeadWorldMouthEarPitchProxy,
+				HeadWorldNoseEarPitchProxy,
+				HeadWorldForwardPitchProxyDeg,
 				ScreenHeadLateralAngleDeltaDeg,
 				ScreenHeadSideBendDeg,
 				ScreenHeadYawDeg,
