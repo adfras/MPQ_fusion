@@ -83,6 +83,50 @@ const TCHAR* MannyRecorderBones[] = {
 	TEXT("lowerarm_twist_02_r"),
 	TEXT("hand_l"),
 	TEXT("hand_r"),
+	TEXT("thigh_l"),
+	TEXT("thigh_r"),
+	TEXT("calf_l"),
+	TEXT("calf_r"),
+	TEXT("foot_l"),
+	TEXT("foot_r"),
+	TEXT("ball_l"),
+	TEXT("ball_r"),
+};
+
+const TCHAR* MediaPipePoseLandmarkNames[] = {
+	TEXT("nose"),
+	TEXT("left_eye_inner"),
+	TEXT("left_eye"),
+	TEXT("left_eye_outer"),
+	TEXT("right_eye_inner"),
+	TEXT("right_eye"),
+	TEXT("right_eye_outer"),
+	TEXT("left_ear"),
+	TEXT("right_ear"),
+	TEXT("mouth_left"),
+	TEXT("mouth_right"),
+	TEXT("left_shoulder"),
+	TEXT("right_shoulder"),
+	TEXT("left_elbow"),
+	TEXT("right_elbow"),
+	TEXT("left_wrist"),
+	TEXT("right_wrist"),
+	TEXT("left_pinky"),
+	TEXT("right_pinky"),
+	TEXT("left_index"),
+	TEXT("right_index"),
+	TEXT("left_thumb"),
+	TEXT("right_thumb"),
+	TEXT("left_hip"),
+	TEXT("right_hip"),
+	TEXT("left_knee"),
+	TEXT("right_knee"),
+	TEXT("left_ankle"),
+	TEXT("right_ankle"),
+	TEXT("left_heel"),
+	TEXT("right_heel"),
+	TEXT("left_foot_index"),
+	TEXT("right_foot_index"),
 };
 
 struct FMannyBoneTimeseriesRecorder
@@ -125,6 +169,79 @@ TArray<TSharedPtr<FJsonValue>> JsonQuat(const FQuat& Value)
 	Result.Add(MakeShared<FJsonValueNumber>(Value.Y));
 	Result.Add(MakeShared<FJsonValueNumber>(Value.Z));
 	Result.Add(MakeShared<FJsonValueNumber>(Value.W));
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonLandmark(const FMediaPipePoseLandmark& Landmark)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetArrayField(TEXT("pos"), JsonVector(FVector(Landmark.X, Landmark.Y, Landmark.Z)));
+	Result->SetNumberField(TEXT("visibility"), Landmark.Visibility);
+	Result->SetNumberField(TEXT("presence"), Landmark.Presence);
+	Result->SetNumberField(TEXT("reliability"), Landmark.Reliability);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonLandmark(const FMediaPipeRawHandLandmark& Landmark)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetArrayField(TEXT("pos"), JsonVector(FVector(Landmark.X, Landmark.Y, Landmark.Z)));
+	Result->SetNumberField(TEXT("visibility"), Landmark.Visibility);
+	Result->SetNumberField(TEXT("presence"), Landmark.Presence);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonHeadSignalSnapshot(const FMediaPipePoseDrivenHeadSignalSnapshot& Snapshot)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("has_dense_face"), Snapshot.bHasDenseFace);
+	Result->SetNumberField(TEXT("dense_face_pitch_ratio"), Snapshot.DenseFacePitchRatio);
+	Result->SetNumberField(TEXT("dense_face_yaw_ratio"), Snapshot.DenseFaceYawRatio);
+	Result->SetNumberField(TEXT("dense_face_roll_deg"), Snapshot.DenseFaceRollDeg);
+	Result->SetNumberField(TEXT("dense_face_pitch_delta"), Snapshot.DenseFacePitchDelta);
+	Result->SetNumberField(TEXT("dense_face_yaw_delta"), Snapshot.DenseFaceYawDelta);
+	Result->SetNumberField(TEXT("dense_face_roll_delta_deg"), Snapshot.DenseFaceRollDeltaDeg);
+	Result->SetNumberField(TEXT("computed_pitch_deg"), Snapshot.ComputedPitchDeg);
+	Result->SetNumberField(TEXT("computed_yaw_deg"), Snapshot.ComputedYawDeg);
+	Result->SetNumberField(TEXT("computed_roll_deg"), Snapshot.ComputedRollDeg);
+	Result->SetNumberField(TEXT("screen_pitch_deg"), Snapshot.ScreenPitchDeg);
+	Result->SetNumberField(TEXT("screen_yaw_deg"), Snapshot.ScreenYawDeg);
+	Result->SetNumberField(TEXT("screen_roll_deg"), Snapshot.ScreenRollDeg);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonShoulderSignalSnapshot(const FMediaPipePoseDrivenShoulderSignalSnapshot& Snapshot)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("valid"), Snapshot.bValid);
+	Result->SetNumberField(TEXT("shoulder_signed_lift_cm"), Snapshot.ShoulderSignedLiftCm);
+	Result->SetNumberField(TEXT("shoulder_relative_lift_cm"), Snapshot.ShoulderRelativeLiftCm);
+	Result->SetNumberField(TEXT("shoulder_positive_lift_evidence_cm"), Snapshot.ShoulderPositiveLiftEvidenceCm);
+	Result->SetNumberField(TEXT("shoulder_head_clearance_cm"), Snapshot.ShoulderHeadClearanceCm);
+	Result->SetNumberField(TEXT("shoulder_head_clearance_shrug_cm"), Snapshot.ShoulderHeadClearanceShrugCm);
+	Result->SetNumberField(TEXT("bilateral_shoulder_head_clearance_cm"), Snapshot.BilateralShoulderHeadClearanceCm);
+	Result->SetNumberField(TEXT("bilateral_shoulder_head_clearance_reference_cm"), Snapshot.BilateralShoulderHeadClearanceReferenceCm);
+	Result->SetNumberField(TEXT("bilateral_shoulder_head_clearance_shrug_cm"), Snapshot.BilateralShoulderHeadClearanceShrugCm);
+	Result->SetNumberField(TEXT("computed_shrug_weight"), Snapshot.ComputedShrugWeight);
+	Result->SetNumberField(TEXT("smoothed_shrug_weight"), Snapshot.SmoothedShrugWeight);
+	Result->SetNumberField(TEXT("computed_lift_translation_cm"), Snapshot.ComputedLiftTranslationCm);
+	Result->SetNumberField(TEXT("smoothed_lift_translation_cm"), Snapshot.SmoothedLiftTranslationCm);
+	Result->SetNumberField(TEXT("applied_clavicle_lift_cm"), Snapshot.AppliedClavicleLiftCm);
+	Result->SetNumberField(TEXT("applied_upper_lift_cm"), Snapshot.AppliedUpperLiftCm);
+	Result->SetNumberField(TEXT("up_weight"), Snapshot.UpWeight);
+	Result->SetNumberField(TEXT("forward_weight"), Snapshot.ForwardWeight);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonSignalSnapshot(const FMediaPipePoseDrivenSignalSnapshot& Snapshot)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("valid"), Snapshot.bValid);
+	Result->SetNumberField(TEXT("runtime_state_key"), Snapshot.RuntimeStateKey);
+	Result->SetNumberField(TEXT("pose_timestamp_us"), static_cast<double>(Snapshot.PoseTimestampUs));
+	Result->SetObjectField(TEXT("head"), JsonHeadSignalSnapshot(Snapshot.Head));
+	Result->SetObjectField(TEXT("left_shoulder"), JsonShoulderSignalSnapshot(Snapshot.LeftShoulder));
+	Result->SetObjectField(TEXT("right_shoulder"), JsonShoulderSignalSnapshot(Snapshot.RightShoulder));
 	return Result;
 }
 
@@ -248,11 +365,15 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 
 	FMediaPipePoseFrame LatestPoseFrame;
 	bool bHasLatestPoseFrame = false;
+	FMediaPipePosePipelineStats PosePipelineStats;
+	bool bHasPosePipelineStats = false;
 	if (const AActor* TrackingSourceActor = ResolveTrackingSourceActor(Actor->Source))
 	{
 		if (const UMediaPipePoseTrackerComponent* Tracker = TrackingSourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>())
 		{
 			bHasLatestPoseFrame = Tracker->GetLatestFrame(LatestPoseFrame) && LatestPoseFrame.bValid;
+			Tracker->GetRuntimeStats(PosePipelineStats);
+			bHasPosePipelineStats = true;
 		}
 	}
 	const double PoseSeconds = bHasLatestPoseFrame
@@ -270,6 +391,87 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		Sample->SetNumberField(TEXT("pose_t"), PoseSeconds);
 		Sample->SetNumberField(TEXT("pose_timestamp_us"), static_cast<double>(LatestPoseFrame.TimestampUs));
 		Sample->SetNumberField(TEXT("media_minus_pose_t"), MediaSeconds - PoseSeconds);
+
+		const FMediaPipePoseFrame::FConditioningDiagnostics& Conditioning = LatestPoseFrame.ConditioningDiagnostics;
+		TSharedRef<FJsonObject> ConditioningObject = MakeShared<FJsonObject>();
+		ConditioningObject->SetNumberField(
+			TEXT("source_video_fps"),
+			bHasPosePipelineStats && PosePipelineStats.LastMediaFrameRate > 0.0
+				? PosePipelineStats.LastMediaFrameRate
+				: Conditioning.SourceVideoFps);
+		ConditioningObject->SetNumberField(TEXT("mediapipe_output_fps"), Conditioning.MediaPipeOutputFps);
+		ConditioningObject->SetNumberField(TEXT("unique_pose_timestamp_fps"), Conditioning.UniquePoseTimestampFps);
+		ConditioningObject->SetNumberField(TEXT("repeated_pose_run_length"), Conditioning.RepeatedPoseRunLength);
+		ConditioningObject->SetNumberField(TEXT("dropped_frame_count"), Conditioning.DroppedFrameCount);
+		ConditioningObject->SetNumberField(TEXT("timestamp_drift_seconds"), MediaSeconds - PoseSeconds);
+		ConditioningObject->SetNumberField(TEXT("source_age_ms"), Conditioning.SourceAgeMs);
+		ConditioningObject->SetNumberField(TEXT("prediction_horizon_ms"), Conditioning.PredictionHorizonMs);
+		ConditioningObject->SetNumberField(TEXT("max_prediction_horizon_ms"), Conditioning.MaxPredictionHorizonMs);
+		ConditioningObject->SetNumberField(TEXT("effective_added_latency_ms"), Conditioning.EffectiveAddedLatencyMs);
+		ConditioningObject->SetNumberField(TEXT("quality_score"), Conditioning.QualityScore);
+		ConditioningObject->SetNumberField(TEXT("mean_landmark_confidence"), Conditioning.MeanLandmarkConfidence);
+		ConditioningObject->SetNumberField(TEXT("mean_landmark_jitter"), Conditioning.MeanLandmarkJitter);
+		ConditioningObject->SetNumberField(TEXT("max_landmark_jitter"), Conditioning.MaxLandmarkJitter);
+		ConditioningObject->SetNumberField(TEXT("whole_pose_spike_score"), Conditioning.WholePoseSpikeScore);
+		ConditioningObject->SetNumberField(TEXT("root_pelvis_quality"), Conditioning.RootPelvisQuality);
+		ConditioningObject->SetNumberField(TEXT("torso_spine_quality"), Conditioning.TorsoSpineQuality);
+		ConditioningObject->SetNumberField(TEXT("head_neck_quality"), Conditioning.HeadNeckQuality);
+		ConditioningObject->SetNumberField(TEXT("shoulder_clavicle_quality"), Conditioning.ShoulderClavicleQuality);
+		ConditioningObject->SetNumberField(TEXT("arms_quality"), Conditioning.ArmsQuality);
+		ConditioningObject->SetNumberField(TEXT("hands_wrists_quality"), Conditioning.HandsWristsQuality);
+		ConditioningObject->SetNumberField(TEXT("hips_quality"), Conditioning.HipsQuality);
+		ConditioningObject->SetNumberField(TEXT("legs_quality"), Conditioning.LegsQuality);
+		ConditioningObject->SetNumberField(TEXT("feet_ankles_quality"), Conditioning.FeetAnklesQuality);
+		ConditioningObject->SetBoolField(TEXT("predicted"), Conditioning.bPredicted != 0);
+		ConditioningObject->SetBoolField(TEXT("repeated_pose"), Conditioning.bRepeatedPose != 0);
+		ConditioningObject->SetBoolField(TEXT("timestamp_discontinuity"), Conditioning.bTimestampDiscontinuity != 0);
+		ConditioningObject->SetBoolField(TEXT("confidence_collapse"), Conditioning.bConfidenceCollapse != 0);
+		ConditioningObject->SetBoolField(TEXT("whole_pose_spike"), Conditioning.bWholePoseSpike != 0);
+		Sample->SetObjectField(TEXT("conditioning"), ConditioningObject);
+
+		TSharedRef<FJsonObject> PoseWorldObject = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> PoseNormalizedObject = MakeShared<FJsonObject>();
+		for (int32 LandmarkIndex = 0; LandmarkIndex < MediaPipePoseLandmarkCount && LandmarkIndex < UE_ARRAY_COUNT(MediaPipePoseLandmarkNames); ++LandmarkIndex)
+		{
+			PoseWorldObject->SetObjectField(MediaPipePoseLandmarkNames[LandmarkIndex], JsonLandmark(LatestPoseFrame.World.Points[LandmarkIndex]));
+			PoseNormalizedObject->SetObjectField(MediaPipePoseLandmarkNames[LandmarkIndex], JsonLandmark(LatestPoseFrame.Normalized.Points[LandmarkIndex]));
+		}
+		Sample->SetObjectField(TEXT("pose_world_landmarks"), PoseWorldObject);
+		Sample->SetObjectField(TEXT("pose_normalized_landmarks"), PoseNormalizedObject);
+
+		if (LatestPoseFrame.bHasFace && LatestPoseFrame.Face.bHasFace != 0)
+		{
+			TSharedRef<FJsonObject> FaceObject = MakeShared<FJsonObject>();
+			FaceObject->SetNumberField(TEXT("score"), LatestPoseFrame.Face.Score);
+			FaceObject->SetNumberField(TEXT("count"), LatestPoseFrame.Face.Normalized.Count);
+			FaceObject->SetBoolField(TEXT("has_transform"), LatestPoseFrame.Face.bHasTransform != 0);
+			TArray<TSharedPtr<FJsonValue>> TransformValues;
+			TransformValues.Reserve(16);
+			for (float Value : LatestPoseFrame.Face.FacialTransform)
+			{
+				TransformValues.Add(MakeShared<FJsonValueNumber>(Value));
+			}
+			FaceObject->SetArrayField(TEXT("facial_transform"), TransformValues);
+
+			TArray<TSharedPtr<FJsonValue>> FaceLandmarks;
+			const int32 FaceCount = FMath::Clamp(LatestPoseFrame.Face.Normalized.Count, 0, MediaPipeFaceLandmarkMaxCount);
+			FaceLandmarks.Reserve(FaceCount);
+			for (int32 FaceIndex = 0; FaceIndex < FaceCount; ++FaceIndex)
+			{
+				FaceLandmarks.Add(MakeShared<FJsonValueObject>(JsonLandmark(LatestPoseFrame.Face.Normalized.Landmarks[FaceIndex])));
+			}
+			FaceObject->SetArrayField(TEXT("normalized_landmarks"), FaceLandmarks);
+			Sample->SetObjectField(TEXT("face"), FaceObject);
+		}
+	}
+
+	if (UMediaPipePoseDrivenAnimInstance* PoseAnimInstance = Cast<UMediaPipePoseDrivenAnimInstance>(DrivenMesh->GetAnimInstance()))
+	{
+		FMediaPipePoseDrivenSignalSnapshot SignalSnapshot;
+		if (PoseAnimInstance->GetLatestSignalSnapshot(SignalSnapshot))
+		{
+			Sample->SetObjectField(TEXT("solver"), JsonSignalSnapshot(SignalSnapshot));
+		}
 	}
 
 	TSharedRef<FJsonObject> ActorObject = MakeShared<FJsonObject>();

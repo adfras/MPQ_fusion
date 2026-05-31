@@ -39,7 +39,9 @@ public:
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 
 	UFUNCTION(BlueprintCallable, Category="MediaPipe|Embodiment")
-	void StartEmbodiedTracking();
+	void StartEmbodiedTracking(bool bRefreshExistingSource = false);
+
+	bool IsEmbodiedTrackingStarted() const { return bTrackingStarted; }
 
 	UFUNCTION(BlueprintCallable, Category="MediaPipe|Embodiment")
 	bool ShouldUseMetaHumanAvatar() const;

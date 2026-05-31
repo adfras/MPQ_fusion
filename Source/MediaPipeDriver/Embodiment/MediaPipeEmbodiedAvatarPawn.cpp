@@ -1912,7 +1912,7 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaLocalHiddenBones(UPoseabl
 	}
 }
 
-void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking()
+void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking(bool bRefreshExistingSource)
 {
 	UWorld* World = GetWorld();
 	if (!World)
@@ -1925,6 +1925,55 @@ void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking()
 
 	if (bTrackingStarted)
 	{
+		if (bRefreshExistingSource && bUseMediaPipeTracking)
+		{
+			if (Tags.Contains(CommandOnlyEmbodiedStartTag))
+			{
+				ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+			}
+			else
+			{
+				ApplyAutoQuestProfile();
+			}
+
+			FString CaptureUrl;
+			FString CaptureLabel;
+			if (TryResolveCaptureDevice(CaptureUrl, CaptureLabel))
+			{
+				SourceActor = SourceActor ? SourceActor : FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag);
+				if (SourceActor)
+				{
+					SourceActor->ConfigureLowLoadDefaults(
+						CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
+						ResolveAutoModelPath(),
+						ResolveAutoQuestMediaPipeInputMaxDimension());
+					SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
+
+					AvatarDriverActor = AvatarDriverActor ? AvatarDriverActor : FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag);
+					if (AvatarDriverActor)
+					{
+						AvatarDriverActor->SetOwner(this);
+						AvatarDriverActor->Source = SourceActor;
+						AvatarDriverActor->bAutoPositionNextToSource = false;
+						AvatarDriverActor->bAutoAlignYawToPose = false;
+					}
+
+					UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: refreshed existing MediaPipe source pawn=%s capture=%s label=%s."),
+						*GetNameSafe(this),
+						*CaptureUrl,
+						CaptureLabel.IsEmpty() ? TEXT("unnamed") : *CaptureLabel);
+				}
+				else
+				{
+					UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no MediaPipe source actor was found for refresh."));
+				}
+			}
+			else
+			{
+				UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no capture device resolved for refresh."));
+			}
+		}
+
 		if (ShouldUseMovementReplicaAvatar())
 		{
 			InitializeMovementReplicaAvatar(false);

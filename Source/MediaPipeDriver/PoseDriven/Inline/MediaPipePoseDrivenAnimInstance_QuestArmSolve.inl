@@ -1680,6 +1680,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			const float ArmForward = FMath::Clamp(FVector::DotProduct(PoseUpperComp, ForwardComp), -1.0f, 1.0f);
 			float ShoulderShrugCm = 0.0f;
 			float ShoulderShrugW = 0.0f;
+			float ShoulderRawShrugW = 0.0f;
 			float ShoulderLiftTranslationCm = 0.0f;
 			float ShoulderSignedLiftCm = 0.0f;
 			float ShoulderSignedLiftW = 0.0f;
@@ -1687,8 +1688,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			float ShoulderRelativeLiftW = 0.0f;
 			float ShoulderScreenLift = 0.0f;
 			float ShoulderScreenLiftW = 0.0f;
+			float ShoulderPositiveLiftEvidenceCm = 0.0f;
 			float ShoulderHeadClearanceCm = 0.0f;
 			float ShoulderHeadClearanceShrugCm = 0.0f;
+			float ShoulderHeadClearanceShrugCandidateCm = 0.0f;
 			float BilateralShoulderHeadClearanceCm = 0.0f;
 			float BilateralShoulderHeadClearanceReferenceCm = BodyState.BilateralShoulderHeadClearanceReferenceCm;
 			float BilateralShoulderHeadClearanceShrugCm = 0.0f;
@@ -1705,6 +1708,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			const float ShrugFullCm = FMath::Max(
 				ShrugStartCm + 0.5f,
 				CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
+			const bool bUseHolisticShoulderSolve = CVarMediaPipeHolisticShoulderSolve.GetValueOnAnyThread() != 0;
 			auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
 			{
 				if (LmIdx < 0 || !bHasPoseFrame || !IsMeasured(LmIdx) || !PoseFrame.Normalized.IsValidIndex(LmIdx))
@@ -1756,10 +1760,37 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					}
 					return RigShoulderWidthCm;
 				};
+				auto TryGetDenseFacePoint2D = [&](const int32 FaceIndex, FVector2D& OutPoint) -> bool
+				{
+					if (!bUseHolisticShoulderSolve ||
+						FaceIndex < 0 ||
+						!PoseFrame.bHasFace ||
+						PoseFrame.Face.bHasFace == 0 ||
+						FaceIndex >= PoseFrame.Face.Normalized.Count ||
+						FaceIndex >= MediaPipeFaceLandmarkMaxCount)
+					{
+						return false;
+					}
+
+					const FMediaPipeRawHandLandmark& FacePoint = PoseFrame.Face.Normalized.Landmarks[FaceIndex];
+					if (!FMath::IsFinite(FacePoint.X) || !FMath::IsFinite(FacePoint.Y))
+					{
+						return false;
+					}
+
+					OutPoint = FVector2D(FacePoint.X, FacePoint.Y);
+					return true;
+				};
 				auto TryGetPairedHeadSidePoints2D = [&](FVector2D& OutLeftHeadSide2D, FVector2D& OutRightHeadSide2D) -> bool
 				{
 					FVector2D Left2D = FVector2D::ZeroVector;
 					FVector2D Right2D = FVector2D::ZeroVector;
+					if (TryGetDenseFacePoint2D(33, Left2D) && TryGetDenseFacePoint2D(263, Right2D))
+					{
+						OutLeftHeadSide2D = Left2D;
+						OutRightHeadSide2D = Right2D;
+						return true;
+					}
 					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, Left2D) &&
 						TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, Right2D))
 					{
@@ -1932,15 +1963,15 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					ShoulderShrugW +=
 						RemapPositiveUnbounded(BilateralShrugCm, ShrugStartCm, ShrugFullCm) *
 						ClavicleShrugWeight *
-						0.70f;
-					ShoulderLiftTranslationCm += BilateralShrugCm * 0.85f;
+						0.35f;
+					ShoulderLiftTranslationCm += BilateralShrugCm * 0.35f;
 					BilateralShoulderHeadClearanceCm = Clearance2D.BilateralClearanceCm;
 					BilateralShoulderHeadClearanceReferenceCm = Clearance2D.BilateralReferenceCm;
 					BilateralShoulderHeadClearanceShrugCm = BilateralShrugCm;
 					SharedClearanceMode = Clearance2D.SourceMode;
 					bAppliedHeadClearanceShrug = true;
 				}
-				const float LegacyShoulderDriverScale = Clearance2D.bValid ? 0.0f : 1.0f;
+				const float LegacyShoulderDriverScale = 1.0f;
 				if (!UpWorldSafe.IsNearlyZero() &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
@@ -1964,6 +1995,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							ReferenceAlpha);
 
 						ShoulderSignedLiftCm = ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm;
+						ShoulderPositiveLiftEvidenceCm = FMath::Max(ShoulderPositiveLiftEvidenceCm, ShoulderSignedLiftCm);
 						ShoulderSignedLiftW =
 							RemapSignedUnbounded(ShoulderSignedLiftCm, ShrugStartCm, ShrugFullCm) *
 							ClavicleShrugWeight *
@@ -1971,7 +2003,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							LegacyShoulderDriverScale;
 						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderSignedLiftCm) * LegacyShoulderDriverScale);
 						ShoulderShrugW += ShoulderSignedLiftW;
-						ShoulderLiftTranslationCm += ShoulderSignedLiftCm * 0.01f * LegacyShoulderDriverScale;
+						ShoulderLiftTranslationCm += ShoulderSignedLiftCm * 0.28f * LegacyShoulderDriverScale;
 					}
 
 					const int32 OppositeShoulderLm = bIsLeft
@@ -1986,7 +2018,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 						const float RelativeLiftFullCm = FMath::Max(
 							2.5f,
 							FMath::Min(6.0f, ShoulderWidthCm * 0.14f));
-						const float RelativeLiftStartCm = FMath::Min(ShrugStartCm, 0.45f);
+						const float RelativeLiftStartCm = FMath::Max(1.0f, ShrugStartCm * 0.5f);
 						const float SignedRelativeLiftCm = FVector::DotProduct(ShoulderWorld - OppositeShoulderWorld, UpWorldSafe);
 						ShoulderRelativeLiftCm = SignedRelativeLiftCm;
 						ShoulderRelativeLiftW =
@@ -1996,7 +2028,6 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							LegacyShoulderDriverScale;
 						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderRelativeLiftCm) * LegacyShoulderDriverScale);
 						ShoulderShrugW += ShoulderRelativeLiftW;
-						ShoulderLiftTranslationCm += ShoulderRelativeLiftCm * 0.01f * LegacyShoulderDriverScale;
 
 						FVector2D Shoulder2D = FVector2D::ZeroVector;
 						FVector2D OppositeShoulder2D = FVector2D::ZeroVector;
@@ -2028,6 +2059,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							const float RelativeScreenLift = (OppositeShoulder2D.Y - Shoulder2D.Y) / ShoulderSpan2D;
 							const float AbsoluteScreenLiftCm = AbsoluteScreenLift * ShoulderWidthCm;
 							const float RelativeScreenLiftCm = RelativeScreenLift * ShoulderWidthCm;
+							ShoulderPositiveLiftEvidenceCm = FMath::Max(ShoulderPositiveLiftEvidenceCm, AbsoluteScreenLiftCm);
 							const float AbsoluteScreenLiftW =
 								RemapSignedUnbounded(AbsoluteScreenLiftCm, ShrugStartCm, ShrugFullCm) *
 								ClavicleShrugWeight;
@@ -2038,7 +2070,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							ShoulderScreenLiftW = (AbsoluteScreenLiftW * 0.85f + RelativeScreenLiftW * 0.10f) * LegacyShoulderDriverScale;
 							ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Max(FMath::Abs(AbsoluteScreenLiftCm), FMath::Abs(RelativeScreenLiftCm)) * LegacyShoulderDriverScale);
 							ShoulderShrugW += ShoulderScreenLiftW;
-							ShoulderLiftTranslationCm += (AbsoluteScreenLiftCm * 0.03f + RelativeScreenLiftCm * 0.01f) * LegacyShoulderDriverScale;
+							ShoulderLiftTranslationCm += AbsoluteScreenLiftCm * 0.35f * LegacyShoulderDriverScale;
 
 							if (Clearance2D.bValid)
 							{
@@ -2051,7 +2083,11 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							FVector2D LeftEye2D = FVector2D::ZeroVector;
 							FVector2D RightEye2D = FVector2D::ZeroVector;
 							bool bHasHeadAnchor2D = false;
-							if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LeftEar2D) &&
+							if (TryGetDenseFacePoint2D(bIsLeft ? 33 : 263, HeadAnchor2D))
+							{
+								bHasHeadAnchor2D = true;
+							}
+							else if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LeftEar2D) &&
 								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, RightEar2D))
 							{
 								HeadAnchor2D = (LeftEar2D + RightEar2D) * 0.5f;
@@ -2096,15 +2132,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 										0.0f,
 										ClearanceArmState.ShoulderHeadClearanceReferenceCm - ScreenHeadClearanceCm);
 									ShoulderHeadClearanceShrugCm = ClearanceShrugCm;
-									if (ClearanceShrugCm > ShoulderShrugCm)
-									{
-										ShoulderShrugCm = ClearanceShrugCm;
-									}
-									ShoulderShrugW +=
-										RemapPositiveUnbounded(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
-										ClavicleShrugWeight *
-										0.45f;
-									ShoulderLiftTranslationCm += ClearanceShrugCm * 0.80f;
+									ShoulderHeadClearanceShrugCandidateCm = FMath::Max(ShoulderHeadClearanceShrugCandidateCm, ClearanceShrugCm);
 									bAppliedHeadClearanceShrug = true;
 								}
 							}
@@ -2159,20 +2187,38 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 								0.0f,
 								ClavicleArmState.ShoulderHeadClearanceReferenceCm - HeadClearanceCm);
 							ShoulderHeadClearanceShrugCm = ClearanceShrugCm;
-							if (ClearanceShrugCm > ShoulderShrugCm)
-							{
-								ShoulderShrugCm = ClearanceShrugCm;
-							}
-							ShoulderShrugW +=
-								RemapPositiveUnbounded(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
-								ClavicleShrugWeight *
-								0.45f;
-							ShoulderLiftTranslationCm += ClearanceShrugCm * 0.80f;
+							ShoulderHeadClearanceShrugCandidateCm = FMath::Max(ShoulderHeadClearanceShrugCandidateCm, ClearanceShrugCm);
 						}
 					}
 				}
 			}
 
+			if (ShoulderHeadClearanceShrugCandidateCm > KINDA_SMALL_NUMBER)
+			{
+				// A smaller head-to-shoulder clearance can also be a head nod. Require independent shoulder-up evidence.
+				const float ShoulderIntentW = FMath::Clamp(
+					RemapPositiveUnbounded(ShoulderPositiveLiftEvidenceCm, ShrugStartCm, ShrugFullCm),
+					0.0f,
+					1.0f);
+				const float GatedClearanceShrugCm = ShoulderHeadClearanceShrugCandidateCm * ShoulderIntentW;
+				ShoulderHeadClearanceShrugCm = GatedClearanceShrugCm;
+				if (GatedClearanceShrugCm > KINDA_SMALL_NUMBER)
+				{
+					ShoulderShrugCm = FMath::Max(ShoulderShrugCm, GatedClearanceShrugCm);
+					ShoulderShrugW +=
+						RemapPositiveUnbounded(GatedClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
+						ClavicleShrugWeight *
+						0.45f;
+					ShoulderLiftTranslationCm += GatedClearanceShrugCm * 0.45f;
+				}
+			}
+
+			const float ShoulderLiftTranslationScale = FMath::Clamp(
+				CVarMediaPipeShoulderLiftTranslationScale.GetValueOnAnyThread(),
+				0.0f,
+				8.0f);
+			ShoulderLiftTranslationCm = FMath::Clamp(ShoulderLiftTranslationCm * ShoulderLiftTranslationScale, -7.0f, 14.0f);
+			ShoulderRawShrugW = ShoulderShrugW;
 			FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
 			const float ShrugWeightAlpha = HalfLifeToAlpha(
 				ShoulderShrugW > ClavicleArmState.SmoothedClavicleShrugWeight ? 0.12f : 0.18f,
@@ -2198,7 +2244,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			ShoulderShrugW = ClavicleArmState.SmoothedClavicleShrugWeight;
 
 			const float LiftTranslationAlpha = HalfLifeToAlpha(
-				FMath::Abs(ShoulderLiftTranslationCm) > FMath::Abs(ClavicleArmState.SmoothedClavicleLiftTranslationCm) ? 0.08f : 0.14f,
+				FMath::Abs(ShoulderLiftTranslationCm) > FMath::Abs(ClavicleArmState.SmoothedClavicleLiftTranslationCm) ? 0.05f : 0.12f,
 				DeltaSeconds);
 			if (!ClavicleArmState.bHasSmoothedClavicleLiftTranslation)
 			{
@@ -2214,7 +2260,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 
 			const float ArmDrivenClavicleUpW = FMath::Pow(FMath::Clamp(ArmUp, 0.0f, 1.0f), 1.35f) * 0.18f;
-			const float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW, -0.25f, 0.75f);
+			const float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW * 0.35f, -0.08f, 0.25f);
 			const float UpW = FMath::Clamp(ArmDrivenClavicleUpW + ShrugDrivenClavicleUpW, -0.25f, 0.85f);
 			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.14f;
 
@@ -2260,6 +2306,28 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					AppliedUpperLiftCm = FVector::DotProduct(UpperAfter - UpperBefore, LiftDirComp);
 				}
 			}
+			LatestSignalSnapshot.bValid = true;
+			LatestSignalSnapshot.RuntimeStateKey = RuntimeStateKey;
+			LatestSignalSnapshot.PoseTimestampUs = bHasPoseFrame ? PoseFrame.TimestampUs : -1;
+			FMediaPipePoseDrivenShoulderSignalSnapshot& ShoulderSnapshot =
+				bIsLeft ? LatestSignalSnapshot.LeftShoulder : LatestSignalSnapshot.RightShoulder;
+			ShoulderSnapshot.bValid = true;
+			ShoulderSnapshot.ShoulderSignedLiftCm = ShoulderSignedLiftCm;
+			ShoulderSnapshot.ShoulderRelativeLiftCm = ShoulderRelativeLiftCm;
+			ShoulderSnapshot.ShoulderPositiveLiftEvidenceCm = ShoulderPositiveLiftEvidenceCm;
+			ShoulderSnapshot.ShoulderHeadClearanceCm = ShoulderHeadClearanceCm;
+			ShoulderSnapshot.ShoulderHeadClearanceShrugCm = ShoulderHeadClearanceShrugCm;
+			ShoulderSnapshot.BilateralShoulderHeadClearanceCm = BilateralShoulderHeadClearanceCm;
+			ShoulderSnapshot.BilateralShoulderHeadClearanceReferenceCm = BilateralShoulderHeadClearanceReferenceCm;
+			ShoulderSnapshot.BilateralShoulderHeadClearanceShrugCm = BilateralShoulderHeadClearanceShrugCm;
+			ShoulderSnapshot.ComputedShrugWeight = ShoulderRawShrugW;
+			ShoulderSnapshot.SmoothedShrugWeight = ShoulderShrugW;
+			ShoulderSnapshot.ComputedLiftTranslationCm = ShoulderLiftTranslationCm;
+			ShoulderSnapshot.SmoothedLiftTranslationCm = ClavicleArmState.SmoothedClavicleLiftTranslationCm;
+			ShoulderSnapshot.AppliedClavicleLiftCm = AppliedClavicleLiftCm;
+			ShoulderSnapshot.AppliedUpperLiftCm = AppliedUpperLiftCm;
+			ShoulderSnapshot.UpWeight = UpW;
+			ShoulderSnapshot.ForwardWeight = FwdW;
 
 			if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
 			{

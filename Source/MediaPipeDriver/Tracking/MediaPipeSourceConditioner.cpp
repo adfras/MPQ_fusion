@@ -1,6 +1,7 @@
 #include "MediaPipeSourceConditioner.h"
 
 #include "MediaPipePoseCoordinate.h"
+#include "MediaPipePoseLog.h"
 #include "MediaPipeSolvedPose.h"
 
 #include "HAL/IConsoleManager.h"
@@ -21,6 +22,41 @@ namespace
 		TEXT("mp.MediaPipeSourceSmoothLandmarks"),
 		1,
 		TEXT("When non-zero, smooth conditioned MediaPipe source landmarks with speed-adaptive smoothing."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeAdaptivePoseConditioning(
+		TEXT("mp.MediaPipeAdaptivePoseConditioning"),
+		1,
+		TEXT("When non-zero, produce a render-time conditioned full MediaPipe pose before Manny retargeting."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeAdaptivePosePrediction(
+		TEXT("mp.MediaPipeAdaptivePosePrediction"),
+		1,
+		TEXT("When non-zero, predict the full conditioned pose forward from recent unique MediaPipe frames to the current animation tick."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeAdaptivePoseMaxPredictionMs(
+		TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"),
+		50.0f,
+		TEXT("Maximum adaptive pose prediction horizon in milliseconds. The effective horizon is also limited by measured source cadence and pose quality."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeAdaptivePoseMinCutoff(
+		TEXT("mp.MediaPipeAdaptivePoseMinCutoff"),
+		1.8f,
+		TEXT("One-Euro style minimum cutoff for render-time full-pose adaptive conditioning."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeAdaptivePoseBeta(
+		TEXT("mp.MediaPipeAdaptivePoseBeta"),
+		0.25f,
+		TEXT("One-Euro style velocity beta for render-time full-pose adaptive conditioning."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeAdaptivePoseQualityDebug(
+		TEXT("mp.MediaPipeAdaptivePoseQualityDebug"),
+		0,
+		TEXT("When non-zero, expose adaptive pose quality diagnostics in pose frames even if log output is disabled."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeAdaptivePoseLog(
+		TEXT("mp.MediaPipeAdaptivePoseLog"),
+		0,
+		TEXT("When non-zero, log adaptive full-pose conditioning cadence, prediction, quality, and repeated-frame diagnostics."));
 
 	TAutoConsoleVariable<int32> CVarMediaPipeSourceAdaptiveLengths(
 		TEXT("mp.MediaPipeSourceAdaptiveLengths"),
@@ -366,6 +402,96 @@ namespace
 		}
 		return FMath::Clamp(1.0f - FMath::Pow(0.5f, static_cast<float>(DeltaSeconds) / HalfLifeSeconds), 0.0f, 1.0f);
 	}
+
+	float OneEuroAlpha(const float CutoffHz, const double DeltaSeconds)
+	{
+		if (DeltaSeconds <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			return 1.0f;
+		}
+
+		const float SafeCutoffHz = FMath::Max(0.01f, CutoffHz);
+		const float Tau = 1.0f / (2.0f * UE_PI * SafeCutoffHz);
+		return FMath::Clamp(1.0f / (1.0f + Tau / static_cast<float>(DeltaSeconds)), 0.0f, 1.0f);
+	}
+
+	float ClampReliability(const float Reliability)
+	{
+		return FMath::Clamp(Reliability, 0.0f, 1.0f);
+	}
+
+	float ComputeMeanConfidence(const FMediaPipePoseFrame& Frame)
+	{
+		float Sum = 0.0f;
+		for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+		{
+			const FMediaPipePoseLandmark& World = Frame.World.Points[Index];
+			const FMediaPipePoseLandmark& Normalized = Frame.Normalized.Points[Index];
+			Sum += ClampReliability(FMath::Max(
+				FMath::Max(World.Reliability, Normalized.Reliability),
+				FMath::Max(World.Visibility * World.Presence, Normalized.Visibility * Normalized.Presence)));
+		}
+		return Sum / static_cast<float>(MediaPipePoseLandmarkCount);
+	}
+
+	float ComputeRegionQuality(const FMediaPipePoseFrame& Frame, const EMediaPipePoseLandmark* Landmarks, const int32 Count)
+	{
+		if (!Landmarks || Count <= 0)
+		{
+			return 0.0f;
+		}
+
+		float Sum = 0.0f;
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			Sum += ClampReliability(GetLandmarkReliability(Frame, Landmarks[Index]));
+		}
+		return Sum / static_cast<float>(Count);
+	}
+
+	FVector ComputePoseCenterWorld(const FMediaPipePoseFrame& Frame)
+	{
+		const EMediaPipePoseLandmark CoreLandmarks[] = {
+			EMediaPipePoseLandmark::LeftShoulder,
+			EMediaPipePoseLandmark::RightShoulder,
+			EMediaPipePoseLandmark::LeftHip,
+			EMediaPipePoseLandmark::RightHip,
+		};
+
+		FVector Sum = FVector::ZeroVector;
+		for (const EMediaPipePoseLandmark Landmark : CoreLandmarks)
+		{
+			Sum += GetLandmarkVector(Frame.World, Landmark);
+		}
+		return Sum / static_cast<float>(UE_ARRAY_COUNT(CoreLandmarks));
+	}
+
+	float ComputeBodyScaleWorld(const FMediaPipePoseFrame& Frame)
+	{
+		const FVector LeftShoulder = GetLandmarkVector(Frame.World, EMediaPipePoseLandmark::LeftShoulder);
+		const FVector RightShoulder = GetLandmarkVector(Frame.World, EMediaPipePoseLandmark::RightShoulder);
+		const FVector LeftHip = GetLandmarkVector(Frame.World, EMediaPipePoseLandmark::LeftHip);
+		const FVector RightHip = GetLandmarkVector(Frame.World, EMediaPipePoseLandmark::RightHip);
+		const FVector ShoulderMid = (LeftShoulder + RightShoulder) * 0.5f;
+		const FVector HipMid = (LeftHip + RightHip) * 0.5f;
+		return FMath::Max3(
+			FVector::Distance(LeftShoulder, RightShoulder),
+			FVector::Distance(LeftHip, RightHip),
+			FVector::Distance(ShoulderMid, HipMid));
+	}
+
+	float ComputeTimestampFps(const double CadenceSeconds)
+	{
+		return CadenceSeconds > UE_DOUBLE_SMALL_NUMBER ? static_cast<float>(1.0 / CadenceSeconds) : 0.0f;
+	}
+
+	void ScaleLandmarkConfidence(FMediaPipePoseLandmark& Landmark, const float Scale)
+	{
+		const float SafeScale = FMath::Clamp(Scale, 0.0f, 1.0f);
+		Landmark.Visibility = FMath::Clamp(Landmark.Visibility * SafeScale, 0.0f, 1.0f);
+		Landmark.Presence = FMath::Clamp(Landmark.Presence * SafeScale, 0.0f, 1.0f);
+		Landmark.Reliability = FMath::Clamp(Landmark.Reliability * SafeScale, 0.0f, 1.0f);
+	}
 }
 
 FMediaPipeSourceConditionerOptions FMediaPipeSourceConditioner::MakeDefaultOptions()
@@ -374,6 +500,10 @@ FMediaPipeSourceConditionerOptions FMediaPipeSourceConditioner::MakeDefaultOptio
 	Options.bEnabled = CVarMediaPipeSourceConditioning.GetValueOnAnyThread() != 0;
 	Options.bHoldBadLandmarks = CVarMediaPipeSourceHoldBadLandmarks.GetValueOnAnyThread() != 0;
 	Options.bSmoothLandmarks = CVarMediaPipeSourceSmoothLandmarks.GetValueOnAnyThread() != 0;
+	Options.bAdaptivePoseConditioning = CVarMediaPipeAdaptivePoseConditioning.GetValueOnAnyThread() != 0;
+	Options.bAdaptivePosePrediction = CVarMediaPipeAdaptivePosePrediction.GetValueOnAnyThread() != 0;
+	Options.bAdaptivePoseQualityDebug = CVarMediaPipeAdaptivePoseQualityDebug.GetValueOnAnyThread() != 0;
+	Options.bAdaptivePoseLog = CVarMediaPipeAdaptivePoseLog.GetValueOnAnyThread() != 0;
 	Options.bAdaptiveSegmentLengths = CVarMediaPipeSourceAdaptiveLengths.GetValueOnAnyThread() != 0;
 	Options.bFootForwardHemisphere = CVarMediaPipeSourceFootHemisphere.GetValueOnAnyThread() != 0;
 	Options.bOcclusionArmHold = CVarMediaPipeSourceOcclusionArmHold.GetValueOnAnyThread() != 0;
@@ -381,6 +511,9 @@ FMediaPipeSourceConditionerOptions FMediaPipeSourceConditioner::MakeDefaultOptio
 	Options.MinLandmarkReliability = FMath::Max(0.0f, CVarMediaPipeSourceMinReliability.GetValueOnAnyThread());
 	Options.LandmarkSmoothingHalfLifeSeconds = FMath::Max(0.0f, CVarMediaPipeSourceSmoothingHalfLife.GetValueOnAnyThread());
 	Options.LandmarkSmoothingFastSpeedMps = FMath::Max(0.0f, CVarMediaPipeSourceSmoothingFastSpeed.GetValueOnAnyThread());
+	Options.AdaptivePoseMaxPredictionMs = FMath::Max(0.0f, CVarMediaPipeAdaptivePoseMaxPredictionMs.GetValueOnAnyThread());
+	Options.AdaptivePoseMinCutoff = FMath::Max(0.01f, CVarMediaPipeAdaptivePoseMinCutoff.GetValueOnAnyThread());
+	Options.AdaptivePoseBeta = FMath::Max(0.0f, CVarMediaPipeAdaptivePoseBeta.GetValueOnAnyThread());
 	Options.SegmentLengthAdaptAlpha = FMath::Clamp(CVarMediaPipeSourceLengthAdaptAlpha.GetValueOnAnyThread(), 0.0f, 1.0f);
 	Options.OcclusionArmHoldAcquireScore = FMath::Max(0.0f, CVarMediaPipeSourceOcclusionArmHoldAcquireScore.GetValueOnAnyThread());
 	Options.OcclusionArmHoldReleaseScore = FMath::Max(0.0f, CVarMediaPipeSourceOcclusionArmHoldReleaseScore.GetValueOnAnyThread());
@@ -409,6 +542,7 @@ void FMediaPipeSourceConditioner::Reset()
 	bHasLastTimestamp = false;
 	LastTimestampUs = 0;
 	ResetHistory();
+	ResetAdaptiveHistory();
 
 	SegmentLengthStates.SetNum(GetSegmentDefs().Num());
 	WidthLengthStates.SetNum(GetWidthDefs().Num());
@@ -442,12 +576,33 @@ void FMediaPipeSourceConditioner::ResetHistory()
 	}
 }
 
+void FMediaPipeSourceConditioner::ResetAdaptiveHistory()
+{
+	for (FAdaptiveLandmarkFilterState& State : AdaptiveFilters)
+	{
+		State = FAdaptiveLandmarkFilterState();
+	}
+
+	for (FPoseHistorySample& Sample : RecentSamples)
+	{
+		Sample = FPoseHistorySample();
+	}
+
+	RecentSampleCount = 0;
+	SourceCadenceSeconds = 0.0;
+	UniquePoseCount = 0;
+	RepeatedFrameRunLength = 0;
+	DroppedFrameCount = 0;
+	LastAdaptivePoseLogSeconds = -1.0;
+}
+
 bool FMediaPipeSourceConditioner::ConditionFrame(
 	const FMediaPipePoseFrame& RawFrame,
 	const float WorldScaleCm,
 	const bool bMirrorLandmarksLR,
 	const FMediaPipeSourceConditionerOptions& Options,
-	FMediaPipePoseFrame& OutFrame)
+	FMediaPipePoseFrame& OutFrame,
+	const double QueryTimeSeconds)
 {
 	OutFrame = RawFrame;
 	if (!RawFrame.bValid)
@@ -455,30 +610,423 @@ bool FMediaPipeSourceConditioner::ConditionFrame(
 		return false;
 	}
 
-	if (!Options.bEnabled || RawFrame.bSourceConditioned)
+	if (!Options.bEnabled)
 	{
 		return OutFrame.bValid;
 	}
 
-	if (bHasLastTimestamp && RawFrame.TimestampUs <= LastTimestampUs)
+	const double EffectiveQueryTimeSeconds = QueryTimeSeconds >= 0.0
+		? QueryTimeSeconds
+		: FPlatformTime::Seconds();
+
+	bool bTimestampDiscontinuity = false;
+	if (bHasLastTimestamp && RawFrame.TimestampUs < LastTimestampUs)
 	{
+		bTimestampDiscontinuity = true;
 		Reset();
 	}
 
-	const double DeltaSeconds = bHasLastTimestamp
-		? FMath::Max(0.0, static_cast<double>(RawFrame.TimestampUs - LastTimestampUs) * 1.0e-6)
+	const bool bIsUniqueFrame = !bHasLastTimestamp || RawFrame.TimestampUs > LastTimestampUs;
+	if (bIsUniqueFrame)
+	{
+		const double DeltaSeconds = bHasLastTimestamp
+			? FMath::Max(0.0, static_cast<double>(RawFrame.TimestampUs - LastTimestampUs) * 1.0e-6)
+			: 0.0;
+
+		if (DeltaSeconds > UE_DOUBLE_SMALL_NUMBER)
+		{
+			if (SourceCadenceSeconds > UE_DOUBLE_SMALL_NUMBER)
+			{
+				if (DeltaSeconds > SourceCadenceSeconds * 1.75)
+				{
+					DroppedFrameCount += FMath::Max(1, FMath::RoundToInt(static_cast<float>(DeltaSeconds / SourceCadenceSeconds)) - 1);
+				}
+				SourceCadenceSeconds = FMath::Lerp(SourceCadenceSeconds, DeltaSeconds, 0.12);
+			}
+			else
+			{
+				SourceCadenceSeconds = DeltaSeconds;
+			}
+		}
+
+		OutFrame = RawFrame;
+		if (!RawFrame.bSourceConditioned)
+		{
+			ApplyHoldAndSmoothing(OutFrame, DeltaSeconds, Options);
+			ApplyAdaptiveSegmentLengths(OutFrame, Options);
+			ApplyOcclusionArmHold(OutFrame, DeltaSeconds, Options);
+			ApplyFootForwardHemisphere(OutFrame, WorldScaleCm, bMirrorLandmarksLR, Options);
+			OutFrame.bSourceConditioned = true;
+		}
+
+		StorePreviousFrame(OutFrame);
+		StoreUniqueSample(OutFrame, EffectiveQueryTimeSeconds, DeltaSeconds, bTimestampDiscontinuity);
+		LastTimestampUs = RawFrame.TimestampUs;
+		bHasLastTimestamp = true;
+		RepeatedFrameRunLength = 0;
+	}
+	else
+	{
+		++RepeatedFrameRunLength;
+	}
+
+	const bool bUseAdaptiveOutput = Options.bAdaptivePoseConditioning || Options.bAdaptivePosePrediction;
+	if (!bUseAdaptiveOutput)
+	{
+		if (RecentSampleCount > 0 && RecentSamples[0].bValid)
+		{
+			OutFrame = RecentSamples[0].Frame;
+			OutFrame.ConditioningDiagnostics.RepeatedPoseRunLength = RepeatedFrameRunLength;
+			OutFrame.ConditioningDiagnostics.bRepeatedPose = RepeatedFrameRunLength > 0 ? 1 : 0;
+		}
+		return OutFrame.bValid;
+	}
+
+	BuildRenderTimeFrame(EffectiveQueryTimeSeconds, Options, OutFrame);
+	return OutFrame.bValid;
+}
+
+void FMediaPipeSourceConditioner::StoreUniqueSample(
+	const FMediaPipePoseFrame& Frame,
+	const double ArrivalSeconds,
+	const double SourceDeltaSeconds,
+	const bool bTimestampDiscontinuity)
+{
+	for (int32 Index = UE_ARRAY_COUNT(RecentSamples) - 1; Index > 0; --Index)
+	{
+		RecentSamples[Index] = RecentSamples[Index - 1];
+	}
+
+	RecentSamples[0] = FPoseHistorySample();
+	RecentSamples[0].bValid = Frame.bValid;
+	RecentSamples[0].Frame = Frame;
+	RecentSamples[0].ArrivalSeconds = ArrivalSeconds;
+	RecentSamples[0].SourceTimestampSeconds = static_cast<double>(Frame.TimestampUs) * 1.0e-6;
+	RecentSamples[0].SourceDeltaSeconds = SourceDeltaSeconds;
+	RecentSamples[0].bTimestampDiscontinuity = bTimestampDiscontinuity;
+	RecentSampleCount = FMath::Min(RecentSampleCount + 1, static_cast<int32>(UE_ARRAY_COUNT(RecentSamples)));
+	++UniquePoseCount;
+
+	UpdateSampleDiagnostics(RecentSamples[0]);
+}
+
+void FMediaPipeSourceConditioner::UpdateSampleDiagnostics(FPoseHistorySample& Sample)
+{
+	FMediaPipePoseFrame& Frame = Sample.Frame;
+	FMediaPipePoseFrame::FConditioningDiagnostics& Diagnostics = Frame.ConditioningDiagnostics;
+
+	const float MeanConfidence = ComputeMeanConfidence(Frame);
+	float MeanJitter = 0.0f;
+	float MaxJitter = 0.0f;
+	float WholePoseSpikeScore = 0.0f;
+	bool bConfidenceCollapse = false;
+
+	const float BodyScale = FMath::Max(ComputeBodyScaleWorld(Frame), 0.15f);
+	if (RecentSampleCount > 1 && RecentSamples[1].bValid)
+	{
+		const FMediaPipePoseFrame& PreviousFrame = RecentSamples[1].Frame;
+		float JitterSum = 0.0f;
+		for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+		{
+			const FVector Current = FVector(
+				Frame.World.Points[Index].X,
+				Frame.World.Points[Index].Y,
+				Frame.World.Points[Index].Z);
+			const FVector Previous = FVector(
+				PreviousFrame.World.Points[Index].X,
+				PreviousFrame.World.Points[Index].Y,
+				PreviousFrame.World.Points[Index].Z);
+			const float NormalizedJump = FVector::Distance(Current, Previous) / BodyScale;
+			JitterSum += NormalizedJump;
+			MaxJitter = FMath::Max(MaxJitter, NormalizedJump);
+		}
+		MeanJitter = JitterSum / static_cast<float>(MediaPipePoseLandmarkCount);
+
+		const float PreviousMeanConfidence = RecentSamples[1].MeanConfidence;
+		bConfidenceCollapse = PreviousMeanConfidence > 0.0f && (PreviousMeanConfidence - MeanConfidence) > 0.35f;
+
+		const float CenterJump = FVector::Distance(ComputePoseCenterWorld(Frame), ComputePoseCenterWorld(PreviousFrame)) / BodyScale;
+		WholePoseSpikeScore = FMath::Max3(
+			FMath::Clamp((CenterJump - 0.35f) / 0.85f, 0.0f, 1.0f),
+			FMath::Clamp((MeanJitter - 0.22f) / 0.65f, 0.0f, 1.0f),
+			FMath::Clamp((MaxJitter - 0.75f) / 1.25f, 0.0f, 1.0f));
+
+		if (RecentSampleCount > 2 && RecentSamples[2].bValid)
+		{
+			const double CurrentDt = Sample.SourceDeltaSeconds;
+			const double PreviousDt = RecentSamples[1].SourceDeltaSeconds;
+			if (CurrentDt > UE_DOUBLE_SMALL_NUMBER && PreviousDt > UE_DOUBLE_SMALL_NUMBER)
+			{
+				const FVector CurrentVelocity = (ComputePoseCenterWorld(Frame) - ComputePoseCenterWorld(PreviousFrame)) / CurrentDt;
+				const FVector PreviousVelocity = (ComputePoseCenterWorld(PreviousFrame) - ComputePoseCenterWorld(RecentSamples[2].Frame)) / PreviousDt;
+				const float AccelScore = static_cast<float>((CurrentVelocity - PreviousVelocity).Size() / FMath::Max(BodyScale, UE_SMALL_NUMBER));
+				WholePoseSpikeScore = FMath::Max(WholePoseSpikeScore, FMath::Clamp((AccelScore - 35.0f) / 85.0f, 0.0f, 1.0f));
+			}
+		}
+	}
+
+	const bool bWholePoseSpike = WholePoseSpikeScore > 0.65f;
+	float QualityScore = MeanConfidence;
+	QualityScore *= FMath::Lerp(1.0f, 0.35f, WholePoseSpikeScore);
+	if (bConfidenceCollapse)
+	{
+		QualityScore *= 0.65f;
+	}
+	QualityScore = FMath::Clamp(QualityScore, 0.0f, 1.0f);
+
+	Sample.QualityScore = QualityScore;
+	Sample.MeanConfidence = MeanConfidence;
+	Sample.MeanJitter = MeanJitter;
+	Sample.MaxJitter = MaxJitter;
+	Sample.WholePoseSpikeScore = WholePoseSpikeScore;
+	Sample.bConfidenceCollapse = bConfidenceCollapse;
+	Sample.bWholePoseSpike = bWholePoseSpike;
+
+	const EMediaPipePoseLandmark RootPelvis[] = { EMediaPipePoseLandmark::LeftHip, EMediaPipePoseLandmark::RightHip };
+	const EMediaPipePoseLandmark TorsoSpine[] = {
+		EMediaPipePoseLandmark::LeftShoulder,
+		EMediaPipePoseLandmark::RightShoulder,
+		EMediaPipePoseLandmark::LeftHip,
+		EMediaPipePoseLandmark::RightHip,
+	};
+	const EMediaPipePoseLandmark HeadNeck[] = {
+		EMediaPipePoseLandmark::Nose,
+		EMediaPipePoseLandmark::LeftEye,
+		EMediaPipePoseLandmark::RightEye,
+		EMediaPipePoseLandmark::LeftEar,
+		EMediaPipePoseLandmark::RightEar,
+		EMediaPipePoseLandmark::MouthLeft,
+		EMediaPipePoseLandmark::MouthRight,
+	};
+	const EMediaPipePoseLandmark Shoulders[] = { EMediaPipePoseLandmark::LeftShoulder, EMediaPipePoseLandmark::RightShoulder };
+	const EMediaPipePoseLandmark Arms[] = {
+		EMediaPipePoseLandmark::LeftShoulder,
+		EMediaPipePoseLandmark::LeftElbow,
+		EMediaPipePoseLandmark::LeftWrist,
+		EMediaPipePoseLandmark::RightShoulder,
+		EMediaPipePoseLandmark::RightElbow,
+		EMediaPipePoseLandmark::RightWrist,
+	};
+	const EMediaPipePoseLandmark HandsWrists[] = {
+		EMediaPipePoseLandmark::LeftWrist,
+		EMediaPipePoseLandmark::LeftPinky,
+		EMediaPipePoseLandmark::LeftIndex,
+		EMediaPipePoseLandmark::LeftThumb,
+		EMediaPipePoseLandmark::RightWrist,
+		EMediaPipePoseLandmark::RightPinky,
+		EMediaPipePoseLandmark::RightIndex,
+		EMediaPipePoseLandmark::RightThumb,
+	};
+	const EMediaPipePoseLandmark Hips[] = { EMediaPipePoseLandmark::LeftHip, EMediaPipePoseLandmark::RightHip };
+	const EMediaPipePoseLandmark Legs[] = {
+		EMediaPipePoseLandmark::LeftHip,
+		EMediaPipePoseLandmark::LeftKnee,
+		EMediaPipePoseLandmark::LeftAnkle,
+		EMediaPipePoseLandmark::RightHip,
+		EMediaPipePoseLandmark::RightKnee,
+		EMediaPipePoseLandmark::RightAnkle,
+	};
+	const EMediaPipePoseLandmark FeetAnkles[] = {
+		EMediaPipePoseLandmark::LeftAnkle,
+		EMediaPipePoseLandmark::LeftHeel,
+		EMediaPipePoseLandmark::LeftFootIndex,
+		EMediaPipePoseLandmark::RightAnkle,
+		EMediaPipePoseLandmark::RightHeel,
+		EMediaPipePoseLandmark::RightFootIndex,
+	};
+
+	Diagnostics.MediaPipeOutputFps = ComputeTimestampFps(SourceCadenceSeconds);
+	Diagnostics.UniquePoseTimestampFps = Diagnostics.MediaPipeOutputFps;
+	Diagnostics.QualityScore = QualityScore;
+	Diagnostics.MeanLandmarkConfidence = MeanConfidence;
+	Diagnostics.MeanLandmarkJitter = MeanJitter;
+	Diagnostics.MaxLandmarkJitter = MaxJitter;
+	Diagnostics.WholePoseSpikeScore = WholePoseSpikeScore;
+	Diagnostics.RootPelvisQuality = ComputeRegionQuality(Frame, RootPelvis, UE_ARRAY_COUNT(RootPelvis));
+	Diagnostics.TorsoSpineQuality = ComputeRegionQuality(Frame, TorsoSpine, UE_ARRAY_COUNT(TorsoSpine));
+	Diagnostics.HeadNeckQuality = ComputeRegionQuality(Frame, HeadNeck, UE_ARRAY_COUNT(HeadNeck));
+	Diagnostics.ShoulderClavicleQuality = ComputeRegionQuality(Frame, Shoulders, UE_ARRAY_COUNT(Shoulders));
+	Diagnostics.ArmsQuality = ComputeRegionQuality(Frame, Arms, UE_ARRAY_COUNT(Arms));
+	Diagnostics.HandsWristsQuality = ComputeRegionQuality(Frame, HandsWrists, UE_ARRAY_COUNT(HandsWrists));
+	Diagnostics.HipsQuality = ComputeRegionQuality(Frame, Hips, UE_ARRAY_COUNT(Hips));
+	Diagnostics.LegsQuality = ComputeRegionQuality(Frame, Legs, UE_ARRAY_COUNT(Legs));
+	Diagnostics.FeetAnklesQuality = ComputeRegionQuality(Frame, FeetAnkles, UE_ARRAY_COUNT(FeetAnkles));
+	Diagnostics.DroppedFrameCount = DroppedFrameCount;
+	Diagnostics.bTimestampDiscontinuity = Sample.bTimestampDiscontinuity ? 1 : 0;
+	Diagnostics.bConfidenceCollapse = bConfidenceCollapse ? 1 : 0;
+	Diagnostics.bWholePoseSpike = bWholePoseSpike ? 1 : 0;
+}
+
+FVector FMediaPipeSourceConditioner::ApplyAdaptiveOneEuroFilter(
+	FAdaptiveLandmarkFilterState& State,
+	const FVector& Target,
+	const double QueryTimeSeconds,
+	const float QualityScore,
+	const float MeanJitter,
+	const FMediaPipeSourceConditionerOptions& Options,
+	const bool bWorld)
+{
+	bool& bHasValue = bWorld ? State.bHasWorld : State.bHasNormalized;
+	FVector& Value = bWorld ? State.WorldValue : State.NormalizedValue;
+	FVector& Derivative = bWorld ? State.WorldDerivative : State.NormalizedDerivative;
+	double& LastUpdateSeconds = bWorld ? State.LastWorldUpdateSeconds : State.LastNormalizedUpdateSeconds;
+
+	if (!bHasValue || LastUpdateSeconds < 0.0 || QueryTimeSeconds <= LastUpdateSeconds)
+	{
+		bHasValue = true;
+		Value = Target;
+		Derivative = FVector::ZeroVector;
+		LastUpdateSeconds = QueryTimeSeconds;
+		return Value;
+	}
+
+	const double DeltaSeconds = FMath::Clamp(QueryTimeSeconds - LastUpdateSeconds, 1.0e-4, 0.25);
+	const FVector RawDerivative = (Target - Value) / DeltaSeconds;
+	const float DerivativeAlpha = OneEuroAlpha(1.0f, DeltaSeconds);
+	Derivative = FMath::Lerp(Derivative, RawDerivative, DerivativeAlpha);
+
+	const float ClampedQuality = FMath::Clamp(QualityScore, 0.0f, 1.0f);
+	const float QualityCutoffScale = FMath::Lerp(0.45f, 1.20f, ClampedQuality);
+	const float VelocityScale = FMath::Lerp(0.35f, 1.0f, ClampedQuality);
+	const float JitterCutoffScale = FMath::Lerp(1.0f, 0.45f, FMath::Clamp(MeanJitter / 0.35f, 0.0f, 1.0f));
+	const float CutoffHz = FMath::Max(
+		0.01f,
+		Options.AdaptivePoseMinCutoff * QualityCutoffScale * JitterCutoffScale
+			+ Options.AdaptivePoseBeta * Derivative.Size() * VelocityScale);
+	const float ValueAlpha = OneEuroAlpha(CutoffHz, DeltaSeconds);
+	Value = FMath::Lerp(Value, Target, ValueAlpha);
+	LastUpdateSeconds = QueryTimeSeconds;
+	return Value;
+}
+
+void FMediaPipeSourceConditioner::BuildRenderTimeFrame(
+	const double QueryTimeSeconds,
+	const FMediaPipeSourceConditionerOptions& Options,
+	FMediaPipePoseFrame& OutFrame)
+{
+	if (RecentSampleCount <= 0 || !RecentSamples[0].bValid)
+	{
+		return;
+	}
+
+	const FPoseHistorySample& Latest = RecentSamples[0];
+	const FPoseHistorySample* Previous = (RecentSampleCount > 1 && RecentSamples[1].bValid) ? &RecentSamples[1] : nullptr;
+	OutFrame = Latest.Frame;
+	OutFrame.bSourceConditioned = true;
+
+	const float QualityPredictionScale = FMath::Clamp((Latest.QualityScore - 0.15f) / 0.85f, 0.0f, 1.0f);
+	const double SourceAgeSeconds = FMath::Max(0.0, QueryTimeSeconds - Latest.ArrivalSeconds);
+	const double CadenceSeconds = SourceCadenceSeconds > UE_DOUBLE_SMALL_NUMBER
+		? SourceCadenceSeconds
+		: Latest.SourceDeltaSeconds;
+	const float CVarMaxPredictionSeconds = FMath::Max(0.0f, Options.AdaptivePoseMaxPredictionMs) * 0.001f;
+	const float CadencePredictionSeconds = CadenceSeconds > UE_DOUBLE_SMALL_NUMBER
+		? static_cast<float>(CadenceSeconds * 1.25)
+		: CVarMaxPredictionSeconds;
+	const float MaxPredictionSeconds = FMath::Min(CVarMaxPredictionSeconds, CadencePredictionSeconds) * QualityPredictionScale;
+	const bool bCanPredict = Options.bAdaptivePosePrediction
+		&& Previous
+		&& Previous->Frame.TimestampUs < Latest.Frame.TimestampUs
+		&& MaxPredictionSeconds > UE_SMALL_NUMBER;
+	const float PredictionHorizonSeconds = bCanPredict
+		? FMath::Clamp(static_cast<float>(SourceAgeSeconds), 0.0f, MaxPredictionSeconds)
+		: 0.0f;
+	const float PredictionHorizonRatio = MaxPredictionSeconds > UE_SMALL_NUMBER
+		? FMath::Clamp(PredictionHorizonSeconds / MaxPredictionSeconds, 0.0f, 1.0f)
+		: 0.0f;
+	const double VelocityDeltaSeconds = bCanPredict
+		? FMath::Max(
+			static_cast<double>(Latest.Frame.TimestampUs - Previous->Frame.TimestampUs) * 1.0e-6,
+			UE_DOUBLE_SMALL_NUMBER)
 		: 0.0;
 
-	ApplyHoldAndSmoothing(OutFrame, DeltaSeconds, Options);
-	ApplyAdaptiveSegmentLengths(OutFrame, Options);
-	ApplyOcclusionArmHold(OutFrame, DeltaSeconds, Options);
-	ApplyFootForwardHemisphere(OutFrame, WorldScaleCm, bMirrorLandmarksLR, Options);
+	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+	{
+		const EMediaPipePoseLandmark Landmark = static_cast<EMediaPipePoseLandmark>(Index);
+		FVector WorldTarget = GetLandmarkVector(Latest.Frame.World, Landmark);
+		FVector NormalizedTarget = GetLandmarkVector(Latest.Frame.Normalized, Landmark);
 
-	OutFrame.bSourceConditioned = true;
-	StorePreviousFrame(OutFrame);
-	LastTimestampUs = RawFrame.TimestampUs;
-	bHasLastTimestamp = true;
-	return OutFrame.bValid;
+		if (PredictionHorizonSeconds > UE_SMALL_NUMBER && Previous)
+		{
+			const FVector PreviousWorldTarget = GetLandmarkVector(Previous->Frame.World, Landmark);
+			const FVector PreviousNormalizedTarget = GetLandmarkVector(Previous->Frame.Normalized, Landmark);
+			const float LandmarkConfidence = ClampReliability(GetLandmarkReliability(Latest.Frame, Landmark));
+			const float LandmarkPredictionScale =
+				QualityPredictionScale
+				* FMath::Clamp((LandmarkConfidence - 0.05f) / 0.95f, 0.0f, 1.0f)
+				* FMath::Lerp(1.0f, 0.65f, Latest.WholePoseSpikeScore);
+			const FVector WorldVelocity = (WorldTarget - PreviousWorldTarget) / VelocityDeltaSeconds;
+			const FVector NormalizedVelocity = (NormalizedTarget - PreviousNormalizedTarget) / VelocityDeltaSeconds;
+			WorldTarget += WorldVelocity * PredictionHorizonSeconds * LandmarkPredictionScale;
+			NormalizedTarget += NormalizedVelocity * PredictionHorizonSeconds * LandmarkPredictionScale;
+		}
+
+		if (Options.bAdaptivePoseConditioning)
+		{
+			WorldTarget = ApplyAdaptiveOneEuroFilter(
+				AdaptiveFilters[Index],
+				WorldTarget,
+				QueryTimeSeconds,
+				Latest.QualityScore,
+				Latest.MeanJitter,
+				Options,
+				true);
+			NormalizedTarget = ApplyAdaptiveOneEuroFilter(
+				AdaptiveFilters[Index],
+				NormalizedTarget,
+				QueryTimeSeconds,
+				Latest.QualityScore,
+				Latest.MeanJitter,
+				Options,
+				false);
+		}
+
+		SetLandmarkVector(OutFrame.World, Landmark, WorldTarget);
+		SetLandmarkVector(OutFrame.Normalized, Landmark, NormalizedTarget);
+
+		const float ConfidenceScale =
+			FMath::Clamp(0.55f + 0.45f * Latest.QualityScore, 0.35f, 1.0f)
+			* (1.0f - 0.25f * PredictionHorizonRatio);
+		ScaleLandmarkConfidence(OutFrame.World.Points[Index], ConfidenceScale);
+		ScaleLandmarkConfidence(OutFrame.Normalized.Points[Index], ConfidenceScale);
+	}
+
+	FMediaPipePoseFrame::FConditioningDiagnostics& Diagnostics = OutFrame.ConditioningDiagnostics;
+	Diagnostics.SourceAgeMs = static_cast<float>(SourceAgeSeconds * 1000.0);
+	Diagnostics.PredictionHorizonMs = PredictionHorizonSeconds * 1000.0f;
+	Diagnostics.MaxPredictionHorizonMs = MaxPredictionSeconds * 1000.0f;
+	Diagnostics.EffectiveAddedLatencyMs = 0.0f;
+	Diagnostics.MediaPipeOutputFps = ComputeTimestampFps(CadenceSeconds);
+	Diagnostics.UniquePoseTimestampFps = Diagnostics.MediaPipeOutputFps;
+	Diagnostics.RepeatedPoseRunLength = RepeatedFrameRunLength;
+	Diagnostics.DroppedFrameCount = DroppedFrameCount;
+	Diagnostics.bPredicted = PredictionHorizonSeconds > UE_SMALL_NUMBER ? 1 : 0;
+	Diagnostics.bRepeatedPose = RepeatedFrameRunLength > 0 ? 1 : 0;
+
+	if (Options.bAdaptivePoseLog)
+	{
+		if (LastAdaptivePoseLogSeconds < 0.0 || QueryTimeSeconds - LastAdaptivePoseLogSeconds >= 1.0)
+		{
+			LastAdaptivePoseLogSeconds = QueryTimeSeconds;
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.AdaptivePoseConditioning: poseTs=%lld sourceFps=%.2f uniqueFps=%.2f repeatedRun=%d dropped=%d ageMs=%.1f predictMs=%.1f maxPredictMs=%.1f quality=%.3f confidence=%.3f jitterMean=%.3f jitterMax=%.3f spike=%.3f latencyMs=%.1f predicted=%d"),
+				static_cast<long long>(OutFrame.TimestampUs),
+				Diagnostics.MediaPipeOutputFps,
+				Diagnostics.UniquePoseTimestampFps,
+				Diagnostics.RepeatedPoseRunLength,
+				Diagnostics.DroppedFrameCount,
+				Diagnostics.SourceAgeMs,
+				Diagnostics.PredictionHorizonMs,
+				Diagnostics.MaxPredictionHorizonMs,
+				Diagnostics.QualityScore,
+				Diagnostics.MeanLandmarkConfidence,
+				Diagnostics.MeanLandmarkJitter,
+				Diagnostics.MaxLandmarkJitter,
+				Diagnostics.WholePoseSpikeScore,
+				Diagnostics.EffectiveAddedLatencyMs,
+				Diagnostics.bPredicted);
+		}
+	}
 }
 
 bool FMediaPipeSourceConditioner::IsLandmarkReliable(

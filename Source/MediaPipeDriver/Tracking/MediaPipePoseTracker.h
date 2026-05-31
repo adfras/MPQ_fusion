@@ -17,6 +17,7 @@ public:
 		const FString& DllPath,
 		const FString& PoseModelPath,
 		const FString& HandModelPath,
+		const FString& HolisticModelPath,
 		const FMediaPipePoseNativeOptions& NativeOptions,
 		bool bUseMock);
 	void Shutdown();

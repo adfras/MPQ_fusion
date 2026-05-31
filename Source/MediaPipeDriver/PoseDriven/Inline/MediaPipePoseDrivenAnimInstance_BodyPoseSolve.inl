@@ -423,7 +423,10 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		ApplyRotationCS(CSPose, Bone, InOutSmoothedRotCS);
 	};
 
+	const float FaceBlendWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
+	const float FacePitchScale = FMath::Clamp(HeadPitchScale, 0.0f, 3.0f);
 	const float FaceTwistWeight = FMath::Clamp(HeadTwistWeight, 0.0f, 1.0f);
+	const bool bUseHolisticHeadSolve = CVarMediaPipeHolisticHeadSolve.GetValueOnAnyThread() != 0;
 
 	auto ApplySemanticBasisSwingTwist = [&](const FBoneReference& Bone, const FQuat& RefBoneComp, const FQuat& RefBasisComp,
 		const FQuat& TargetBasisComp, const FVector& TwistAxisComp, const float SwingWeight, const float TwistWeight,
@@ -505,7 +508,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		ApplySemanticBasisToBone(SpineBone, RefSpineComp[i], RefSpineBasisComp[i], TargetBasis, BodyState.bHasSmoothedSpineRotCS[i], BodyState.SmoothedSpineRotCS[i]);
 	}
 
-	if (HeadFaceBlend <= KINDA_SMALL_NUMBER && FaceTwistWeight <= KINDA_SMALL_NUMBER)
+	if (FaceBlendWeight <= KINDA_SMALL_NUMBER && FaceTwistWeight <= KINDA_SMALL_NUMBER)
 	{
 		BodyState.bHasSmoothedNeckRotCS = false;
 		BodyState.bHasSmoothedNeck02RotCS = false;
@@ -518,7 +521,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				UE_LOG(LogMediaPipePose, Log,
 					TEXT("mp.HeadDebug: actor=%s enabled=0 faceBlend=%.2f twistWeight=%.2f reason=HeadFaceBlendAndHeadTwistWeightAreZero"),
 					*TargetActorName.ToString(),
-					HeadFaceBlend,
+					FaceBlendWeight,
 					FaceTwistWeight);
 			}
 		}
@@ -590,13 +593,30 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		!HeadRightComp.IsNearlyZero() ? HeadRightComp : ChestRightComp,
 		!HeadUpComp.IsNearlyZero() ? HeadUpComp : UpComp,
 		!HeadForwardComp.IsNearlyZero() ? HeadForwardComp : PoseFwdComp);
-	FQuat HeadTargetBasis = FQuat::Slerp(ChestTargetBasis, FaceHeadTargetBasis, FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f)).GetNormalized();
+	// The Holistic path below applies dense face motion directly; keep the old sparse face basis from stacking on top of it.
+	const float FaceBasisBlend = bUseHolisticHeadSolve ? 0.0f : FaceBlendWeight * FaceTwistWeight;
+	FQuat HeadTargetBasis = FQuat::Slerp(ChestTargetBasis, FaceHeadTargetBasis, FaceBasisBlend).GetNormalized();
 	float ScreenHeadYawDeg = 0.0f;
 	float ScreenHeadPitchDeg = 0.0f;
 	float ScreenHeadRollDeg = 0.0f;
 	float ScreenHeadLateralAngleDeltaDeg = 0.0f;
 	float ScreenHeadSideBendDeg = 0.0f;
 	float ScreenHeadFacePitchInput = 0.0f;
+	bool bDenseFaceSignalValid = false;
+	float DenseFacePitchSignal = 0.0f;
+	float DenseFaceYawSignal = 0.0f;
+	float DenseFaceRollSignalDeg = 0.0f;
+	float DenseFacePitchDeltaSignal = 0.0f;
+	float DenseFaceYawDeltaSignal = 0.0f;
+	float DenseFaceRollDeltaSignalDeg = 0.0f;
+	float DenseHeadPitchAppliedDeg = 0.0f;
+	float DenseHeadYawAppliedDeg = 0.0f;
+	float DenseHeadRollAppliedDeg = 0.0f;
+	float DenseHeadLocalPitchDeg = 0.0f;
+	float DenseHeadLocalYawDeg = 0.0f;
+	float DenseHeadLocalRollDeg = 0.0f;
+	bool bDenseHeadLocalTargetValid = false;
+	bool bHoldingDenseHeadLocalTarget = false;
 	float ScreenHeadNoseEyePitchDelta = 0.0f;
 	float ScreenHeadMouthEyePitchDelta = 0.0f;
 	float ScreenHeadMouthEarPitchDelta = 0.0f;
@@ -626,7 +646,38 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 	FVector2D ScreenHeadNoseDelta2D = FVector2D::ZeroVector;
 	FVector2D ScreenHeadShoulderNoseDelta2D = FVector2D::ZeroVector;
 	FVector2D ScreenHeadShoulderNoseAbs2D = FVector2D::ZeroVector;
-	if (HeadFaceBlend > KINDA_SMALL_NUMBER)
+	auto TryGetDenseFace2D = [&](const int32 Index, FVector2D& OutPoint) -> bool
+	{
+		if (!bUseHolisticHeadSolve ||
+			Index < 0 ||
+			!PoseFrame.bHasFace ||
+			PoseFrame.Face.bHasFace == 0 ||
+			Index >= PoseFrame.Face.Normalized.Count ||
+			Index >= MediaPipeFaceLandmarkMaxCount)
+		{
+			return false;
+		}
+
+		const FMediaPipeRawHandLandmark& Landmark = PoseFrame.Face.Normalized.Landmarks[Index];
+		if (!FMath::IsFinite(Landmark.X) || !FMath::IsFinite(Landmark.Y))
+		{
+			return false;
+		}
+
+		OutPoint = FVector2D(Landmark.X, Landmark.Y);
+		return true;
+	};
+	FVector2D DenseFaceLeftEye = FVector2D::ZeroVector;
+	FVector2D DenseFaceRightEye = FVector2D::ZeroVector;
+	FVector2D DenseFaceNose = FVector2D::ZeroVector;
+	FVector2D DenseFaceChin = FVector2D::ZeroVector;
+	const bool bHasDenseFaceSolvePoints =
+		FaceBlendWeight > KINDA_SMALL_NUMBER &&
+		TryGetDenseFace2D(33, DenseFaceLeftEye) &&
+		TryGetDenseFace2D(263, DenseFaceRightEye) &&
+		TryGetDenseFace2D(1, DenseFaceNose) &&
+		TryGetDenseFace2D(152, DenseFaceChin);
+	if (FaceBlendWeight > KINDA_SMALL_NUMBER)
 	{
 		auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
 		{
@@ -878,7 +929,8 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			const float LateralAngleDeltaDeg = FRotator::NormalizeAxis(HeadLateralAngleDeg - DerivedSignals.HeadScreenLateralAngleReferenceDeg);
 			ScreenHeadLateralAngleDeltaDeg = LateralAngleDeltaDeg;
 			const float RollDeltaDeg = FRotator::NormalizeAxis(EyeRollDeg - DerivedSignals.HeadScreenRollReferenceDeg);
-			const float ScreenWeight = FMath::Clamp(HeadFaceBlend, 0.0f, 1.0f);
+			const float ScreenPitchWeight = (bUseHolisticHeadSolve || bHasDenseFaceSolvePoints) ? 0.0f : FaceBlendWeight;
+			const float ScreenYawRollWeight = (bUseHolisticHeadSolve || bHasDenseFaceSolvePoints) ? 0.0f : FaceBlendWeight * FaceTwistWeight;
 			const float ShoulderNoseYawInput = FMath::Abs(ShoulderNoseDelta2D.X) > 0.005f
 				? ShoulderNoseDelta2D.X
 				: NoseShoulderOffset2D.X;
@@ -936,16 +988,19 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				FacePitchInput = MouthEarPitchDelta;
 			}
 
-			// Reject non-physical face-pitch glitches before the x65 amplification.
+			// Reject non-physical face-pitch glitches before pitch amplification.
 			// FacePitchInput is a normalized pitch ratio; the +-45 deg output clamp below
-			// saturates at |input| = 45/65 ~= 0.69, so legitimate motion never needs more
+			// saturates at 45 / gain, so legitimate motion never needs more
 			// than that. Momentary world mouth/eye landmark degeneracy can spike it well
 			// past saturation (observed |input| ~= 7..25), which rails the head pitch to
 			// the +-45 limit for ~0.5s -- a visible snap no downstream smoothing can reject.
 			// Gate at the saturation point itself and hold the last in-range (non-railing)
 			// value through the glitch, so a glitch can never rail the head. Legit deep nods
 			// (which the clamp already caps at 45 deg) are preserved to within ~0.2 deg.
-			constexpr float FacePitchInputPlausibleMax = 45.0f / 65.0f; // output clamp saturation (~0.69)
+			const float FacePitchOutputGainDegrees = 65.0f * FacePitchScale;
+			const float FacePitchInputPlausibleMax = FacePitchOutputGainDegrees > KINDA_SMALL_NUMBER
+				? 45.0f / FacePitchOutputGainDegrees
+				: 0.0f;
 			if (FMath::IsFinite(FacePitchInput) && FMath::Abs(FacePitchInput) <= FacePitchInputPlausibleMax)
 			{
 				DerivedSignals.LastValidScreenFacePitchInput = FacePitchInput;
@@ -960,11 +1015,11 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				FacePitchInput = 0.0f;
 			}
 			ScreenHeadFacePitchInput = FacePitchInput;
-			ScreenHeadYawDeg = FMath::Clamp((LateralAngleDeltaDeg * 1.2f + ShoulderNoseYawInput * 25.0f + NoseDelta2D.X * 18.0f + CenterDelta2D.X * 12.0f) * ScreenWeight, -85.0f, 85.0f);
-			const float FacePitchDeg = FacePitchInput * 65.0f;
-			ScreenHeadPitchDeg = FMath::Clamp(FacePitchDeg * ScreenWeight, -45.0f, 45.0f);
-			ScreenHeadSideBendDeg = (LateralAngleDeltaDeg * 0.95f + ShoulderNoseYawInput * 120.0f + CenterDelta2D.X * 35.0f) * ScreenWeight;
-			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenWeight + ScreenHeadSideBendDeg, -45.0f, 45.0f);
+			ScreenHeadYawDeg = FMath::Clamp((LateralAngleDeltaDeg * 1.2f + ShoulderNoseYawInput * 25.0f + NoseDelta2D.X * 18.0f + CenterDelta2D.X * 12.0f) * ScreenYawRollWeight, -85.0f, 85.0f);
+			const float FacePitchDeg = FacePitchInput * FacePitchOutputGainDegrees;
+			ScreenHeadPitchDeg = FMath::Clamp(FacePitchDeg * ScreenPitchWeight, -45.0f, 45.0f);
+			ScreenHeadSideBendDeg = (LateralAngleDeltaDeg * 0.95f + ShoulderNoseYawInput * 120.0f + CenterDelta2D.X * 35.0f) * ScreenYawRollWeight;
+			ScreenHeadRollDeg = FMath::Clamp(RollDeltaDeg * ScreenYawRollWeight + ScreenHeadSideBendDeg, -45.0f, 45.0f);
 
 			FVector ScreenUpComp = CompUp.GetSafeNormal();
 			if (ScreenUpComp.IsNearlyZero())
@@ -1041,6 +1096,163 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 			DerivedSignals.HeadScreenRollReferenceDeg = FMath::Lerp(DerivedSignals.HeadScreenRollReferenceDeg, EyeRollDeg, ReferenceAlpha);
 		}
 	}
+	if (bHasDenseFaceSolvePoints)
+	{
+		const FVector2D EyeVec = DenseFaceRightEye - DenseFaceLeftEye;
+		const float EyeSpan = EyeVec.Size();
+		if (EyeSpan > KINDA_SMALL_NUMBER)
+		{
+			const FVector2D EyeMid = (DenseFaceLeftEye + DenseFaceRightEye) * 0.5f;
+			const float DenseFacePitch = (DenseFaceChin.Y - EyeMid.Y) / EyeSpan;
+			const float DenseFaceYaw = (DenseFaceNose.X - EyeMid.X) / EyeSpan;
+			const float DenseFaceRollDeg = FMath::RadiansToDegrees(FMath::Atan2(EyeVec.Y, EyeVec.X));
+			bDenseFaceSignalValid = true;
+			DenseFacePitchSignal = DenseFacePitch;
+			DenseFaceYawSignal = DenseFaceYaw;
+			DenseFaceRollSignalDeg = DenseFaceRollDeg;
+
+			FDerivedSignalRuntimeState& DerivedSignals = GetDerivedSignalRuntimeState(RuntimeStateKey);
+			if (!DerivedSignals.bHasDenseFaceReference)
+			{
+				DerivedSignals.bHasDenseFaceReference = true;
+				DerivedSignals.DenseFacePitchReference = DenseFacePitch;
+				DerivedSignals.DenseFaceYawReference = DenseFaceYaw;
+				DerivedSignals.DenseFaceRollReferenceDeg = DenseFaceRollDeg;
+			}
+
+			const float RawDensePitchDelta = DenseFacePitch - DerivedSignals.DenseFacePitchReference;
+			float DensePitchDelta = RawDensePitchDelta;
+			const float DensePitchGainDegrees = 95.0f * FacePitchScale;
+			const float DensePitchDeltaPlausibleMax = DensePitchGainDegrees > KINDA_SMALL_NUMBER
+				? 50.0f / DensePitchGainDegrees
+				: 0.0f;
+			const bool bDensePitchPlausible =
+				FMath::IsFinite(DensePitchDelta) &&
+				FMath::Abs(DensePitchDelta) <= DensePitchDeltaPlausibleMax;
+			if (bDensePitchPlausible)
+			{
+				DerivedSignals.LastValidDenseFacePitchDelta = DensePitchDelta;
+				DerivedSignals.bHasValidDenseFacePitchDelta = true;
+			}
+			else if (DerivedSignals.bHasValidDenseFacePitchDelta)
+			{
+				DensePitchDelta = DerivedSignals.LastValidDenseFacePitchDelta;
+			}
+			else
+			{
+				DensePitchDelta = 0.0f;
+			}
+
+			const float DenseYawDelta = DenseFaceYaw - DerivedSignals.DenseFaceYawReference;
+			const float DenseRollDeltaDeg = FRotator::NormalizeAxis(DenseFaceRollDeg - DerivedSignals.DenseFaceRollReferenceDeg);
+			DenseFacePitchDeltaSignal = DensePitchDelta;
+			DenseFaceYawDeltaSignal = DenseYawDelta;
+			DenseFaceRollDeltaSignalDeg = DenseRollDeltaDeg;
+			const float DensePitchDeg = FMath::Clamp(-DensePitchDelta * DensePitchGainDegrees, -50.0f, 50.0f);
+			const float DenseYawDeg = FMath::Clamp(DenseYawDelta * 70.0f, -55.0f, 55.0f);
+			const float DenseRollDeg = FMath::Clamp(DenseRollDeltaDeg * 1.10f, -45.0f, 45.0f);
+
+			FVector ScreenUpComp = CompUp.GetSafeNormal();
+			if (ScreenUpComp.IsNearlyZero())
+			{
+				ScreenUpComp = FVector::UpVector;
+			}
+			FVector ScreenRightComp = ChestRightComp.GetSafeNormal();
+			if (ScreenRightComp.IsNearlyZero())
+			{
+				ScreenRightComp = FVector::RightVector;
+			}
+			FVector ScreenForwardComp = PoseFwdComp.GetSafeNormal();
+			if (ScreenForwardComp.IsNearlyZero())
+			{
+				ScreenForwardComp = FVector::ForwardVector;
+			}
+
+			const float DensePitchBlend = FaceBlendWeight;
+			const float DenseYawRollBlend = FaceBlendWeight * FaceTwistWeight;
+			DenseHeadPitchAppliedDeg = DensePitchDeg * DensePitchBlend;
+			DenseHeadYawAppliedDeg = DenseYawDeg * DenseYawRollBlend;
+			DenseHeadRollAppliedDeg = DenseRollDeg * DenseYawRollBlend;
+			DenseHeadLocalPitchDeg = -DenseHeadPitchAppliedDeg;
+			DenseHeadLocalYawDeg = DenseHeadYawAppliedDeg;
+			DenseHeadLocalRollDeg = DenseHeadRollAppliedDeg;
+			float MaxDenseLocalHeadStepDeg = HeadRotationMaxStepDegrees;
+			if (HeadRotationMaxSpeedDegreesPerSecond > 0.0f && DeltaSeconds > 0.0f)
+			{
+				const float MaxSpeedStepDegrees = HeadRotationMaxSpeedDegreesPerSecond * DeltaSeconds;
+				MaxDenseLocalHeadStepDeg = MaxDenseLocalHeadStepDeg > 0.0f
+					? FMath::Min(MaxDenseLocalHeadStepDeg, MaxSpeedStepDegrees)
+					: MaxSpeedStepDegrees;
+			}
+			if (DerivedSignals.bHasValidDenseHeadLocalEuler)
+			{
+				auto SmoothAngle = [HeadRotAlpha](const float CurrentDeg, const float TargetDeg) -> float
+				{
+					return FRotator::NormalizeAxis(
+						CurrentDeg + FRotator::NormalizeAxis(TargetDeg - CurrentDeg) * FMath::Clamp(HeadRotAlpha, 0.0f, 1.0f));
+				};
+				DenseHeadLocalPitchDeg = SmoothAngle(DerivedSignals.LastDenseHeadLocalPitchDeg, DenseHeadLocalPitchDeg);
+				DenseHeadLocalYawDeg = SmoothAngle(DerivedSignals.LastDenseHeadLocalYawDeg, DenseHeadLocalYawDeg);
+				DenseHeadLocalRollDeg = SmoothAngle(DerivedSignals.LastDenseHeadLocalRollDeg, DenseHeadLocalRollDeg);
+				if (MaxDenseLocalHeadStepDeg > 0.0f)
+				{
+					auto StepAngle = [MaxDenseLocalHeadStepDeg](const float CurrentDeg, const float TargetDeg) -> float
+					{
+						const float DeltaDeg = FRotator::NormalizeAxis(TargetDeg - CurrentDeg);
+						return FRotator::NormalizeAxis(
+							CurrentDeg + FMath::Clamp(DeltaDeg, -MaxDenseLocalHeadStepDeg, MaxDenseLocalHeadStepDeg));
+					};
+					DenseHeadLocalPitchDeg = StepAngle(DerivedSignals.LastDenseHeadLocalPitchDeg, DenseHeadLocalPitchDeg);
+					DenseHeadLocalYawDeg = StepAngle(DerivedSignals.LastDenseHeadLocalYawDeg, DenseHeadLocalYawDeg);
+					DenseHeadLocalRollDeg = StepAngle(DerivedSignals.LastDenseHeadLocalRollDeg, DenseHeadLocalRollDeg);
+				}
+			}
+			bDenseHeadLocalTargetValid = true;
+			DerivedSignals.bHasValidDenseHeadLocalEuler = true;
+			DerivedSignals.LastDenseHeadLocalPitchDeg = DenseHeadLocalPitchDeg;
+			DerivedSignals.LastDenseHeadLocalYawDeg = DenseHeadLocalYawDeg;
+			DerivedSignals.LastDenseHeadLocalRollDeg = DenseHeadLocalRollDeg;
+			// Manny's head local Euler channels are not aligned 1:1 with the screen
+			// basis axes used for dense face deltas. Route the dense solve through the
+			// component axes that compare back to the intended local pitch/yaw/roll
+			// channels in RecordMannyBoneTimeseries.
+			const float ClampedDenseHeadPitchAppliedDeg = -DenseHeadLocalPitchDeg;
+			const float ClampedDenseHeadYawAppliedDeg = DenseHeadLocalYawDeg;
+			const float ClampedDenseHeadRollAppliedDeg = DenseHeadLocalRollDeg;
+			const FQuat DenseHeadDelta =
+				FQuat(ScreenForwardComp, FMath::DegreesToRadians(ClampedDenseHeadPitchAppliedDeg)) *
+				FQuat(ScreenRightComp, FMath::DegreesToRadians(ClampedDenseHeadYawAppliedDeg)) *
+				FQuat(ScreenUpComp, FMath::DegreesToRadians(-ClampedDenseHeadRollAppliedDeg));
+			HeadTargetBasis = (DenseHeadDelta * HeadTargetBasis).GetNormalized();
+			DerivedSignals.bHasValidDenseHeadTargetBasis = true;
+			DerivedSignals.LastDenseHeadTargetBasis = HeadTargetBasis;
+
+			const float DenseReferenceAlpha = HalfLifeToAlpha(14.0f, DeltaSeconds);
+			DerivedSignals.DenseFacePitchReference += (bDensePitchPlausible ? RawDensePitchDelta : 0.0f) * DenseReferenceAlpha;
+			DerivedSignals.DenseFaceYawReference += DenseYawDelta * DenseReferenceAlpha;
+			DerivedSignals.DenseFaceRollReferenceDeg = FRotator::NormalizeAxis(
+				DerivedSignals.DenseFaceRollReferenceDeg + DenseRollDeltaDeg * DenseReferenceAlpha);
+		}
+	}
+	if (!bDenseHeadLocalTargetValid && bUseHolisticHeadSolve)
+	{
+		FDerivedSignalRuntimeState& DerivedSignals = GetDerivedSignalRuntimeState(RuntimeStateKey);
+		if (DerivedSignals.bHasValidDenseHeadLocalEuler)
+		{
+			DenseHeadLocalPitchDeg = DerivedSignals.LastDenseHeadLocalPitchDeg;
+			DenseHeadLocalYawDeg = DerivedSignals.LastDenseHeadLocalYawDeg;
+			DenseHeadLocalRollDeg = DerivedSignals.LastDenseHeadLocalRollDeg;
+			bDenseHeadLocalTargetValid = true;
+			if (DerivedSignals.bHasValidDenseHeadTargetBasis && !DerivedSignals.LastDenseHeadTargetBasis.IsIdentity())
+			{
+				HeadTargetBasis = DerivedSignals.LastDenseHeadTargetBasis;
+			}
+			else
+			{
+				bHoldingDenseHeadLocalTarget = true;
+			}
+		}
+	}
 	const FQuat NeckTargetBasis = FQuat::Slerp(ChestTargetBasis, HeadTargetBasis, 0.5f).GetNormalized();
 	const FQuat Neck02TargetBasis = FQuat::Slerp(NeckTargetBasis, HeadTargetBasis, 0.5f).GetNormalized();
 
@@ -1080,10 +1292,93 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		UpdateSmoothedRotation(bHasSmoothedRot, InOutSmoothedRotCS, TargetRotCS, HeadRotAlpha, MaxHeadStepDegrees);
 		ApplyRotationCS(CSPose, Bone, InOutSmoothedRotCS);
 	};
+	auto ApplyDenseHeadLocalEuler = [&]() -> bool
+	{
+		if (!Head.IsValidToEvaluate() || !bDenseHeadLocalTargetValid)
+		{
+			return false;
+		}
 
-	ApplyFaceDeltaFromChest(Neck, RefNeckComp, RefNeckBasisComp, NeckTargetBasis, 0.45f, 0.25f * FaceTwistWeight, BodyState.bHasSmoothedNeckRotCS, BodyState.SmoothedNeckRotCS);
-	ApplyFaceDeltaFromChest(Neck02, RefNeck02Comp, RefNeck02BasisComp, Neck02TargetBasis, 0.75f, 0.50f * FaceTwistWeight, BodyState.bHasSmoothedNeck02RotCS, BodyState.SmoothedNeck02RotCS);
-	ApplyFaceDeltaFromChest(Head, RefHeadComp, RefHeadBasisComp, HeadTargetBasis, 1.0f, FaceTwistWeight, BodyState.bHasSmoothedHeadRotCS, BodyState.SmoothedHeadRotCS);
+		const FCompactPoseBoneIndex HeadIdx = Head.CachedCompactPoseIndex;
+		const FCompactPoseBoneIndex ParentIdx = CSPose.GetPose().GetParentBoneIndex(HeadIdx);
+		if (ParentIdx.GetInt() < 0)
+		{
+			return false;
+		}
+
+		FQuat RefParentComp = RefNeck02Comp;
+		if (Neck02.IsValidToEvaluate() && ParentIdx == Neck02.CachedCompactPoseIndex)
+		{
+			RefParentComp = RefNeck02Comp;
+		}
+		else if (Neck.IsValidToEvaluate() && ParentIdx == Neck.CachedCompactPoseIndex)
+		{
+			RefParentComp = RefNeckComp;
+		}
+
+		if (RefParentComp.IsIdentity() || RefHeadComp.IsIdentity())
+		{
+			return false;
+		}
+
+		const FQuat RefHeadLocalQuat = (RefParentComp.Inverse() * RefHeadComp).GetNormalized();
+		FRotator TargetLocalRot = RefHeadLocalQuat.Rotator();
+		TargetLocalRot.Pitch = FRotator::NormalizeAxis(TargetLocalRot.Pitch + DenseHeadLocalPitchDeg);
+		TargetLocalRot.Yaw = FRotator::NormalizeAxis(TargetLocalRot.Yaw + DenseHeadLocalYawDeg);
+		TargetLocalRot.Roll = FRotator::NormalizeAxis(TargetLocalRot.Roll + DenseHeadLocalRollDeg);
+
+		const FQuat ParentRotCS = CSPose.GetComponentSpaceTransform(ParentIdx).GetRotation();
+		const FQuat TargetRotCS = (ParentRotCS * TargetLocalRot.Quaternion()).GetNormalized();
+
+		float MaxHeadStepDegrees = HeadRotationMaxStepDegrees;
+		if (HeadRotationMaxSpeedDegreesPerSecond > 0.0f && DeltaSeconds > 0.0f)
+		{
+			const float MaxSpeedStepDegrees = HeadRotationMaxSpeedDegreesPerSecond * DeltaSeconds;
+			MaxHeadStepDegrees = MaxHeadStepDegrees > 0.0f
+				? FMath::Min(MaxHeadStepDegrees, MaxSpeedStepDegrees)
+				: MaxSpeedStepDegrees;
+		}
+		UpdateSmoothedRotation(BodyState.bHasSmoothedHeadRotCS, BodyState.SmoothedHeadRotCS, TargetRotCS, HeadRotAlpha, MaxHeadStepDegrees);
+		ApplyRotationCS(CSPose, Head, BodyState.SmoothedHeadRotCS);
+		return true;
+	};
+
+	if (bHoldingDenseHeadLocalTarget)
+	{
+		if (BodyState.bHasSmoothedNeckRotCS)
+		{
+			ApplyRotationCS(CSPose, Neck, BodyState.SmoothedNeckRotCS);
+		}
+		if (BodyState.bHasSmoothedNeck02RotCS)
+		{
+			ApplyRotationCS(CSPose, Neck02, BodyState.SmoothedNeck02RotCS);
+		}
+	}
+	else
+	{
+		ApplyFaceDeltaFromChest(Neck, RefNeckComp, RefNeckBasisComp, NeckTargetBasis, 0.45f, 0.25f * FaceTwistWeight, BodyState.bHasSmoothedNeckRotCS, BodyState.SmoothedNeckRotCS);
+		ApplyFaceDeltaFromChest(Neck02, RefNeck02Comp, RefNeck02BasisComp, Neck02TargetBasis, 0.75f, 0.50f * FaceTwistWeight, BodyState.bHasSmoothedNeck02RotCS, BodyState.SmoothedNeck02RotCS);
+	}
+	if (!ApplyDenseHeadLocalEuler())
+	{
+		ApplyFaceDeltaFromChest(Head, RefHeadComp, RefHeadBasisComp, HeadTargetBasis, 1.0f, FaceTwistWeight, BodyState.bHasSmoothedHeadRotCS, BodyState.SmoothedHeadRotCS);
+	}
+	LatestSignalSnapshot.bValid = true;
+	LatestSignalSnapshot.RuntimeStateKey = RuntimeStateKey;
+	LatestSignalSnapshot.PoseTimestampUs = bHasPoseFrame ? PoseFrame.TimestampUs : -1;
+	LatestSignalSnapshot.Head.bHasDenseFace = bDenseFaceSignalValid;
+	LatestSignalSnapshot.Head.DenseFacePitchRatio = DenseFacePitchSignal;
+	LatestSignalSnapshot.Head.DenseFaceYawRatio = DenseFaceYawSignal;
+	LatestSignalSnapshot.Head.DenseFaceRollDeg = DenseFaceRollSignalDeg;
+	LatestSignalSnapshot.Head.DenseFacePitchDelta = DenseFacePitchDeltaSignal;
+	LatestSignalSnapshot.Head.DenseFaceYawDelta = DenseFaceYawDeltaSignal;
+	LatestSignalSnapshot.Head.DenseFaceRollDeltaDeg = DenseFaceRollDeltaSignalDeg;
+	LatestSignalSnapshot.Head.ScreenPitchDeg = ScreenHeadPitchDeg;
+	LatestSignalSnapshot.Head.ScreenYawDeg = ScreenHeadYawDeg;
+	LatestSignalSnapshot.Head.ScreenRollDeg = ScreenHeadRollDeg;
+	LatestSignalSnapshot.Head.ComputedPitchDeg = ScreenHeadPitchDeg + DenseHeadLocalPitchDeg;
+	LatestSignalSnapshot.Head.ComputedYawDeg = ScreenHeadYawDeg + DenseHeadLocalYawDeg;
+	LatestSignalSnapshot.Head.ComputedRollDeg = ScreenHeadRollDeg + DenseHeadLocalRollDeg;
 
 	if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
 	{
@@ -1113,7 +1408,7 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 				bScreenHasEyes2D,
 				bScreenHasEars2D,
 				bScreenHasMouth2D,
-				HeadFaceBlend,
+				FaceBlendWeight,
 				FaceTwistWeight,
 				QuatAngularDistanceDegrees(FaceHeadTargetBasis, ChestTargetBasis),
 				ScreenHeadCenterDelta2D.X,

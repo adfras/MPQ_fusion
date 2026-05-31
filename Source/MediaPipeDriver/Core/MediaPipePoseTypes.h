@@ -69,6 +69,7 @@ struct FMediaPipePoseLandmarks
 };
 
 static constexpr int32 MediaPipeHandLandmarkCount = 21;
+static constexpr int32 MediaPipeFaceLandmarkMaxCount = 478;
 
 struct FMediaPipeRawHandLandmark
 {
@@ -97,15 +98,73 @@ struct FMediaPipeRawHandPair
 	FMediaPipeRawHandLandmarks RightWorld{};
 };
 
+struct FMediaPipeRawFaceLandmarks
+{
+	int32 Count = 0;
+	FMediaPipeRawHandLandmark Landmarks[MediaPipeFaceLandmarkMaxCount];
+};
+
+struct FMediaPipeRawFacePose
+{
+	uint8 bHasFace = 0;
+	uint8 bHasTransform = 0;
+	uint8 Reserved[2] = {0, 0};
+	float Score = 0.0f;
+	FMediaPipeRawFaceLandmarks Normalized{};
+	float FacialTransform[16] = {
+		1.0f, 0.0f, 0.0f, 0.0f,
+		0.0f, 1.0f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.0f, 0.0f, 0.0f, 1.0f
+	};
+};
+
 struct FMediaPipePoseFrame
 {
 	FMediaPipePoseLandmarks Normalized;
 	FMediaPipePoseLandmarks World;
 	FMediaPipeRawHandPair Hands{};
+	FMediaPipeRawFacePose Face{};
 	int64 TimestampUs = 0;
 	bool bValid = false;
 	bool bSourceConditioned = false;
 	bool bHasHands = false;
+	bool bHasFace = false;
+
+	struct FConditioningDiagnostics
+	{
+		double SourceVideoFps = 0.0;
+		double MediaPipeOutputFps = 0.0;
+		double UniquePoseTimestampFps = 0.0;
+		double TimestampDriftSeconds = 0.0;
+		float SourceAgeMs = 0.0f;
+		float PredictionHorizonMs = 0.0f;
+		float MaxPredictionHorizonMs = 0.0f;
+		float EffectiveAddedLatencyMs = 0.0f;
+		float QualityScore = 1.0f;
+		float MeanLandmarkConfidence = 1.0f;
+		float MeanLandmarkJitter = 0.0f;
+		float MaxLandmarkJitter = 0.0f;
+		float WholePoseSpikeScore = 0.0f;
+		float RootPelvisQuality = 1.0f;
+		float TorsoSpineQuality = 1.0f;
+		float HeadNeckQuality = 1.0f;
+		float ShoulderClavicleQuality = 1.0f;
+		float ArmsQuality = 1.0f;
+		float HandsWristsQuality = 1.0f;
+		float HipsQuality = 1.0f;
+		float LegsQuality = 1.0f;
+		float FeetAnklesQuality = 1.0f;
+		int32 RepeatedPoseRunLength = 0;
+		int32 DroppedFrameCount = 0;
+		uint8 bPredicted = 0;
+		uint8 bRepeatedPose = 0;
+		uint8 bTimestampDiscontinuity = 0;
+		uint8 bConfidenceCollapse = 0;
+		uint8 bWholePoseSpike = 0;
+	};
+
+	FConditioningDiagnostics ConditioningDiagnostics;
 };
 
 struct FMediaPipePosePipelineStats

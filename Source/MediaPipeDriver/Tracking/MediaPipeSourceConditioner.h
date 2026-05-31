@@ -10,6 +10,10 @@ struct MEDIAPIPEDRIVER_API FMediaPipeSourceConditionerOptions
 	bool bEnabled = true;
 	bool bHoldBadLandmarks = true;
 	bool bSmoothLandmarks = true;
+	bool bAdaptivePoseConditioning = true;
+	bool bAdaptivePosePrediction = true;
+	bool bAdaptivePoseQualityDebug = false;
+	bool bAdaptivePoseLog = false;
 	bool bAdaptiveSegmentLengths = true;
 	bool bFootForwardHemisphere = true;
 	bool bOcclusionArmHold = false;
@@ -17,6 +21,9 @@ struct MEDIAPIPEDRIVER_API FMediaPipeSourceConditionerOptions
 	float MinLandmarkReliability = 0.10f;
 	float LandmarkSmoothingHalfLifeSeconds = 0.08f;
 	float LandmarkSmoothingFastSpeedMps = 2.50f;
+	float AdaptivePoseMaxPredictionMs = 50.0f;
+	float AdaptivePoseMinCutoff = 1.8f;
+	float AdaptivePoseBeta = 0.25f;
 	float SegmentLengthAdaptAlpha = 0.025f;
 	float OcclusionArmHoldAcquireScore = 2.05f;
 	float OcclusionArmHoldReleaseScore = 1.35f;
@@ -48,7 +55,8 @@ public:
 		float WorldScaleCm,
 		bool bMirrorLandmarksLR,
 		const FMediaPipeSourceConditionerOptions& Options,
-		FMediaPipePoseFrame& OutFrame);
+		FMediaPipePoseFrame& OutFrame,
+		double QueryTimeSeconds = -1.0);
 
 private:
 	struct FLengthState
@@ -88,7 +96,37 @@ private:
 		FVector RightShoulderLocal = FVector::ZeroVector;
 	};
 
+	struct FAdaptiveLandmarkFilterState
+	{
+		bool bHasWorld = false;
+		bool bHasNormalized = false;
+		FVector WorldValue = FVector::ZeroVector;
+		FVector WorldDerivative = FVector::ZeroVector;
+		FVector NormalizedValue = FVector::ZeroVector;
+		FVector NormalizedDerivative = FVector::ZeroVector;
+		double LastWorldUpdateSeconds = -1.0;
+		double LastNormalizedUpdateSeconds = -1.0;
+	};
+
+	struct FPoseHistorySample
+	{
+		bool bValid = false;
+		FMediaPipePoseFrame Frame;
+		double ArrivalSeconds = 0.0;
+		double SourceTimestampSeconds = 0.0;
+		double SourceDeltaSeconds = 0.0;
+		float QualityScore = 1.0f;
+		float MeanConfidence = 1.0f;
+		float MeanJitter = 0.0f;
+		float MaxJitter = 0.0f;
+		float WholePoseSpikeScore = 0.0f;
+		bool bConfidenceCollapse = false;
+		bool bWholePoseSpike = false;
+		bool bTimestampDiscontinuity = false;
+	};
+
 	void ResetHistory();
+	void ResetAdaptiveHistory();
 
 	bool IsLandmarkReliable(const FMediaPipePoseFrame& Frame, EMediaPipePoseLandmark Landmark, const FMediaPipeSourceConditionerOptions& Options) const;
 	void ApplyHoldAndSmoothing(FMediaPipePoseFrame& Frame, double DeltaSeconds, const FMediaPipeSourceConditionerOptions& Options);
@@ -103,6 +141,17 @@ private:
 	void ApplyShoulderGirdleReconstruction(FMediaPipePoseFrame& Frame, const FTorsoBasis& Basis, const FMediaPipeSourceConditionerOptions& Options);
 	void UpdateArmAnchor(FMediaPipePoseFrame& Frame, const FTorsoBasis& Basis, bool bIsLeft);
 	void ApplyArmHold(FMediaPipePoseFrame& Frame, const FTorsoBasis& Basis, bool bIsLeft, float Alpha, const FMediaPipeSourceConditionerOptions& Options);
+	void StoreUniqueSample(const FMediaPipePoseFrame& Frame, double ArrivalSeconds, double SourceDeltaSeconds, bool bTimestampDiscontinuity);
+	void BuildRenderTimeFrame(double QueryTimeSeconds, const FMediaPipeSourceConditionerOptions& Options, FMediaPipePoseFrame& OutFrame);
+	FVector ApplyAdaptiveOneEuroFilter(
+		FAdaptiveLandmarkFilterState& State,
+		const FVector& Target,
+		double QueryTimeSeconds,
+		float QualityScore,
+		float MeanJitter,
+		const FMediaPipeSourceConditionerOptions& Options,
+		bool bWorld);
+	void UpdateSampleDiagnostics(FPoseHistorySample& Sample);
 
 	bool bHasLastTimestamp = false;
 	int64 LastTimestampUs = 0;
@@ -110,9 +159,17 @@ private:
 	TStaticArray<bool, MediaPipePoseLandmarkCount> bHasPreviousLandmark;
 	TStaticArray<FMediaPipePoseLandmark, MediaPipePoseLandmarkCount> PreviousWorld;
 	TStaticArray<FMediaPipePoseLandmark, MediaPipePoseLandmarkCount> PreviousNormalized;
+	TStaticArray<FAdaptiveLandmarkFilterState, MediaPipePoseLandmarkCount> AdaptiveFilters;
 
 	TArray<FLengthState> SegmentLengthStates;
 	TArray<FLengthState> WidthLengthStates;
+	FPoseHistorySample RecentSamples[3];
+	int32 RecentSampleCount = 0;
+	double SourceCadenceSeconds = 0.0;
+	int32 UniquePoseCount = 0;
+	int32 RepeatedFrameRunLength = 0;
+	int32 DroppedFrameCount = 0;
+	double LastAdaptivePoseLogSeconds = -1.0;
 
 	bool bHasStableFootForwardLocal[2] = { false, false };
 	FVector StableFootForwardLocal[2] = { FVector::ForwardVector, FVector::ForwardVector };

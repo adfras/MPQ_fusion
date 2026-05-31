@@ -535,10 +535,14 @@ void ApplyStableMediaPipeRetargetProfile()
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
+	SetConsoleInt(TEXT("mp.MediaPipeHolisticShoulderSolve"), 0);
+	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 1.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeSpineRotationHalfLife"), 0.14f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.18f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadTwistWeight"), 0.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 0.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadPitchScale"), 1.0f);
+	SetConsoleInt(TEXT("mp.MediaPipeHolisticHeadSolve"), 0);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"), 1.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxSpeedDegreesPerSecond"), 60.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeSourceSmoothingHalfLife"), 0.16f);
@@ -560,14 +564,18 @@ void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 	SetConsoleInt(TEXT("mp.MediaPipeDriveMetaHumanArmHelpers"), 1);
 	SetConsoleFloat(TEXT("mp.MediaPipeTorsoUprightBlend"), 0.25f);
 	SetConsoleFloat(TEXT("mp.MediaPipeTorsoMaxTiltDegrees"), 45.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 1.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 0.75f);
-	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 6.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.035f);
+	SetConsoleInt(TEXT("mp.MediaPipeHolisticShoulderSolve"), 1);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.85f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 8.0f);
+	SetConsoleInt(TEXT("mp.MediaPipeHolisticHeadSolve"), 1);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.08f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 1.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadPitchScale"), 1.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadTwistWeight"), 1.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"), 45.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxSpeedDegreesPerSecond"), 2160.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"), 0.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationMaxSpeedDegreesPerSecond"), 0.0f);
 	SetConsoleInt(TEXT("mp.AutoQuestArmReachAssistProfile"), 0);
 	SetConsoleInt(TEXT("mp.QuestHandTracking"), 0);
 	SetConsoleInt(TEXT("mp.QuestHandDriveFingerBones"), 0);
@@ -3791,8 +3799,13 @@ void HandleStartPlacedEmbodiedTrackingCommand(const TArray<FString>& Args, UWorl
 		return;
 	}
 
-	PlacedPawn->StartEmbodiedTracking();
-	UE_LOG(LogMediaPipePose, Log, TEXT("mp.StartPlacedEmbodiedTracking: started placed embodied pawn=%s location=%s rotation=%s."),
+	PlacedPawn->Tags.AddUnique(CommandOnlyEmbodiedStartTag);
+	ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+	const bool bWasTracking = PlacedPawn->IsEmbodiedTrackingStarted();
+	PlacedPawn->StartEmbodiedTracking(true);
+	ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+	UE_LOG(LogMediaPipePose, Log, TEXT("mp.StartPlacedEmbodiedTracking: %s placed embodied pawn=%s profile=MediaPipeOnlyHolistic location=%s rotation=%s."),
+		bWasTracking ? TEXT("refreshed") : TEXT("started"),
 		*GetNameSafe(PlacedPawn),
 		*PlacedPawn->GetActorLocation().ToCompactString(),
 		*PlacedPawn->GetActorRotation().ToCompactString());

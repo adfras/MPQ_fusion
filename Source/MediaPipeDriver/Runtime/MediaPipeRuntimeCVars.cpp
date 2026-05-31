@@ -1146,6 +1146,16 @@ namespace MediaPipeRuntimeCVars
 		8.0f,
 		TEXT("Shoulder-height rise in centimeters that reaches full MediaPipe clavicle shrug response."));
 
+	TAutoConsoleVariable<int32> CVarMediaPipeHolisticShoulderSolve(
+		TEXT("mp.MediaPipeHolisticShoulderSolve"),
+		0,
+		TEXT("When non-zero, dense Holistic face landmarks are used for shoulder/head clearance instead of only sparse pose face points."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeShoulderLiftTranslationScale(
+		TEXT("mp.MediaPipeShoulderLiftTranslationScale"),
+		1.0f,
+		TEXT("Scales solved shoulder lift translation before it is applied to the clavicle and arm chain."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeShoulderRollbackTrace(
 		TEXT("mp.MediaPipeShoulderRollbackTrace"),
 		0,
@@ -1205,6 +1215,16 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeHeadFaceBlend"),
 		0.0f,
 		TEXT("Blend from stable chest-aligned head basis to face-landmark head basis. 0 disables noisy live face orientation; 1 uses full face orientation."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHeadPitchScale(
+		TEXT("mp.MediaPipeHeadPitchScale"),
+		1.0f,
+		TEXT("Multiplier for face-derived head pitch/nod after reliability gating. Does not affect yaw, roll, or twist."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeHolisticHeadSolve(
+		TEXT("mp.MediaPipeHolisticHeadSolve"),
+		0,
+		TEXT("When non-zero, dense Holistic face landmarks drive the head nod/roll solve independently from the older sparse pose face proxy."));
 
 	TAutoConsoleVariable<float> CVarMediaPipeHeadRotationMaxStepDegrees(
 		TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"),

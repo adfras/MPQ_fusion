@@ -99,9 +99,11 @@ bool FMediaPipePoseWrapper::Load(const FString& DllPath)
 	InitFn = reinterpret_cast<MP_InitFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_Init")));
 	Init2Fn = reinterpret_cast<MP_Init2Fn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_Init2")));
 	Init3Fn = reinterpret_cast<MP_Init3Fn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_Init3")));
+	Init4Fn = reinterpret_cast<MP_Init4Fn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_Init4")));
 	ProcessFrameFn = reinterpret_cast<MP_ProcessFrameFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_ProcessFrame")));
 	GetLandmarksFn = reinterpret_cast<MP_GetLandmarksFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_GetLandmarks")));
 	GetHandsFn = reinterpret_cast<MP_GetHandLandmarksFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_GetHandLandmarks")));
+	GetFaceFn = reinterpret_cast<MP_GetFacePoseFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_GetFacePose")));
 	ShutdownFn = reinterpret_cast<MP_ShutdownFn>(FPlatformProcess::GetDllExport(DllHandle, TEXT("MP_Shutdown")));
 
 	if (!InitFn || !ProcessFrameFn || !GetLandmarksFn || !ShutdownFn)
@@ -119,12 +121,15 @@ void FMediaPipePoseWrapper::Unload()
 	bReady = false;
 	bMockMode = false;
 	bHandsEnabled = false;
+	bFaceEnabled = false;
 	InitFn = nullptr;
 	Init2Fn = nullptr;
 	Init3Fn = nullptr;
+	Init4Fn = nullptr;
 	ProcessFrameFn = nullptr;
 	GetLandmarksFn = nullptr;
 	GetHandsFn = nullptr;
+	GetFaceFn = nullptr;
 	ShutdownFn = nullptr;
 
 	if (DllHandle)
@@ -140,7 +145,7 @@ void FMediaPipePoseWrapper::Unload()
 	}
 }
 
-bool FMediaPipePoseWrapper::Init(const FString& PoseModelPath, const FString& HandModelPath, const FMediaPipePoseNativeOptions& Options)
+bool FMediaPipePoseWrapper::Init(const FString& PoseModelPath, const FString& HandModelPath, const FString& HolisticModelPath, const FMediaPipePoseNativeOptions& Options)
 {
 	if (!IsLoaded() || !InitFn)
 	{
@@ -150,9 +155,32 @@ bool FMediaPipePoseWrapper::Init(const FString& PoseModelPath, const FString& Ha
 
 	bMockMode = false;
 	bHandsEnabled = false;
+	bFaceEnabled = false;
 
 	const bool bWantsHands = Options.bEnableHands && !HandModelPath.IsEmpty() && FPaths::FileExists(HandModelPath);
-	if (Init3Fn)
+	const bool bWantsHolistic = !HolisticModelPath.IsEmpty() && FPaths::FileExists(HolisticModelPath);
+	if (bWantsHolistic && Init4Fn)
+	{
+		FMediaPipeNativeInitOptions NativeOptions;
+		NativeOptions.EnableHands = bWantsHands ? 1 : 0;
+		NativeOptions.NumPoses = FMath::Clamp(Options.NumPoses, 1, 4);
+		NativeOptions.MinPoseDetectionConfidence = FMath::Clamp(Options.MinPoseDetectionConfidence, 0.0f, 1.0f);
+		NativeOptions.MinPosePresenceConfidence = FMath::Clamp(Options.MinPosePresenceConfidence, 0.0f, 1.0f);
+		NativeOptions.MinTrackingConfidence = FMath::Clamp(Options.MinTrackingConfidence, 0.0f, 1.0f);
+		NativeOptions.OutputSegmentationMasks = Options.bOutputSegmentationMasks ? 1 : 0;
+		NativeOptions.NumHands = FMath::Clamp(Options.NumHands, 1, 2);
+		NativeOptions.MinHandDetectionConfidence = FMath::Clamp(Options.MinHandDetectionConfidence, 0.0f, 1.0f);
+		NativeOptions.MinHandPresenceConfidence = FMath::Clamp(Options.MinHandPresenceConfidence, 0.0f, 1.0f);
+		NativeOptions.MinHandTrackingConfidence = FMath::Clamp(Options.MinHandTrackingConfidence, 0.0f, 1.0f);
+
+		FTCHARToUTF8 PoseUtf8(*PoseModelPath);
+		FTCHARToUTF8 HandUtf8(bWantsHands ? *HandModelPath : TEXT(""));
+		FTCHARToUTF8 HolisticUtf8(*HolisticModelPath);
+		bReady = Init4Fn(PoseUtf8.Get(), HandUtf8.Get(), HolisticUtf8.Get(), &NativeOptions);
+		bHandsEnabled = bReady && bWantsHands && GetHandsFn;
+		bFaceEnabled = bReady && GetFaceFn;
+	}
+	else if (Init3Fn)
 	{
 		FMediaPipeNativeInitOptions NativeOptions;
 		NativeOptions.EnableHands = bWantsHands ? 1 : 0;
@@ -205,6 +233,13 @@ bool FMediaPipePoseWrapper::Init(const FString& PoseModelPath, const FString& Ha
 			FMath::Clamp(Options.MinHandPresenceConfidence, 0.0f, 1.0f),
 			FMath::Clamp(Options.MinHandTrackingConfidence, 0.0f, 1.0f),
 			bWantsHands ? *HandModelPath : TEXT("none"));
+		UE_LOG(
+			LogMediaPipePose,
+			Log,
+			TEXT("MediaPipe wrapper holistic options: init4=%s holistic=%s holistic_model=%s"),
+			Init4Fn ? TEXT("true") : TEXT("false"),
+			bFaceEnabled ? TEXT("enabled") : TEXT("off"),
+			bWantsHolistic ? *HolisticModelPath : TEXT("none"));
 	}
 
 	return bReady;
@@ -298,6 +333,16 @@ bool FMediaPipePoseWrapper::GetHandLandmarks(FMediaPipeRawHandPair& OutHands)
 	return GetHandsFn(&OutHands);
 }
 
+bool FMediaPipePoseWrapper::GetFacePose(FMediaPipeRawFacePose& OutFace)
+{
+	if (!IsReady() || !GetFaceFn || !bFaceEnabled)
+	{
+		return false;
+	}
+
+	return GetFaceFn(&OutFace);
+}
+
 void FMediaPipePoseWrapper::Shutdown()
 {
 	const MP_ShutdownFn LocalShutdownFn = ShutdownFn;
@@ -305,6 +350,7 @@ void FMediaPipePoseWrapper::Shutdown()
 	bReady = false;
 	bMockMode = false;
 	bHandsEnabled = false;
+	bFaceEnabled = false;
 
 	if (bShouldShutdown)
 	{
