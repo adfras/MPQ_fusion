@@ -36,10 +36,13 @@ public:
 	UPROPERTY(EditAnywhere, Category="MediaPipe")
 	TObjectPtr<AActor> SourceActor = nullptr;
 
-	// Forces a one-shot reset of cached reference/smoothing state on the next PreUpdate/Evaluate.
+	// Forces a one-shot reset of smoothing state on the next PreUpdate/Evaluate.
 	// Useful when toggling runtime settings via console commands (e.g. mp.MetaRootMotion) mid-playback.
 	UPROPERTY(EditAnywhere, Category="MediaPipe")
 	bool bResetPoseStateNextUpdate = false;
+
+	// Reset pose-derived signal baselines only when the tracking source or clip changes.
+	bool bResetDerivedSignalReferencesNextUpdate = false;
 
 	// --- What to drive ---
 	UPROPERTY(EditAnywhere, Category="MediaPipe")

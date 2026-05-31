@@ -1680,12 +1680,267 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			const float ArmForward = FMath::Clamp(FVector::DotProduct(PoseUpperComp, ForwardComp), -1.0f, 1.0f);
 			float ShoulderShrugCm = 0.0f;
 			float ShoulderShrugW = 0.0f;
+			float ShoulderLiftTranslationCm = 0.0f;
+			float ShoulderSignedLiftCm = 0.0f;
+			float ShoulderSignedLiftW = 0.0f;
+			float ShoulderRelativeLiftCm = 0.0f;
+			float ShoulderRelativeLiftW = 0.0f;
+			float ShoulderScreenLift = 0.0f;
+			float ShoulderScreenLiftW = 0.0f;
+			float ShoulderHeadClearanceCm = 0.0f;
+			float ShoulderHeadClearanceShrugCm = 0.0f;
+			float BilateralShoulderHeadClearanceCm = 0.0f;
+			float BilateralShoulderHeadClearanceReferenceCm = BodyState.BilateralShoulderHeadClearanceReferenceCm;
+			float BilateralShoulderHeadClearanceShrugCm = 0.0f;
+			float RigShoulderWidthForClearanceCm = 0.0f;
+			float AppliedClavicleLiftCm = 0.0f;
+			float AppliedUpperLiftCm = 0.0f;
+			int32 SharedClearanceMode = 0;
+			int32 SharedClearanceHadReference = 0;
+			int32 SharedClearanceInitializedReference = 0;
+			float SharedClearanceReferenceBeforeCm = 0.0f;
+			bool bAppliedHeadClearanceShrug = false;
 			const float ClavicleShrugWeight = FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
+			const float ShrugStartCm = FMath::Max(0.0f, CVarMediaPipeClavicleShrugMinCm.GetValueOnAnyThread());
+			const float ShrugFullCm = FMath::Max(
+				ShrugStartCm + 0.5f,
+				CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
+			auto TryGetNormalizedXY = [&](const int32 LmIdx, FVector2D& Out) -> bool
+			{
+				if (LmIdx < 0 || !bHasPoseFrame || !IsMeasured(LmIdx) || !PoseFrame.Normalized.IsValidIndex(LmIdx))
+				{
+					return false;
+				}
+				const FMediaPipePoseLandmark& Lm = PoseFrame.Normalized.Points[LmIdx];
+				if (!FMath::IsFinite(Lm.X) || !FMath::IsFinite(Lm.Y))
+				{
+					return false;
+				}
+				Out = FVector2D(Lm.X, Lm.Y);
+				return true;
+			};
 			if (ClavicleShrugWeight > KINDA_SMALL_NUMBER && bHasTorsoBasis)
 			{
 				FVector LeftHipWorld = FVector::ZeroVector;
 				FVector RightHipWorld = FVector::ZeroVector;
 				const FVector UpWorldSafe = UpWorld.GetSafeNormal();
+				struct FShoulderClearance2DResult
+				{
+					bool bValid = false;
+					float LeftClearanceCm = 0.0f;
+					float RightClearanceCm = 0.0f;
+					float BilateralClearanceCm = 0.0f;
+					float BilateralReferenceCm = 0.0f;
+					float BilateralShrugCm = 0.0f;
+					float LeftAsymCm = 0.0f;
+					float RightAsymCm = 0.0f;
+					int32 SourceMode = 0;
+				};
+				auto ResolveRigShoulderWidthCm = [&](const float SourceShoulderWidthCm) -> float
+				{
+					float RigShoulderWidthCm = SourceShoulderWidthCm;
+					if (UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate())
+					{
+						const FVector LeftUpperComp =
+							CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation();
+						const FVector RightUpperComp =
+							CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation();
+						const FVector ShoulderRightSafe = ShoulderRightComp.GetSafeNormal();
+						const float AcrossShoulderCm = !ShoulderRightSafe.IsNearlyZero()
+							? FMath::Abs(FVector::DotProduct(RightUpperComp - LeftUpperComp, ShoulderRightSafe))
+							: FVector::Dist(LeftUpperComp, RightUpperComp);
+						if (AcrossShoulderCm > 5.0f)
+						{
+							RigShoulderWidthCm = AcrossShoulderCm;
+						}
+					}
+					return RigShoulderWidthCm;
+				};
+				auto TryGetPairedHeadSidePoints2D = [&](FVector2D& OutLeftHeadSide2D, FVector2D& OutRightHeadSide2D) -> bool
+				{
+					FVector2D Left2D = FVector2D::ZeroVector;
+					FVector2D Right2D = FVector2D::ZeroVector;
+					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, Left2D) &&
+						TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, Right2D))
+					{
+						OutLeftHeadSide2D = Left2D;
+						OutRightHeadSide2D = Right2D;
+						return true;
+					}
+					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, Left2D) &&
+						TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, Right2D))
+					{
+						OutLeftHeadSide2D = Left2D;
+						OutRightHeadSide2D = Right2D;
+						return true;
+					}
+					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::Nose, Left2D))
+					{
+						OutLeftHeadSide2D = Left2D;
+						OutRightHeadSide2D = Left2D;
+						return true;
+					}
+					return false;
+				};
+				auto TryGetPairedHeadSidePointsWorld = [&](FVector& OutLeftHeadSideWorld, FVector& OutRightHeadSideWorld) -> bool
+				{
+					FVector LeftWorld = FVector::ZeroVector;
+					FVector RightWorld = FVector::ZeroVector;
+					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftWorld) &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEar, RightWorld))
+					{
+						OutLeftHeadSideWorld = LeftWorld;
+						OutRightHeadSideWorld = RightWorld;
+						return true;
+					}
+					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftWorld) &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEye, RightWorld))
+					{
+						OutLeftHeadSideWorld = LeftWorld;
+						OutRightHeadSideWorld = RightWorld;
+						return true;
+					}
+					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, LeftWorld))
+					{
+						OutLeftHeadSideWorld = LeftWorld;
+						OutRightHeadSideWorld = LeftWorld;
+						return true;
+					}
+					return false;
+				};
+				FShoulderClearance2DResult Clearance2D;
+				auto UpdateSharedClearance = [&](
+					const float LeftClearanceCm,
+					const float RightClearanceCm,
+					const float BilateralClearanceCm,
+					const int32 SourceMode) -> void
+				{
+					if (BilateralClearanceCm <= KINDA_SMALL_NUMBER)
+					{
+						return;
+					}
+
+					FDerivedSignalRuntimeState& DerivedSignals = GetDerivedSignalRuntimeState(RuntimeStateKey);
+					SharedClearanceHadReference = DerivedSignals.bHasBilateralShoulderHeadClearanceReference ? 1 : 0;
+					SharedClearanceReferenceBeforeCm = DerivedSignals.BilateralShoulderHeadClearanceReferenceCm;
+					float BilateralReferenceForShrugCm = BilateralClearanceCm;
+					if (!DerivedSignals.bHasBilateralShoulderHeadClearanceReference ||
+						DerivedSignals.BilateralShoulderHeadClearanceReferenceCm <= KINDA_SMALL_NUMBER)
+					{
+						SharedClearanceInitializedReference = 1;
+						DerivedSignals.bHasBilateralShoulderHeadClearanceReference = true;
+						DerivedSignals.BilateralShoulderHeadClearanceReferenceCm = BilateralClearanceCm;
+						DerivedSignals.LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = PoseFrame.TimestampUs;
+					}
+					else
+					{
+						BilateralReferenceForShrugCm = DerivedSignals.BilateralShoulderHeadClearanceReferenceCm;
+					}
+
+					Clearance2D.bValid = true;
+					Clearance2D.LeftClearanceCm = LeftClearanceCm;
+					Clearance2D.RightClearanceCm = RightClearanceCm;
+					Clearance2D.BilateralClearanceCm = BilateralClearanceCm;
+					Clearance2D.BilateralReferenceCm = BilateralReferenceForShrugCm;
+					Clearance2D.BilateralShrugCm = FMath::Max(
+						0.0f,
+						BilateralReferenceForShrugCm - BilateralClearanceCm);
+					Clearance2D.LeftAsymCm = RightClearanceCm - LeftClearanceCm;
+					Clearance2D.RightAsymCm = LeftClearanceCm - RightClearanceCm;
+					Clearance2D.SourceMode = SourceMode;
+
+					if (DerivedSignals.LastBilateralShoulderHeadClearanceReferencePoseTimestampUs != PoseFrame.TimestampUs)
+					{
+						const float ClearanceReferenceHalfLifeSeconds =
+							BilateralClearanceCm > DerivedSignals.BilateralShoulderHeadClearanceReferenceCm ? 0.20f : 8.00f;
+						const float ClearanceReferenceAlpha = HalfLifeToAlpha(ClearanceReferenceHalfLifeSeconds, DeltaSeconds);
+						DerivedSignals.BilateralShoulderHeadClearanceReferenceCm = FMath::Lerp(
+							DerivedSignals.BilateralShoulderHeadClearanceReferenceCm,
+							BilateralClearanceCm,
+							ClearanceReferenceAlpha);
+						DerivedSignals.LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = PoseFrame.TimestampUs;
+					}
+					BodyState.bHasBilateralShoulderHeadClearanceReference =
+						DerivedSignals.bHasBilateralShoulderHeadClearanceReference;
+					BodyState.BilateralShoulderHeadClearanceReferenceCm =
+						DerivedSignals.BilateralShoulderHeadClearanceReferenceCm;
+					BodyState.LastBilateralShoulderHeadClearanceReferencePoseTimestampUs =
+						DerivedSignals.LastBilateralShoulderHeadClearanceReferencePoseTimestampUs;
+				};
+				FVector LeftShoulderWorldForClearance = FVector::ZeroVector;
+				FVector RightShoulderWorldForClearance = FVector::ZeroVector;
+				FVector LeftHeadSideWorld = FVector::ZeroVector;
+				FVector RightHeadSideWorld = FVector::ZeroVector;
+				if (!UpWorldSafe.IsNearlyZero() &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, LeftShoulderWorldForClearance) &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, RightShoulderWorldForClearance) &&
+					TryGetPairedHeadSidePointsWorld(LeftHeadSideWorld, RightHeadSideWorld))
+				{
+					const float SourceShoulderWidthCm = FVector::Dist(LeftShoulderWorldForClearance, RightShoulderWorldForClearance);
+					const float RigShoulderWidthCm = ResolveRigShoulderWidthCm(SourceShoulderWidthCm);
+					RigShoulderWidthForClearanceCm = RigShoulderWidthCm;
+					if (SourceShoulderWidthCm > KINDA_SMALL_NUMBER && RigShoulderWidthCm > KINDA_SMALL_NUMBER)
+					{
+						const float SourceToRigScale = RigShoulderWidthCm / SourceShoulderWidthCm;
+						const float LeftClearanceCm =
+							FVector::DotProduct(LeftHeadSideWorld - LeftShoulderWorldForClearance, UpWorldSafe) * SourceToRigScale;
+						const float RightClearanceCm =
+							FVector::DotProduct(RightHeadSideWorld - RightShoulderWorldForClearance, UpWorldSafe) * SourceToRigScale;
+						UpdateSharedClearance(
+							LeftClearanceCm,
+							RightClearanceCm,
+							(LeftClearanceCm + RightClearanceCm) * 0.5f,
+							3);
+					}
+				}
+				FVector2D LeftShoulder2D = FVector2D::ZeroVector;
+				FVector2D RightShoulder2D = FVector2D::ZeroVector;
+				FVector2D LeftHeadSide2D = FVector2D::ZeroVector;
+				FVector2D RightHeadSide2D = FVector2D::ZeroVector;
+				if (!Clearance2D.bValid &&
+					TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftShoulder, LeftShoulder2D) &&
+					TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightShoulder, RightShoulder2D) &&
+					TryGetPairedHeadSidePoints2D(LeftHeadSide2D, RightHeadSide2D))
+				{
+					FVector LeftShoulderWorldForWidth = FVector::ZeroVector;
+					FVector RightShoulderWorldForWidth = FVector::ZeroVector;
+					float SourceShoulderWidthCm = 0.0f;
+					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, LeftShoulderWorldForWidth) &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, RightShoulderWorldForWidth))
+					{
+						SourceShoulderWidthCm = FVector::Dist(LeftShoulderWorldForWidth, RightShoulderWorldForWidth);
+					}
+					const float RigShoulderWidthCm = ResolveRigShoulderWidthCm(SourceShoulderWidthCm);
+					RigShoulderWidthForClearanceCm = RigShoulderWidthCm;
+					const float ShoulderSpan2D = FMath::Max(FVector2D::Distance(LeftShoulder2D, RightShoulder2D), 0.05f);
+					if (RigShoulderWidthCm > KINDA_SMALL_NUMBER)
+					{
+						const float LeftClearanceCm =
+							((LeftShoulder2D.Y - LeftHeadSide2D.Y) / ShoulderSpan2D) * RigShoulderWidthCm;
+						const float RightClearanceCm =
+							((RightShoulder2D.Y - RightHeadSide2D.Y) / ShoulderSpan2D) * RigShoulderWidthCm;
+						const float BilateralClearanceCm = (LeftClearanceCm + RightClearanceCm) * 0.5f;
+						UpdateSharedClearance(LeftClearanceCm, RightClearanceCm, BilateralClearanceCm, 2);
+					}
+				}
+				if (Clearance2D.bValid)
+				{
+					const float BilateralShrugCm = Clearance2D.BilateralShrugCm;
+					ShoulderHeadClearanceCm = bIsLeft ? Clearance2D.LeftClearanceCm : Clearance2D.RightClearanceCm;
+					ShoulderHeadClearanceShrugCm = BilateralShrugCm;
+					ShoulderShrugCm = FMath::Max(ShoulderShrugCm, BilateralShrugCm);
+					ShoulderShrugW +=
+						RemapPositiveUnbounded(BilateralShrugCm, ShrugStartCm, ShrugFullCm) *
+						ClavicleShrugWeight *
+						0.70f;
+					ShoulderLiftTranslationCm += BilateralShrugCm * 0.85f;
+					BilateralShoulderHeadClearanceCm = Clearance2D.BilateralClearanceCm;
+					BilateralShoulderHeadClearanceReferenceCm = Clearance2D.BilateralReferenceCm;
+					BilateralShoulderHeadClearanceShrugCm = BilateralShrugCm;
+					SharedClearanceMode = Clearance2D.SourceMode;
+					bAppliedHeadClearanceShrug = true;
+				}
+				const float LegacyShoulderDriverScale = Clearance2D.bValid ? 0.0f : 1.0f;
 				if (!UpWorldSafe.IsNearlyZero() &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
@@ -1701,36 +1956,188 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							ClavicleArmState.ShoulderHeightReferenceCm = ShoulderHeightCm;
 						}
 
-						const float ReferenceHalfLifeSeconds =
-							ShoulderHeightCm < ClavicleArmState.ShoulderHeightReferenceCm ? 0.25f : 6.0f;
+						const float ReferenceHalfLifeSeconds = 8.0f;
 						const float ReferenceAlpha = HalfLifeToAlpha(ReferenceHalfLifeSeconds, DeltaSeconds);
 						ClavicleArmState.ShoulderHeightReferenceCm = FMath::Lerp(
 							ClavicleArmState.ShoulderHeightReferenceCm,
 							ShoulderHeightCm,
 							ReferenceAlpha);
 
-						const float ShrugStartCm = FMath::Max(0.0f, CVarMediaPipeClavicleShrugMinCm.GetValueOnAnyThread());
-						const float ShrugFullCm = FMath::Max(
-							ShrugStartCm + 0.5f,
-							CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
-						ShoulderShrugCm = FMath::Max(0.0f, ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm);
-						ShoulderShrugW = RemapClamped(ShoulderShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
+						ShoulderSignedLiftCm = ShoulderHeightCm - ClavicleArmState.ShoulderHeightReferenceCm;
+						ShoulderSignedLiftW =
+							RemapSignedUnbounded(ShoulderSignedLiftCm, ShrugStartCm, ShrugFullCm) *
+							ClavicleShrugWeight *
+							0.30f *
+							LegacyShoulderDriverScale;
+						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderSignedLiftCm) * LegacyShoulderDriverScale);
+						ShoulderShrugW += ShoulderSignedLiftW;
+						ShoulderLiftTranslationCm += ShoulderSignedLiftCm * 0.01f * LegacyShoulderDriverScale;
 					}
 
+					const int32 OppositeShoulderLm = bIsLeft
+						? (int32)EMediaPipePoseLandmark::RightShoulder
+						: (int32)EMediaPipePoseLandmark::LeftShoulder;
 					const int32 EarLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEar : (int32)EMediaPipePoseLandmark::RightEar;
 					const int32 EyeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEye : (int32)EMediaPipePoseLandmark::RightEye;
-					FVector HeadSideWorld = FVector::ZeroVector;
-					if (!TryGetLmWorld(EarLm, HeadSideWorld) &&
-						!TryGetLmWorld(EyeLm, HeadSideWorld) &&
-						!TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, HeadSideWorld))
+					FVector OppositeShoulderWorld = FVector::ZeroVector;
+					if (TryGetLmWorld(OppositeShoulderLm, OppositeShoulderWorld))
 					{
-						HeadSideWorld = FVector::ZeroVector;
+						const float ShoulderWidthCm = FVector::Dist(ShoulderWorld, OppositeShoulderWorld);
+						const float RelativeLiftFullCm = FMath::Max(
+							2.5f,
+							FMath::Min(6.0f, ShoulderWidthCm * 0.14f));
+						const float RelativeLiftStartCm = FMath::Min(ShrugStartCm, 0.45f);
+						const float SignedRelativeLiftCm = FVector::DotProduct(ShoulderWorld - OppositeShoulderWorld, UpWorldSafe);
+						ShoulderRelativeLiftCm = SignedRelativeLiftCm;
+						ShoulderRelativeLiftW =
+							RemapSignedUnbounded(ShoulderRelativeLiftCm, RelativeLiftStartCm, RelativeLiftFullCm) *
+							ClavicleShrugWeight *
+							0.12f *
+							LegacyShoulderDriverScale;
+						ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Abs(ShoulderRelativeLiftCm) * LegacyShoulderDriverScale);
+						ShoulderShrugW += ShoulderRelativeLiftW;
+						ShoulderLiftTranslationCm += ShoulderRelativeLiftCm * 0.01f * LegacyShoulderDriverScale;
+
+						FVector2D Shoulder2D = FVector2D::ZeroVector;
+						FVector2D OppositeShoulder2D = FVector2D::ZeroVector;
+						FVector2D LeftHip2D = FVector2D::ZeroVector;
+						FVector2D RightHip2D = FVector2D::ZeroVector;
+						if (TryGetNormalizedXY(ShoulderLm, Shoulder2D) &&
+							TryGetNormalizedXY(OppositeShoulderLm, OppositeShoulder2D) &&
+							TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftHip, LeftHip2D) &&
+							TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightHip, RightHip2D))
+						{
+							const float ShoulderSpan2D = FMath::Max(FVector2D::Distance(Shoulder2D, OppositeShoulder2D), 0.05f);
+							const FVector2D HipMid2D = (LeftHip2D + RightHip2D) * 0.5f;
+							const float ShoulderHeight2D = (HipMid2D.Y - Shoulder2D.Y) / ShoulderSpan2D;
+							FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
+							if (!ClavicleArmState.bHasShoulderScreenHeightReference)
+							{
+								ClavicleArmState.bHasShoulderScreenHeightReference = true;
+								ClavicleArmState.ShoulderScreenHeightReference = ShoulderHeight2D;
+							}
+
+							const float ScreenReferenceHalfLifeSeconds = 10.0f;
+							const float ScreenReferenceAlpha = HalfLifeToAlpha(ScreenReferenceHalfLifeSeconds, DeltaSeconds);
+							ClavicleArmState.ShoulderScreenHeightReference = FMath::Lerp(
+								ClavicleArmState.ShoulderScreenHeightReference,
+								ShoulderHeight2D,
+								ScreenReferenceAlpha);
+
+							const float AbsoluteScreenLift = ShoulderHeight2D - ClavicleArmState.ShoulderScreenHeightReference;
+							const float RelativeScreenLift = (OppositeShoulder2D.Y - Shoulder2D.Y) / ShoulderSpan2D;
+							const float AbsoluteScreenLiftCm = AbsoluteScreenLift * ShoulderWidthCm;
+							const float RelativeScreenLiftCm = RelativeScreenLift * ShoulderWidthCm;
+							const float AbsoluteScreenLiftW =
+								RemapSignedUnbounded(AbsoluteScreenLiftCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight;
+							const float RelativeScreenLiftW =
+								RemapSignedUnbounded(RelativeScreenLiftCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight;
+							ShoulderScreenLift = AbsoluteScreenLift;
+							ShoulderScreenLiftW = (AbsoluteScreenLiftW * 0.85f + RelativeScreenLiftW * 0.10f) * LegacyShoulderDriverScale;
+							ShoulderShrugCm = FMath::Max(ShoulderShrugCm, FMath::Max(FMath::Abs(AbsoluteScreenLiftCm), FMath::Abs(RelativeScreenLiftCm)) * LegacyShoulderDriverScale);
+							ShoulderShrugW += ShoulderScreenLiftW;
+							ShoulderLiftTranslationCm += (AbsoluteScreenLiftCm * 0.03f + RelativeScreenLiftCm * 0.01f) * LegacyShoulderDriverScale;
+
+							if (Clearance2D.bValid)
+							{
+								ShoulderHeadClearanceCm = bIsLeft ? Clearance2D.LeftClearanceCm : Clearance2D.RightClearanceCm;
+							}
+
+							FVector2D HeadAnchor2D = FVector2D::ZeroVector;
+							FVector2D LeftEar2D = FVector2D::ZeroVector;
+							FVector2D RightEar2D = FVector2D::ZeroVector;
+							FVector2D LeftEye2D = FVector2D::ZeroVector;
+							FVector2D RightEye2D = FVector2D::ZeroVector;
+							bool bHasHeadAnchor2D = false;
+							if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LeftEar2D) &&
+								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, RightEar2D))
+							{
+								HeadAnchor2D = (LeftEar2D + RightEar2D) * 0.5f;
+								bHasHeadAnchor2D = true;
+							}
+							else if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, LeftEye2D) &&
+								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, RightEye2D))
+							{
+								HeadAnchor2D = (LeftEye2D + RightEye2D) * 0.5f;
+								bHasHeadAnchor2D = true;
+							}
+							else if (TryGetNormalizedXY(EarLm, HeadAnchor2D) ||
+								TryGetNormalizedXY(EyeLm, HeadAnchor2D) ||
+								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::Nose, HeadAnchor2D))
+							{
+								bHasHeadAnchor2D = true;
+							}
+
+							if (!bAppliedHeadClearanceShrug && bHasHeadAnchor2D)
+							{
+								FMediaPipeArmSolverState& ClearanceArmState = bIsLeft ? LeftArmState : RightArmState;
+								const float ScreenHeadClearanceCm = ((Shoulder2D.Y - HeadAnchor2D.Y) / ShoulderSpan2D) * ShoulderWidthCm;
+								ShoulderHeadClearanceCm = ScreenHeadClearanceCm;
+								if (ScreenHeadClearanceCm > KINDA_SMALL_NUMBER)
+								{
+									if (!ClearanceArmState.bHasShoulderHeadClearanceReference ||
+										ClearanceArmState.ShoulderHeadClearanceReferenceCm <= KINDA_SMALL_NUMBER)
+									{
+										ClearanceArmState.bHasShoulderHeadClearanceReference = true;
+										ClearanceArmState.ShoulderHeadClearanceReferenceCm = ScreenHeadClearanceCm;
+									}
+
+									const float ClearanceReferenceHalfLifeSeconds =
+										ScreenHeadClearanceCm > ClearanceArmState.ShoulderHeadClearanceReferenceCm ? 0.25f : 8.0f;
+									const float ClearanceReferenceAlpha = HalfLifeToAlpha(ClearanceReferenceHalfLifeSeconds, DeltaSeconds);
+									ClearanceArmState.ShoulderHeadClearanceReferenceCm = FMath::Lerp(
+										ClearanceArmState.ShoulderHeadClearanceReferenceCm,
+										ScreenHeadClearanceCm,
+										ClearanceReferenceAlpha);
+
+									const float ClearanceShrugCm = FMath::Max(
+										0.0f,
+										ClearanceArmState.ShoulderHeadClearanceReferenceCm - ScreenHeadClearanceCm);
+									ShoulderHeadClearanceShrugCm = ClearanceShrugCm;
+									if (ClearanceShrugCm > ShoulderShrugCm)
+									{
+										ShoulderShrugCm = ClearanceShrugCm;
+									}
+									ShoulderShrugW +=
+										RemapPositiveUnbounded(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
+										ClavicleShrugWeight *
+										0.45f;
+									ShoulderLiftTranslationCm += ClearanceShrugCm * 0.80f;
+									bAppliedHeadClearanceShrug = true;
+								}
+							}
+						}
 					}
 
-					if (!HeadSideWorld.IsNearlyZero())
+					FVector HeadAnchorWorld = FVector::ZeroVector;
+					FVector LeftEarWorldForClearance = FVector::ZeroVector;
+					FVector RightEarWorldForClearance = FVector::ZeroVector;
+					FVector LeftEyeWorldForClearance = FVector::ZeroVector;
+					FVector RightEyeWorldForClearance = FVector::ZeroVector;
+					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftEarWorldForClearance) &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEar, RightEarWorldForClearance))
+					{
+						HeadAnchorWorld = (LeftEarWorldForClearance + RightEarWorldForClearance) * 0.5f;
+					}
+					else if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftEyeWorldForClearance) &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEye, RightEyeWorldForClearance))
+					{
+						HeadAnchorWorld = (LeftEyeWorldForClearance + RightEyeWorldForClearance) * 0.5f;
+					}
+					else if (!TryGetLmWorld(EarLm, HeadAnchorWorld) &&
+						!TryGetLmWorld(EyeLm, HeadAnchorWorld) &&
+						!TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, HeadAnchorWorld))
+					{
+						HeadAnchorWorld = FVector::ZeroVector;
+					}
+
+					if (!bAppliedHeadClearanceShrug && !HeadAnchorWorld.IsNearlyZero())
 					{
 						FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
-						const float HeadClearanceCm = FVector::DotProduct(HeadSideWorld - ShoulderWorld, UpWorldSafe);
+						const float HeadClearanceCm = FVector::DotProduct(HeadAnchorWorld - ShoulderWorld, UpWorldSafe);
+						ShoulderHeadClearanceCm = HeadClearanceCm;
 						if (HeadClearanceCm > KINDA_SMALL_NUMBER)
 						{
 							if (!ClavicleArmState.bHasShoulderHeadClearanceReference ||
@@ -1748,25 +2155,68 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 								HeadClearanceCm,
 								ClearanceReferenceAlpha);
 
-							const float ShrugStartCm = FMath::Max(0.0f, CVarMediaPipeClavicleShrugMinCm.GetValueOnAnyThread());
-							const float ShrugFullCm = FMath::Max(
-								ShrugStartCm + 0.5f,
-								CVarMediaPipeClavicleShrugFullCm.GetValueOnAnyThread());
 							const float ClearanceShrugCm = FMath::Max(
 								0.0f,
 								ClavicleArmState.ShoulderHeadClearanceReferenceCm - HeadClearanceCm);
+							ShoulderHeadClearanceShrugCm = ClearanceShrugCm;
 							if (ClearanceShrugCm > ShoulderShrugCm)
 							{
 								ShoulderShrugCm = ClearanceShrugCm;
-								ShoulderShrugW = RemapClamped(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) * ClavicleShrugWeight;
 							}
+							ShoulderShrugW +=
+								RemapPositiveUnbounded(ClearanceShrugCm, ShrugStartCm, ShrugFullCm) *
+								ClavicleShrugWeight *
+								0.45f;
+							ShoulderLiftTranslationCm += ClearanceShrugCm * 0.80f;
 						}
 					}
 				}
 			}
 
-			const float UpW = FMath::Clamp((FMath::Clamp(ArmUp, 0.0f, 1.0f) * 0.35f) + ShoulderShrugW, 0.0f, 1.25f);
-			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.25f;
+			FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
+			const float ShrugWeightAlpha = HalfLifeToAlpha(
+				ShoulderShrugW > ClavicleArmState.SmoothedClavicleShrugWeight ? 0.12f : 0.18f,
+				DeltaSeconds);
+			if (!ClavicleArmState.bHasSmoothedClavicleShrugWeight)
+			{
+				ClavicleArmState.bHasSmoothedClavicleShrugWeight = true;
+				ClavicleArmState.SmoothedClavicleShrugWeight = ShoulderShrugW;
+			}
+			else
+			{
+				const float PreviousShrugWeight = ClavicleArmState.SmoothedClavicleShrugWeight;
+				const float DesiredShrugWeight = FMath::Lerp(
+					ClavicleArmState.SmoothedClavicleShrugWeight,
+					ShoulderShrugW,
+					ShrugWeightAlpha);
+				const float MaxShrugStep = FMath::Max(0.015f, 1.4f * FMath::Max(DeltaSeconds, 0.0f));
+				ClavicleArmState.SmoothedClavicleShrugWeight = FMath::Clamp(
+					DesiredShrugWeight,
+					PreviousShrugWeight - MaxShrugStep,
+					PreviousShrugWeight + MaxShrugStep);
+			}
+			ShoulderShrugW = ClavicleArmState.SmoothedClavicleShrugWeight;
+
+			const float LiftTranslationAlpha = HalfLifeToAlpha(
+				FMath::Abs(ShoulderLiftTranslationCm) > FMath::Abs(ClavicleArmState.SmoothedClavicleLiftTranslationCm) ? 0.08f : 0.14f,
+				DeltaSeconds);
+			if (!ClavicleArmState.bHasSmoothedClavicleLiftTranslation)
+			{
+				ClavicleArmState.bHasSmoothedClavicleLiftTranslation = true;
+				ClavicleArmState.SmoothedClavicleLiftTranslationCm = ShoulderLiftTranslationCm;
+			}
+			else
+			{
+				ClavicleArmState.SmoothedClavicleLiftTranslationCm = FMath::Lerp(
+					ClavicleArmState.SmoothedClavicleLiftTranslationCm,
+					ShoulderLiftTranslationCm,
+					LiftTranslationAlpha);
+			}
+
+			const float ArmDrivenClavicleUpW = FMath::Pow(FMath::Clamp(ArmUp, 0.0f, 1.0f), 1.35f) * 0.18f;
+			const float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW, -0.25f, 0.75f);
+			const float UpW = FMath::Clamp(ArmDrivenClavicleUpW + ShrugDrivenClavicleUpW, -0.25f, 0.85f);
+			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.14f;
 
 			FVector DesiredClavDir = (Outward + UpComp * UpW + ForwardComp * FwdW).GetSafeNormal();
 			if (DesiredClavDir.IsNearlyZero())
@@ -1780,6 +2230,36 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			FQuat& SmoothedClavRotCS = bIsLeft ? LeftArmState.SmoothedClavRotCS : RightArmState.SmoothedClavRotCS;
 			UpdateSmoothedRotation(bHasSmoothedClavRot, SmoothedClavRotCS, TargetClavRotCS, ClavAlpha, ArmMaxStepDegrees);
 			ApplyRotationCS(CSPose, ClavBone, SmoothedClavRotCS);
+			FVector ClavicleLiftDeltaComp = UpComp.GetSafeNormal();
+			if (!ClavicleLiftDeltaComp.IsNearlyZero())
+			{
+				const FVector LiftDirComp = ClavicleLiftDeltaComp;
+				FVector ClavicleBefore = FVector::ZeroVector;
+				FVector UpperBefore = FVector::ZeroVector;
+				if (ClavBone.IsValidToEvaluate())
+				{
+					ClavicleBefore = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
+				}
+				if (UpperBone.IsValidToEvaluate())
+				{
+					UpperBefore = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
+				}
+				ClavicleLiftDeltaComp *= ClavicleArmState.SmoothedClavicleLiftTranslationCm;
+				ApplyTranslationDeltaCS(CSPose, ClavBone, ClavicleLiftDeltaComp);
+				ApplyTranslationDeltaCS(CSPose, UpperBone, ClavicleLiftDeltaComp);
+				ApplyTranslationDeltaCS(CSPose, LowerBone, ClavicleLiftDeltaComp);
+				ApplyTranslationDeltaCS(CSPose, HandBone, ClavicleLiftDeltaComp);
+				if (ClavBone.IsValidToEvaluate())
+				{
+					const FVector ClavicleAfter = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
+					AppliedClavicleLiftCm = FVector::DotProduct(ClavicleAfter - ClavicleBefore, LiftDirComp);
+				}
+				if (UpperBone.IsValidToEvaluate())
+				{
+					const FVector UpperAfter = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
+					AppliedUpperLiftCm = FVector::DotProduct(UpperAfter - UpperBefore, LiftDirComp);
+				}
+			}
 
 			if (CVarMediaPipeTorsoDebug.GetValueOnAnyThread() != 0)
 			{
@@ -1787,13 +2267,31 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastClavicleDiagnosticLogTimeSeconds))
 				{
 					UE_LOG(LogMediaPipePose, Log,
-						TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=1 valid=1 armUp=%.2f armForward=%.2f shrugCm=%.1f shrugWeight=%.2f upWeight=%.2f forwardWeight=%.2f targetDeg=%.1f appliedDeg=%.1f alpha=%.2f maxStepDeg=%.1f"),
+						TEXT("mp.ClavicleDebug: actor=%s side=%s enabled=1 valid=1 runtimeKey=%u sharedClearance=%d refHad=%d refInit=%d refBeforeCm=%.1f rigWidthCm=%.1f bilateralClearanceCm=%.1f bilateralRefCm=%.1f bilateralShrugCm=%.1f armUp=%.2f armForward=%.2f shrugCm=%.1f shrugWeight=%.2f liftTranslateCm=%.1f appliedClavLiftCm=%.1f appliedUpperLiftCm=%.1f headClearanceCm=%.1f clearanceShrugCm=%.1f relativeLiftCm=%.1f relativeLiftWeight=%.2f screenLift=%.3f screenLiftWeight=%.2f upWeight=%.2f forwardWeight=%.2f targetDeg=%.1f appliedDeg=%.1f alpha=%.2f maxStepDeg=%.1f"),
 						*TargetActorName.ToString(),
 						ClavicleSideLabel,
+						RuntimeStateKey,
+						SharedClearanceMode,
+						SharedClearanceHadReference,
+						SharedClearanceInitializedReference,
+						SharedClearanceReferenceBeforeCm,
+						RigShoulderWidthForClearanceCm,
+						BilateralShoulderHeadClearanceCm,
+						BilateralShoulderHeadClearanceReferenceCm,
+						BilateralShoulderHeadClearanceShrugCm,
 						ArmUp,
 						ArmForward,
 						ShoulderShrugCm,
 						ShoulderShrugW,
+						ClavicleArmState.SmoothedClavicleLiftTranslationCm,
+						AppliedClavicleLiftCm,
+						AppliedUpperLiftCm,
+						ShoulderHeadClearanceCm,
+						ShoulderHeadClearanceShrugCm,
+						ShoulderRelativeLiftCm,
+						ShoulderRelativeLiftW,
+						ShoulderScreenLift,
+						ShoulderScreenLiftW,
 						UpW,
 						FwdW,
 						QuatAngularDistanceDegrees(TargetClavRotCS, RefClavComp),

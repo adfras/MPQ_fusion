@@ -41,7 +41,43 @@ struct FMediaPipeBodySolverState
 	bool bHasHeadScreenReference = false;
 	FVector2D HeadScreenCenterReference = FVector2D::ZeroVector;
 	FVector2D HeadScreenNoseReference = FVector2D::ZeroVector;
+	FVector2D HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+	bool bHasBilateralShoulderHeadClearanceReference = false;
+	float BilateralShoulderHeadClearanceReferenceCm = 0.0f;
+	int64 LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
+	float HeadScreenNoseEyePitchReference = 0.0f;
+	float HeadScreenMouthEyePitchReference = 0.0f;
+	float HeadScreenMouthEarPitchReference = 0.0f;
+	float HeadScreenNoseEarPitchReference = 0.0f;
+	float HeadWorldMouthEyePitchReference = 0.0f;
+	float HeadWorldNoseEyePitchReference = 0.0f;
+	float HeadWorldMouthEarPitchReference = 0.0f;
+	float HeadWorldNoseEarPitchReference = 0.0f;
+	float HeadWorldForwardPitchReferenceDeg = 0.0f;
+	float HeadScreenLateralAngleReferenceDeg = 0.0f;
 	float HeadScreenRollReferenceDeg = 0.0f;
+
+	void ResetDerivedSignalReferences()
+	{
+		bHasHeadScreenReference = false;
+		HeadScreenCenterReference = FVector2D::ZeroVector;
+		HeadScreenNoseReference = FVector2D::ZeroVector;
+		HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+		bHasBilateralShoulderHeadClearanceReference = false;
+		BilateralShoulderHeadClearanceReferenceCm = 0.0f;
+		LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
+		HeadScreenNoseEyePitchReference = 0.0f;
+		HeadScreenMouthEyePitchReference = 0.0f;
+		HeadScreenMouthEarPitchReference = 0.0f;
+		HeadScreenNoseEarPitchReference = 0.0f;
+		HeadWorldMouthEyePitchReference = 0.0f;
+		HeadWorldNoseEyePitchReference = 0.0f;
+		HeadWorldMouthEarPitchReference = 0.0f;
+		HeadWorldNoseEarPitchReference = 0.0f;
+		HeadWorldForwardPitchReferenceDeg = 0.0f;
+		HeadScreenLateralAngleReferenceDeg = 0.0f;
+		HeadScreenRollReferenceDeg = 0.0f;
+	}
 
 	void ResetTracking()
 	{
@@ -51,6 +87,7 @@ struct FMediaPipeBodySolverState
 		SmoothedPelvisOffsetComp = FVector::ZeroVector;
 		bHasSmoothedFkRootGroundOffset = false;
 		SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+		ResetDerivedSignalReferences();
 	}
 
 	void ResetTorsoStability()
@@ -76,10 +113,6 @@ struct FMediaPipeBodySolverState
 		SmoothedNeck02RotCS = FQuat::Identity;
 		bHasSmoothedHeadRotCS = false;
 		SmoothedHeadRotCS = FQuat::Identity;
-		bHasHeadScreenReference = false;
-		HeadScreenCenterReference = FVector2D::ZeroVector;
-		HeadScreenNoseReference = FVector2D::ZeroVector;
-		HeadScreenRollReferenceDeg = 0.0f;
 	}
 };
 
@@ -155,8 +188,14 @@ struct FMediaPipeArmSolverState
 	FVector LastReliableWristWorld = FVector::ZeroVector;
 	bool bHasShoulderHeightReference = false;
 	float ShoulderHeightReferenceCm = 0.0f;
+	bool bHasShoulderScreenHeightReference = false;
+	float ShoulderScreenHeightReference = 0.0f;
 	bool bHasShoulderHeadClearanceReference = false;
 	float ShoulderHeadClearanceReferenceCm = 0.0f;
+	bool bHasSmoothedClavicleShrugWeight = false;
+	float SmoothedClavicleShrugWeight = 0.0f;
+	bool bHasSmoothedClavicleLiftTranslation = false;
+	float SmoothedClavicleLiftTranslationCm = 0.0f;
 	bool bHasSmoothedClavRotCS = false;
 	FQuat SmoothedClavRotCS = FQuat::Identity;
 	bool bHasSmoothedUpperArmRotCS = false;
@@ -201,8 +240,14 @@ struct FMediaPipeArmSolverState
 		LastReliableWristWorld = FVector::ZeroVector;
 		bHasShoulderHeightReference = false;
 		ShoulderHeightReferenceCm = 0.0f;
+		bHasShoulderScreenHeightReference = false;
+		ShoulderScreenHeightReference = 0.0f;
 		bHasShoulderHeadClearanceReference = false;
 		ShoulderHeadClearanceReferenceCm = 0.0f;
+		bHasSmoothedClavicleShrugWeight = false;
+		SmoothedClavicleShrugWeight = 0.0f;
+		bHasSmoothedClavicleLiftTranslation = false;
+		SmoothedClavicleLiftTranslationCm = 0.0f;
 		bHasSmoothedClavRotCS = false;
 		SmoothedClavRotCS = FQuat::Identity;
 		bHasSmoothedUpperArmRotCS = false;

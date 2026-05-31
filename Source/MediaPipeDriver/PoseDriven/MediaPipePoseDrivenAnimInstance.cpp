@@ -123,6 +123,72 @@ namespace
 		ResetQuestWristRuntimeState(Key);
 	}
 
+	struct FDerivedSignalRuntimeState
+	{
+		bool bHasHeadScreenReference = false;
+		FVector2D HeadScreenCenterReference = FVector2D::ZeroVector;
+		FVector2D HeadScreenNoseReference = FVector2D::ZeroVector;
+		FVector2D HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+		float HeadScreenNoseEyePitchReference = 0.0f;
+		float HeadScreenMouthEyePitchReference = 0.0f;
+		float HeadScreenMouthEarPitchReference = 0.0f;
+		float HeadScreenNoseEarPitchReference = 0.0f;
+		float HeadWorldMouthEyePitchReference = 0.0f;
+		float HeadWorldNoseEyePitchReference = 0.0f;
+		float HeadWorldMouthEarPitchReference = 0.0f;
+		float HeadWorldNoseEarPitchReference = 0.0f;
+		float HeadWorldForwardPitchReferenceDeg = 0.0f;
+		float HeadScreenLateralAngleReferenceDeg = 0.0f;
+		float HeadScreenRollReferenceDeg = 0.0f;
+		bool bHasBilateralShoulderHeadClearanceReference = false;
+		float BilateralShoulderHeadClearanceReferenceCm = 0.0f;
+		int64 LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
+		bool bHasValidScreenFacePitchInput = false;
+		float LastValidScreenFacePitchInput = 0.0f;
+
+		void Reset()
+		{
+			bHasHeadScreenReference = false;
+			HeadScreenCenterReference = FVector2D::ZeroVector;
+			HeadScreenNoseReference = FVector2D::ZeroVector;
+			HeadScreenShoulderNoseReference = FVector2D::ZeroVector;
+			HeadScreenNoseEyePitchReference = 0.0f;
+			HeadScreenMouthEyePitchReference = 0.0f;
+			HeadScreenMouthEarPitchReference = 0.0f;
+			HeadScreenNoseEarPitchReference = 0.0f;
+			HeadWorldMouthEyePitchReference = 0.0f;
+			HeadWorldNoseEyePitchReference = 0.0f;
+			HeadWorldMouthEarPitchReference = 0.0f;
+			HeadWorldNoseEarPitchReference = 0.0f;
+			HeadWorldForwardPitchReferenceDeg = 0.0f;
+			HeadScreenLateralAngleReferenceDeg = 0.0f;
+			HeadScreenRollReferenceDeg = 0.0f;
+			bHasBilateralShoulderHeadClearanceReference = false;
+			BilateralShoulderHeadClearanceReferenceCm = 0.0f;
+			LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
+			bHasValidScreenFacePitchInput = false;
+			LastValidScreenFacePitchInput = 0.0f;
+		}
+	};
+
+	TMap<uint32, FDerivedSignalRuntimeState> GDerivedSignalRuntimeStates;
+
+	FDerivedSignalRuntimeState& GetDerivedSignalRuntimeState(uint32 Key)
+	{
+		return GDerivedSignalRuntimeStates.FindOrAdd(Key);
+	}
+
+	void ResetDerivedSignalRuntimeState(uint32 Key)
+	{
+		GetDerivedSignalRuntimeState(Key).Reset();
+	}
+
+	void ResetDerivedSignalRuntimeState(const UObject* KeyObject)
+	{
+		const uint32 Key = IsValid(KeyObject) ? KeyObject->GetUniqueID() : 0u;
+		ResetDerivedSignalRuntimeState(Key);
+	}
+
 	constexpr int32 HandLm_Wrist = 0;
 	constexpr int32 HandLm_IndexMcp = 5;
 	constexpr int32 HandLm_MiddleMcp = 9;
@@ -590,6 +656,12 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		ResetPoseYawAlignRuntimeState(SkelComp);
 		ResetQuestWristRuntimeState(SkelComp);
 		ResetRotationSmoothing();
+		if (bResetDerivedSignalReferencesNextUpdate)
+		{
+			BodyState.ResetDerivedSignalReferences();
+			ResetDerivedSignalRuntimeState(SkelComp);
+			bResetDerivedSignalReferencesNextUpdate = false;
+		}
 		MediaPipePoseFrameContinuity::ResetHeldFrame(
 			bHasPoseFrame,
 			PoseFrame,
@@ -1708,6 +1780,28 @@ static float RemapClamped(float Value, float InMin, float InMax)
 	return FMath::Clamp((Value - InMin) / (InMax - InMin), 0.0f, 1.0f);
 }
 
+static float RemapPositiveUnbounded(float Value, float InMin, float InFull)
+{
+	if (FMath::IsNearlyEqual(InMin, InFull))
+	{
+		return Value >= InFull ? 1.0f : 0.0f;
+	}
+
+	return FMath::Max(0.0f, (Value - InMin) / (InFull - InMin));
+}
+
+static float RemapSignedUnbounded(float Value, float DeadZone, float Full)
+{
+	const float AbsValue = FMath::Abs(Value);
+	if (FMath::IsNearlyEqual(DeadZone, Full))
+	{
+		return AbsValue >= Full ? FMath::Sign(Value) : 0.0f;
+	}
+
+	const float Magnitude = FMath::Max(0.0f, (AbsValue - DeadZone) / (Full - DeadZone));
+	return FMath::Sign(Value) * Magnitude;
+}
+
 static FVector BuildArmSurfaceUpHint(const FVector& BodyUp, const FVector& BodyForward, const FVector& SegmentDir)
 {
 	const FVector UpN = BodyUp.GetSafeNormal();
@@ -2618,7 +2712,9 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 		ResetFootPlantState();
 		ResetPoseYawAlignRuntimeState(RuntimeStateKey);
 		ResetQuestWristRuntimeState(RuntimeStateKey);
+		ResetDerivedSignalRuntimeState(RuntimeStateKey);
 		ResetRotationSmoothing();
+		BodyState.ResetDerivedSignalReferences();
 		UE_LOG(
 			LogMediaPipePose,
 			Warning,
@@ -2737,6 +2833,7 @@ void UMediaPipePoseDrivenAnimInstance::SetSourceActor(AActor* InSource)
 	{
 		Proxy.PoseNode.SourceActor = InSource;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
 	}
 }
 
@@ -2744,6 +2841,7 @@ void UMediaPipePoseDrivenAnimInstance::ResetRetargetState()
 {
 	FMediaPipePoseDrivenAnimInstanceProxy& Proxy = GetProxyOnGameThread<FMediaPipePoseDrivenAnimInstanceProxy>();
 	Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+	Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
 }
 
 void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
