@@ -920,6 +920,24 @@ USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(
 	return nullptr;
 }
 
+USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
+	USkeletalMeshComponent* TargetComponent,
+	USkeletalMeshComponent* SourceBodyComponent,
+	const TArray<USkeletalMeshComponent*>& SourceComponents)
+{
+	if (!TargetComponent)
+	{
+		return nullptr;
+	}
+
+	if (SourceBodyComponent)
+	{
+		return SourceBodyComponent;
+	}
+
+	return FindMatchingMetaHumanSkeletalComponent(TargetComponent, SourceComponents);
+}
+
 void ConfigureMetaHumanSelfViewSkeletalComponent(USkeletalMeshComponent* MeshComponent)
 {
 	if (!MeshComponent)

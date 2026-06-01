@@ -97,6 +97,10 @@ USkeletalMeshComponent* FindMetaHumanBodyMesh(
 USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(
 	USkeletalMeshComponent* TargetComponent,
 	const TArray<USkeletalMeshComponent*>& SourceComponents);
+USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
+	USkeletalMeshComponent* TargetComponent,
+	USkeletalMeshComponent* SourceBodyComponent,
+	const TArray<USkeletalMeshComponent*>& SourceComponents);
 void ConfigureMetaHumanSelfViewSkeletalComponent(USkeletalMeshComponent* MeshComponent);
 void RestoreMetaHumanSelfViewHiddenBones(
 	USkeletalMeshComponent* MeshComponent,

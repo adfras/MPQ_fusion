@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Animation/AnimInstance.h"
+#include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/Actor.h"
@@ -8,6 +10,7 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeAvatarProfileResolver.h"
 #include "MediaPipeAvatarRigProfile.h"
+#include "MediaPipeDriverRuntime.h"
 #include "MediaPipeMetaHumanProfile.h"
 #include "MediaPipeRuntimeCVars.h"
 #include "Misc/AutomationTest.h"
@@ -177,6 +180,53 @@ bool FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest::RunTest(const FStr
 		NewObject<UStaticMeshComponent>(GetTransientPackage(), FName(TEXT("Emory_Body")));
 	TestFalse(TEXT("Separate MetaHuman body component remains locally visible"),
 		Policy.ShouldCullComponentFromLocalView(MetaHumanBodyComponent, 4));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest,
+	"TestingKit3.MediaPipe.AvatarEmbodiment.MetaHumanSelfViewSingleBodyPoseLeader",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest::RunTest(const FString& Parameters)
+{
+	USceneComponent* SourceOuter =
+		NewObject<USceneComponent>(GetTransientPackage(), FName(TEXT("SourceSelfViewTestOuter")));
+	USceneComponent* TargetOuter =
+		NewObject<USceneComponent>(GetTransientPackage(), FName(TEXT("TargetSelfViewTestOuter")));
+
+	USkeletalMeshComponent* SourceBody =
+		NewObject<USkeletalMeshComponent>(SourceOuter, FName(TEXT("Body")));
+	USkeletalMeshComponent* SourceFace =
+		NewObject<USkeletalMeshComponent>(SourceOuter, FName(TEXT("Face")));
+	USkeletalMeshComponent* TargetBody =
+		NewObject<USkeletalMeshComponent>(TargetOuter, FName(TEXT("Body")));
+	USkeletalMeshComponent* TargetFace =
+		NewObject<USkeletalMeshComponent>(TargetOuter, FName(TEXT("Face")));
+
+	TArray<USkeletalMeshComponent*> SourceComponents = { SourceFace, SourceBody };
+	TestTrue(TEXT("Self-view body samples the live body pose directly"),
+		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
+			TargetBody,
+			SourceBody,
+			SourceComponents) == SourceBody);
+	TestTrue(TEXT("Self-view face also samples the live body pose directly"),
+		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
+			TargetFace,
+			SourceBody,
+			SourceComponents) == SourceBody);
+	TestFalse(TEXT("Self-view face does not follow the source face follower chain"),
+		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
+			TargetFace,
+			SourceBody,
+			SourceComponents) == SourceFace);
+
+	TestTrue(TEXT("Missing source body falls back to matching component lookup"),
+		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
+			TargetFace,
+			nullptr,
+			SourceComponents) == SourceFace);
+
 	return true;
 }
 }
