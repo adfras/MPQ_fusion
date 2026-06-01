@@ -734,9 +734,12 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 
 	TArray<USkeletalMeshComponent*> TargetSkeletalComponents;
 	MetaHumanSelfViewActor->GetComponents<USkeletalMeshComponent>(TargetSkeletalComponents);
+	USkeletalMeshComponent* TargetBodyComponent = FindMetaHumanBodyMesh(MetaHumanSelfViewActor, ActiveMetaHumanProfile);
+	ConfigureMetaHumanSelfViewSkeletalComponent(TargetBodyComponent);
 
 	int32 LeaderPoseComponentCount = 0;
 	int32 DirectBodyPoseLeaderCount = 0;
+	int32 LocalBodyPoseLeaderCount = 0;
 	for (USkeletalMeshComponent* TargetComponent : TargetSkeletalComponents)
 	{
 		if (!TargetComponent)
@@ -744,16 +747,20 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 			continue;
 		}
 
-		USkeletalMeshComponent* SourceComponent =
-			FindMetaHumanSelfViewPoseLeader(TargetComponent, SourceBodyComponent, SourceSkeletalComponents);
+		USkeletalMeshComponent* LeaderComponent =
+			FindMetaHumanSelfViewPoseLeader(TargetComponent, SourceBodyComponent, TargetBodyComponent, SourceSkeletalComponents);
 
-		if (SourceComponent && SourceComponent != TargetComponent)
+		if (LeaderComponent && LeaderComponent != TargetComponent)
 		{
-			ConfigureMetaHumanSelfViewSkeletalComponent(SourceComponent);
-			TargetComponent->SetLeaderPoseComponent(SourceComponent, true, true);
-			if (SourceComponent == SourceBodyComponent)
+			ConfigureMetaHumanSelfViewSkeletalComponent(LeaderComponent);
+			TargetComponent->SetLeaderPoseComponent(LeaderComponent, true, true);
+			if (LeaderComponent == SourceBodyComponent)
 			{
 				++DirectBodyPoseLeaderCount;
+			}
+			else if (LeaderComponent == TargetBodyComponent)
+			{
+				++LocalBodyPoseLeaderCount;
 			}
 			++LeaderPoseComponentCount;
 		}
@@ -786,7 +793,7 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 
 	if (bLog)
 	{
-		UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: MetaHuman self-view enabled profile=%s source=%s selfView=%s location=%s viewer=%s componentYaw=%.1f sourceScale=%s mirrorScale=%s mirrorAxis=%s skeletalFollowers=%d/%d directBodyPoseFollowers=%d distance=%.1f visibleOffset=%.1f."),
+		UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: MetaHuman self-view enabled profile=%s source=%s selfView=%s location=%s viewer=%s componentYaw=%.1f sourceScale=%s mirrorScale=%s mirrorAxis=%s skeletalFollowers=%d/%d directBodyPoseFollowers=%d localBodyPoseFollowers=%d distance=%.1f visibleOffset=%.1f."),
 			*ActiveMetaHumanProfile.ProfileId.ToString(),
 			*GetNameSafe(SourceMetaHumanActor),
 			*GetNameSafe(MetaHumanSelfViewActor),
@@ -799,6 +806,7 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 			LeaderPoseComponentCount,
 			TargetSkeletalComponents.Num(),
 			DirectBodyPoseLeaderCount,
+			LocalBodyPoseLeaderCount,
 			MediaPipeSelfViewPlaneDistanceCm,
 			MediaPipeSelfViewVisibleOffsetCm);
 	}
