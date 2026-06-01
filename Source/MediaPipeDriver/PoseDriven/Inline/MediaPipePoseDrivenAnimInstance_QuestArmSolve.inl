@@ -1723,6 +1723,25 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				Out = FVector2D(Lm.X, Lm.Y);
 				return true;
 			};
+			auto IsNormalizedPointInFrame = [](const FVector2D& Point) -> bool
+			{
+				return Point.X >= 0.0f && Point.X <= 1.0f && Point.Y >= 0.0f && Point.Y <= 1.0f;
+			};
+			auto TryGetReliableNormalizedXY = [&](const int32 LmIdx, const float MinReliability, FVector2D& Out) -> bool
+			{
+				if (GetLandmarkReliability(LmIdx) < MinReliability || !TryGetNormalizedXY(LmIdx, Out))
+				{
+					return false;
+				}
+				return IsNormalizedPointInFrame(Out);
+			};
+			constexpr float MinLiveShrugShoulderReliability = 0.30f;
+			constexpr float MinLiveShrugHeadReliability = 0.20f;
+			FVector2D ReliableLeftShoulder2D = FVector2D::ZeroVector;
+			FVector2D ReliableRightShoulder2D = FVector2D::ZeroVector;
+			const bool bHasReliableShrugShoulders2D =
+				TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftShoulder, MinLiveShrugShoulderReliability, ReliableLeftShoulder2D) &&
+				TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightShoulder, MinLiveShrugShoulderReliability, ReliableRightShoulder2D);
 			if (ClavicleShrugWeight > KINDA_SMALL_NUMBER && bHasTorsoBasis)
 			{
 				FVector LeftHipWorld = FVector::ZeroVector;
@@ -1791,21 +1810,21 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 						OutRightHeadSide2D = Right2D;
 						return true;
 					}
-					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, Left2D) &&
-						TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, Right2D))
+					if (TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, MinLiveShrugHeadReliability, Left2D) &&
+						TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, MinLiveShrugHeadReliability, Right2D))
 					{
 						OutLeftHeadSide2D = Left2D;
 						OutRightHeadSide2D = Right2D;
 						return true;
 					}
-					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, Left2D) &&
-						TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, Right2D))
+					if (TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, MinLiveShrugHeadReliability, Left2D) &&
+						TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, MinLiveShrugHeadReliability, Right2D))
 					{
 						OutLeftHeadSide2D = Left2D;
 						OutRightHeadSide2D = Right2D;
 						return true;
 					}
-					if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::Nose, Left2D))
+					if (TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::Nose, MinLiveShrugHeadReliability, Left2D))
 					{
 						OutLeftHeadSide2D = Left2D;
 						OutRightHeadSide2D = Left2D;
@@ -1817,21 +1836,26 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				{
 					FVector LeftWorld = FVector::ZeroVector;
 					FVector RightWorld = FVector::ZeroVector;
-					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftWorld) &&
+					if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftEar) >= MinLiveShrugHeadReliability &&
+						GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightEar) >= MinLiveShrugHeadReliability &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftWorld) &&
 						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEar, RightWorld))
 					{
 						OutLeftHeadSideWorld = LeftWorld;
 						OutRightHeadSideWorld = RightWorld;
 						return true;
 					}
-					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftWorld) &&
+					if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftEye) >= MinLiveShrugHeadReliability &&
+						GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightEye) >= MinLiveShrugHeadReliability &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftWorld) &&
 						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEye, RightWorld))
 					{
 						OutLeftHeadSideWorld = LeftWorld;
 						OutRightHeadSideWorld = RightWorld;
 						return true;
 					}
-					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, LeftWorld))
+					if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::Nose) >= MinLiveShrugHeadReliability &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, LeftWorld))
 					{
 						OutLeftHeadSideWorld = LeftWorld;
 						OutRightHeadSideWorld = LeftWorld;
@@ -1903,6 +1927,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				FVector LeftHeadSideWorld = FVector::ZeroVector;
 				FVector RightHeadSideWorld = FVector::ZeroVector;
 				if (!UpWorldSafe.IsNearlyZero() &&
+					bHasReliableShrugShoulders2D &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, LeftShoulderWorldForClearance) &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, RightShoulderWorldForClearance) &&
 					TryGetPairedHeadSidePointsWorld(LeftHeadSideWorld, RightHeadSideWorld))
@@ -1929,10 +1954,11 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				FVector2D LeftHeadSide2D = FVector2D::ZeroVector;
 				FVector2D RightHeadSide2D = FVector2D::ZeroVector;
 				if (!Clearance2D.bValid &&
-					TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftShoulder, LeftShoulder2D) &&
-					TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightShoulder, RightShoulder2D) &&
+					bHasReliableShrugShoulders2D &&
 					TryGetPairedHeadSidePoints2D(LeftHeadSide2D, RightHeadSide2D))
 				{
+					LeftShoulder2D = ReliableLeftShoulder2D;
+					RightShoulder2D = ReliableRightShoulder2D;
 					FVector LeftShoulderWorldForWidth = FVector::ZeroVector;
 					FVector RightShoulderWorldForWidth = FVector::ZeroVector;
 					float SourceShoulderWidthCm = 0.0f;
@@ -1973,6 +1999,9 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				}
 				const float LegacyShoulderDriverScale = 1.0f;
 				if (!UpWorldSafe.IsNearlyZero() &&
+					bHasReliableShrugShoulders2D &&
+					GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip) >= MinLiveShrugShoulderReliability &&
+					GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip) >= MinLiveShrugShoulderReliability &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) &&
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
 				{
@@ -2012,7 +2041,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					const int32 EarLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEar : (int32)EMediaPipePoseLandmark::RightEar;
 					const int32 EyeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftEye : (int32)EMediaPipePoseLandmark::RightEye;
 					FVector OppositeShoulderWorld = FVector::ZeroVector;
-					if (TryGetLmWorld(OppositeShoulderLm, OppositeShoulderWorld))
+					if (bHasReliableShrugShoulders2D && TryGetLmWorld(OppositeShoulderLm, OppositeShoulderWorld))
 					{
 						const float ShoulderWidthCm = FVector::Dist(ShoulderWorld, OppositeShoulderWorld);
 						const float RelativeLiftFullCm = FMath::Max(
@@ -2033,10 +2062,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 						FVector2D OppositeShoulder2D = FVector2D::ZeroVector;
 						FVector2D LeftHip2D = FVector2D::ZeroVector;
 						FVector2D RightHip2D = FVector2D::ZeroVector;
-						if (TryGetNormalizedXY(ShoulderLm, Shoulder2D) &&
-							TryGetNormalizedXY(OppositeShoulderLm, OppositeShoulder2D) &&
-							TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftHip, LeftHip2D) &&
-							TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightHip, RightHip2D))
+						if (TryGetReliableNormalizedXY(ShoulderLm, MinLiveShrugShoulderReliability, Shoulder2D) &&
+							TryGetReliableNormalizedXY(OppositeShoulderLm, MinLiveShrugShoulderReliability, OppositeShoulder2D) &&
+							TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftHip, MinLiveShrugShoulderReliability, LeftHip2D) &&
+							TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightHip, MinLiveShrugShoulderReliability, RightHip2D))
 						{
 							const float ShoulderSpan2D = FMath::Max(FVector2D::Distance(Shoulder2D, OppositeShoulder2D), 0.05f);
 							const FVector2D HipMid2D = (LeftHip2D + RightHip2D) * 0.5f;
@@ -2087,21 +2116,21 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							{
 								bHasHeadAnchor2D = true;
 							}
-							else if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, LeftEar2D) &&
-								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, RightEar2D))
+							else if (TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftEar, MinLiveShrugHeadReliability, LeftEar2D) &&
+								TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightEar, MinLiveShrugHeadReliability, RightEar2D))
 							{
 								HeadAnchor2D = (LeftEar2D + RightEar2D) * 0.5f;
 								bHasHeadAnchor2D = true;
 							}
-							else if (TryGetNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, LeftEye2D) &&
-								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, RightEye2D))
+							else if (TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::LeftEye, MinLiveShrugHeadReliability, LeftEye2D) &&
+								TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::RightEye, MinLiveShrugHeadReliability, RightEye2D))
 							{
 								HeadAnchor2D = (LeftEye2D + RightEye2D) * 0.5f;
 								bHasHeadAnchor2D = true;
 							}
-							else if (TryGetNormalizedXY(EarLm, HeadAnchor2D) ||
-								TryGetNormalizedXY(EyeLm, HeadAnchor2D) ||
-								TryGetNormalizedXY((int32)EMediaPipePoseLandmark::Nose, HeadAnchor2D))
+							else if (TryGetReliableNormalizedXY(EarLm, MinLiveShrugHeadReliability, HeadAnchor2D) ||
+								TryGetReliableNormalizedXY(EyeLm, MinLiveShrugHeadReliability, HeadAnchor2D) ||
+								TryGetReliableNormalizedXY((int32)EMediaPipePoseLandmark::Nose, MinLiveShrugHeadReliability, HeadAnchor2D))
 							{
 								bHasHeadAnchor2D = true;
 							}
@@ -2144,19 +2173,24 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					FVector RightEarWorldForClearance = FVector::ZeroVector;
 					FVector LeftEyeWorldForClearance = FVector::ZeroVector;
 					FVector RightEyeWorldForClearance = FVector::ZeroVector;
-					if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftEarWorldForClearance) &&
+					if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftEar) >= MinLiveShrugHeadReliability &&
+						GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightEar) >= MinLiveShrugHeadReliability &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEar, LeftEarWorldForClearance) &&
 						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEar, RightEarWorldForClearance))
 					{
 						HeadAnchorWorld = (LeftEarWorldForClearance + RightEarWorldForClearance) * 0.5f;
 					}
-					else if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftEyeWorldForClearance) &&
+					else if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftEye) >= MinLiveShrugHeadReliability &&
+						GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightEye) >= MinLiveShrugHeadReliability &&
+						TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftEye, LeftEyeWorldForClearance) &&
 						TryGetLmWorld((int32)EMediaPipePoseLandmark::RightEye, RightEyeWorldForClearance))
 					{
 						HeadAnchorWorld = (LeftEyeWorldForClearance + RightEyeWorldForClearance) * 0.5f;
 					}
-					else if (!TryGetLmWorld(EarLm, HeadAnchorWorld) &&
-						!TryGetLmWorld(EyeLm, HeadAnchorWorld) &&
-						!TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, HeadAnchorWorld))
+					else if ((GetLandmarkReliability(EarLm) < MinLiveShrugHeadReliability || !TryGetLmWorld(EarLm, HeadAnchorWorld)) &&
+						(GetLandmarkReliability(EyeLm) < MinLiveShrugHeadReliability || !TryGetLmWorld(EyeLm, HeadAnchorWorld)) &&
+						(GetLandmarkReliability((int32)EMediaPipePoseLandmark::Nose) < MinLiveShrugHeadReliability ||
+							!TryGetLmWorld((int32)EMediaPipePoseLandmark::Nose, HeadAnchorWorld)))
 					{
 						HeadAnchorWorld = FVector::ZeroVector;
 					}

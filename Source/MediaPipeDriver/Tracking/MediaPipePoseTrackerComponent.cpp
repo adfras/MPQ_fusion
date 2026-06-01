@@ -18,6 +18,22 @@ namespace
 		512,
 		TEXT("Maximum media frame dimension sent to the MediaPipe pose wrapper. 0 keeps source resolution."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeLiveMaxPoseAgeSeconds(
+		TEXT("mp.MediaPipeLiveMaxPoseAgeSeconds"),
+		0.75f,
+		TEXT("Maximum age for live vidcap MediaPipe poses before they are treated as unavailable. Prevents stale webcam poses from driving the avatar."));
+
+	bool IsLiveCaptureMediaTexture(const UMediaTexture* MediaTexture)
+	{
+		if (!MediaTexture)
+		{
+			return false;
+		}
+
+		const UMediaPlayer* MediaPlayer = MediaTexture->GetMediaPlayer();
+		return MediaPlayer && MediaPlayer->GetUrl().StartsWith(TEXT("vidcap://"), ESearchCase::IgnoreCase);
+	}
+
 	FString NormalizeProjectFilePath(const FString& InPath)
 	{
 		FString Path = InPath;
@@ -87,6 +103,50 @@ namespace
 		MaxMs = FMath::Max(MaxMs, ValueMs);
 	}
 
+	void ResizeRgbNearest(const TArray<uint8>& InRgb, const FIntPoint InSize, const FIntPoint OutSize, TArray<uint8>& OutRgb)
+	{
+		OutRgb.Reset();
+		if (InSize.X <= 0 || InSize.Y <= 0 || OutSize.X <= 0 || OutSize.Y <= 0 || InRgb.Num() < InSize.X * InSize.Y * 3)
+		{
+			return;
+		}
+
+		OutRgb.SetNumUninitialized(OutSize.X * OutSize.Y * 3);
+		for (int32 Y = 0; Y < OutSize.Y; ++Y)
+		{
+			const int32 SourceY = FMath::Clamp(FMath::FloorToInt(static_cast<float>(Y) * static_cast<float>(InSize.Y) / static_cast<float>(OutSize.Y)), 0, InSize.Y - 1);
+			for (int32 X = 0; X < OutSize.X; ++X)
+			{
+				const int32 SourceX = FMath::Clamp(FMath::FloorToInt(static_cast<float>(X) * static_cast<float>(InSize.X) / static_cast<float>(OutSize.X)), 0, InSize.X - 1);
+				const int32 SourceIndex = (SourceY * InSize.X + SourceX) * 3;
+				const int32 DestIndex = (Y * OutSize.X + X) * 3;
+				OutRgb[DestIndex + 0] = InRgb[SourceIndex + 0];
+				OutRgb[DestIndex + 1] = InRgb[SourceIndex + 1];
+				OutRgb[DestIndex + 2] = InRgb[SourceIndex + 2];
+			}
+		}
+	}
+
+	void ResizeRgbToMaxDimension(TArray<uint8>& InOutRgb, FIntPoint& InOutSize, const int32 MaxDimension)
+	{
+		if (MaxDimension <= 0 || (InOutSize.X <= MaxDimension && InOutSize.Y <= MaxDimension))
+		{
+			return;
+		}
+
+		const double Scale = static_cast<double>(MaxDimension) / static_cast<double>(FMath::Max(InOutSize.X, InOutSize.Y));
+		const FIntPoint OutputSize(
+			FMath::Max(1, FMath::RoundToInt(static_cast<double>(InOutSize.X) * Scale)),
+			FMath::Max(1, FMath::RoundToInt(static_cast<double>(InOutSize.Y) * Scale)));
+		TArray<uint8> ResizedRgb;
+		ResizeRgbNearest(InOutRgb, InOutSize, OutputSize, ResizedRgb);
+		if (ResizedRgb.Num() > 0)
+		{
+			InOutRgb = MoveTemp(ResizedRgb);
+			InOutSize = OutputSize;
+		}
+	}
+
 	bool GetMediaTextureResourceSize(UMediaTexture* MediaTexture, FIntPoint& OutSize)
 	{
 		OutSize = FIntPoint::ZeroValue;
@@ -106,23 +166,21 @@ namespace
 		return OutSize.X > 0 && OutSize.Y > 0;
 	}
 
-	int64 AllocateNativeVideoTimestampUs(const int64 CandidateTimestampUs, const double StepSeconds)
+	int64 AllocateNativeVideoTimestampUs(
+		const int64 CandidateTimestampUs,
+		const double StepSeconds,
+		int64& InOutLastSubmittedTimestampUs,
+		int64& InOutTimestampOffsetUs)
 	{
-		static FCriticalSection TimestampMutex;
-		static int64 LastSubmittedTimestampUs = -1;
-		static int64 TimestampOffsetUs = 0;
-
 		const int64 StepUs = FMath::Max<int64>(static_cast<int64>(FMath::Max(0.0, StepSeconds) * 1000000.0) + 1, 1000);
-
-		FScopeLock Lock(&TimestampMutex);
-		int64 TimestampUs = CandidateTimestampUs + TimestampOffsetUs;
-		if (LastSubmittedTimestampUs >= 0 && TimestampUs <= LastSubmittedTimestampUs)
+		int64 TimestampUs = CandidateTimestampUs + InOutTimestampOffsetUs;
+		if (InOutLastSubmittedTimestampUs >= 0 && TimestampUs <= InOutLastSubmittedTimestampUs)
 		{
-			TimestampOffsetUs += (LastSubmittedTimestampUs - TimestampUs) + StepUs;
-			TimestampUs = CandidateTimestampUs + TimestampOffsetUs;
+			InOutTimestampOffsetUs += (InOutLastSubmittedTimestampUs - TimestampUs) + StepUs;
+			TimestampUs = CandidateTimestampUs + InOutTimestampOffsetUs;
 			UE_LOG(LogMediaPipePose, Verbose, TEXT("Adjusted MediaPipe native timestamp from %lld us to %lld us."), CandidateTimestampUs, TimestampUs);
 		}
-		LastSubmittedTimestampUs = TimestampUs;
+		InOutLastSubmittedTimestampUs = TimestampUs;
 		return TimestampUs;
 	}
 }
@@ -191,6 +249,8 @@ bool UMediaPipePoseTrackerComponent::Initialize()
 	MediaTimestampOffsetUs = 0;
 	LastMediaTimestampUs = 0;
 	bHasLastMediaTimestamp = false;
+	LastSubmittedNativeTimestampUs = -1;
+	NativeTimestampOffsetUs = 0;
 	LastProcessWallTimeSeconds = -1.0;
 	bMediaTextureReadbackInFlight = false;
 	MediaTextureReadbackPixels.Reset();
@@ -239,6 +299,12 @@ void UMediaPipePoseTrackerComponent::ResetForSourceDiscontinuity()
 	DropFramesRemaining = FMath::Max(DropFramesRemaining, DropFramesAfterDiscontinuity);
 	bNeedsFreshMediaFrameAfterDiscontinuity = (SourceType == EMediaPipePoseFrameSource::MediaTexture);
 	LastMediaTimeSeconds = -1.0;
+	EstimatedMediaFrameStepSeconds = 1.0 / 30.0;
+	MediaTimestampOffsetUs = 0;
+	LastMediaTimestampUs = 0;
+	bHasLastMediaTimestamp = false;
+	LastSubmittedNativeTimestampUs = -1;
+	NativeTimestampOffsetUs = 0;
 	LastProcessWallTimeSeconds = -1.0;
 	bImageFrameProcessed = false;
 	if (Tracker)
@@ -444,7 +510,11 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 					FScopeLock Lock(&TrackerMutex);
 					if (Tracker && Tracker->IsInitialized())
 					{
-						const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(MediaTextureReadbackTimestampUs, EstimatedMediaFrameStepSeconds);
+						const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(
+							MediaTextureReadbackTimestampUs,
+							EstimatedMediaFrameStepSeconds,
+							LastSubmittedNativeTimestampUs,
+							NativeTimestampOffsetUs);
 						const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, MediaTextureReadbackEpoch);
 						bEnqueuedAny = bEnqueued || bEnqueuedAny;
 						if (bEnqueued)
@@ -480,7 +550,9 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 		{
 			if (UMediaPlayer* MediaPlayer = SourceMediaTexture->GetMediaPlayer())
 			{
-				const double MediaSec = MediaPlayer->GetTime().GetTotalSeconds();
+				const double PlayerMediaSec = MediaPlayer->GetTime().GetTotalSeconds();
+				const bool bLiveCapture = IsLiveCaptureMediaTexture(SourceMediaTexture);
+				const double MediaSec = bLiveCapture ? FPlatformTime::Seconds() : PlayerMediaSec;
 				const float FrameRate = MediaPlayer->GetVideoTrackFrameRate(INDEX_NONE, INDEX_NONE);
 				const double StepSec = (FrameRate > 1.0f) ? (1.0 / static_cast<double>(FrameRate)) : EstimatedMediaFrameStepSeconds;
 				EstimatedMediaFrameStepSeconds = StepSec;
@@ -639,7 +711,11 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 		FScopeLock Lock(&TrackerMutex);
 		if (Tracker && Tracker->IsInitialized())
 		{
-			const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(TimestampUs, EstimatedMediaFrameStepSeconds);
+			const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(
+				TimestampUs,
+				EstimatedMediaFrameStepSeconds,
+				LastSubmittedNativeTimestampUs,
+				NativeTimestampOffsetUs);
 			const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, SourceEpoch);
 			if (bEnqueued)
 			{
@@ -712,7 +788,11 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 		if (Tracker && Tracker->IsInitialized())
 		{
 			const double StepSeconds = (MaxProcessRateHz > 0.0f) ? (1.0 / static_cast<double>(MaxProcessRateHz)) : (1.0 / 30.0);
-			const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(TimestampUs, StepSeconds);
+			const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(
+				TimestampUs,
+				StepSeconds,
+				LastSubmittedNativeTimestampUs,
+				NativeTimestampOffsetUs);
 			const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, SourceEpoch);
 			if (bEnqueued)
 			{
@@ -759,7 +839,11 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 	}
 
 	const double StepSeconds = (MaxProcessRateHz > 0.0f) ? (1.0 / static_cast<double>(MaxProcessRateHz)) : (1.0 / 30.0);
-	const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(TimestampUs, StepSeconds);
+	const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(
+		TimestampUs,
+		StepSeconds,
+		LastSubmittedNativeTimestampUs,
+		NativeTimestampOffsetUs);
 	const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), Size.X, Size.Y, EnqueueTimestampUs, SourceEpoch);
 	if (bEnqueued)
 	{
@@ -771,6 +855,63 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 		++RuntimeStats.ComponentEnqueueFailCount;
 	}
 	return bEnqueued || bEnqueuedAny;
+}
+
+bool UMediaPipePoseTrackerComponent::ProcessRgbFrame(TArray<uint8>&& Rgb, FIntPoint Size, const int64 TimestampUs, const FIntPoint SourceSize, const double SourceFrameRate)
+{
+	++RuntimeStats.ComponentProcessCalls;
+	if (Size.X <= 0 || Size.Y <= 0 || Rgb.Num() < Size.X * Size.Y * 3)
+	{
+		++RuntimeStats.ComponentReadFailCount;
+		return false;
+	}
+
+	if (DropFramesRemaining > 0)
+	{
+		--DropFramesRemaining;
+		++RuntimeStats.ComponentDroppedWarmupFrames;
+		return false;
+	}
+
+	ResizeRgbToMaxDimension(Rgb, Size, CVarMediaPipeInputMaxDimension.GetValueOnAnyThread());
+	if (Size.X <= 0 || Size.Y <= 0 || Rgb.Num() < Size.X * Size.Y * 3)
+	{
+		++RuntimeStats.ComponentReadFailCount;
+		return false;
+	}
+
+	LastProcessedFrameSize = Size;
+	RuntimeStats.LastCaptureSize = (SourceSize.X > 0 && SourceSize.Y > 0) ? SourceSize : Size;
+	RuntimeStats.LastInferenceSize = Size;
+	RuntimeStats.LastMediaFrameRate = SourceFrameRate;
+	RuntimeStats.LastMediaStepSeconds = SourceFrameRate > 1.0 ? 1.0 / SourceFrameRate : 0.0;
+	RuntimeStats.LastMediaMinAdvanceSeconds = RuntimeStats.LastMediaStepSeconds;
+	RuntimeStats.LastMediaTimeSeconds = static_cast<double>(TimestampUs) * 1.0e-6;
+
+	FScopeLock Lock(&TrackerMutex);
+	if (!Tracker || !Tracker->IsInitialized())
+	{
+		++RuntimeStats.ComponentEnqueueFailCount;
+		return false;
+	}
+
+	const double StepSeconds = SourceFrameRate > 1.0 ? (1.0 / SourceFrameRate) : (1.0 / 30.0);
+	const int64 EnqueueTimestampUs = AllocateNativeVideoTimestampUs(
+		TimestampUs > 0 ? TimestampUs : GetTimestampUs(),
+		StepSeconds,
+		LastSubmittedNativeTimestampUs,
+		NativeTimestampOffsetUs);
+	const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), Size.X, Size.Y, EnqueueTimestampUs, SourceEpoch);
+	if (bEnqueued)
+	{
+		++RuntimeStats.ComponentEnqueueSuccessCount;
+		bNeedsFreshMediaFrameAfterDiscontinuity = false;
+	}
+	else
+	{
+		++RuntimeStats.ComponentEnqueueFailCount;
+	}
+	return bEnqueued;
 }
 
 bool UMediaPipePoseTrackerComponent::GetLatestFrame(FMediaPipePoseFrame& OutFrame) const
@@ -792,12 +933,44 @@ bool UMediaPipePoseTrackerComponent::GetLatestFrame(FMediaPipePoseFrame& OutFram
 		}
 	}
 
+	if (!bRawFrameWasInjected && SourceType == EMediaPipePoseFrameSource::MediaTexture && IsLiveCaptureMediaTexture(SourceMediaTexture))
+	{
+		const float MaxLivePoseAgeSeconds = FMath::Max(0.0f, CVarMediaPipeLiveMaxPoseAgeSeconds.GetValueOnAnyThread());
+		if (MaxLivePoseAgeSeconds > 0.0f && RawFrame.TimestampUs > 0)
+		{
+			const double PoseSeconds = static_cast<double>(RawFrame.TimestampUs) * 1.0e-6;
+			const double PoseAgeSeconds = FPlatformTime::Seconds() - PoseSeconds;
+			if (PoseAgeSeconds > static_cast<double>(MaxLivePoseAgeSeconds))
+			{
+				FScopeLock ConditionerLock(&SourceConditionerMutex);
+				bHasConditionedFrameCache = false;
+				ConditionedFrameInputTimestampUs = 0;
+				ConditionedFrameInputSerial = 0;
+				ConditionedFrameCache = FMediaPipePoseFrame();
+				return false;
+			}
+		}
+	}
+
+	auto StampInputAspect = [this](FMediaPipePoseFrame& Frame)
+	{
+		const FIntPoint Size = RuntimeStats.LastInferenceSize.X > 0 && RuntimeStats.LastInferenceSize.Y > 0
+			? RuntimeStats.LastInferenceSize
+			: RuntimeStats.LastCaptureSize;
+		if (Size.X > 0 && Size.Y > 0)
+		{
+			Frame.ConditioningDiagnostics.InputAspectYOverX =
+				static_cast<float>(Size.Y) / static_cast<float>(Size.X);
+		}
+	};
+
 	FMediaPipeSourceConditionerOptions Options = FMediaPipeSourceConditioner::MakeDefaultOptions();
 	Options.bEnabled = Options.bEnabled && bUseSourceConditioning;
 	const bool bAdaptiveOutput = Options.bAdaptivePoseConditioning || Options.bAdaptivePosePrediction;
 	if (!Options.bEnabled || (RawFrame.bSourceConditioned && !bAdaptiveOutput) || (bRawFrameWasInjected && !bConditionInjectedFrames))
 	{
 		OutFrame = RawFrame;
+		StampInputAspect(OutFrame);
 		return OutFrame.bValid;
 	}
 
@@ -822,6 +995,7 @@ bool UMediaPipePoseTrackerComponent::GetLatestFrame(FMediaPipePoseFrame& OutFram
 		return false;
 	}
 	ConditionedFrameCache.ConditioningDiagnostics.SourceVideoFps = RuntimeStats.LastMediaFrameRate;
+	StampInputAspect(ConditionedFrameCache);
 
 	ConditionedFrameInputTimestampUs = RawFrame.TimestampUs;
 	ConditionedFrameInputSerial = RawFrameSerial;

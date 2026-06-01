@@ -8,6 +8,9 @@
 class UMediaPipePoseTrackerComponent;
 class UMediaPlayer;
 class UMediaTexture;
+class UTexture2D;
+struct FMediaPipeDirectWmfCapture;
+struct FMediaPipeDirectWmfPreviewOverlay;
 
 UCLASS(NotBlueprintable)
 class MEDIAPIPEDRIVER_API AMediaPipeQuestWebcamSourceActor : public AActor
@@ -16,6 +19,7 @@ class MEDIAPIPEDRIVER_API AMediaPipeQuestWebcamSourceActor : public AActor
 
 public:
 	AMediaPipeQuestWebcamSourceActor();
+	virtual ~AMediaPipeQuestWebcamSourceActor() override;
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -47,6 +51,10 @@ private:
 	void ConfigureTrackerSource() const;
 	void OpenConfiguredCaptureDevice();
 	void RefreshMediaTextureBinding() const;
+	bool SelectPreferredCaptureFormat();
+	void ValidateCaptureFormat();
+	void UpdateDirectPreviewTexture(const TArray<uint8>& Rgb, FIntPoint CaptureSize);
+	void RemoveDirectPreviewOverlay();
 
 	UFUNCTION()
 	void OnMediaOpened(FString OpenedUrl);
@@ -59,4 +67,18 @@ private:
 
 	UPROPERTY(Transient)
 	UMediaTexture* MediaTexture = nullptr;
+
+	UPROPERTY(Transient)
+	UTexture2D* DirectPreviewTexture = nullptr;
+
+	FMediaPipeDirectWmfCapture* DirectWmfCapture = nullptr;
+	FMediaPipeDirectWmfPreviewOverlay* DirectPreviewOverlay = nullptr;
+	FIntPoint DirectPreviewSize = FIntPoint::ZeroValue;
+	double LastDirectPreviewUpdateSeconds = -1.0;
+
+	TSet<int32> RejectedCaptureFormatKeys;
+	TSet<FIntPoint> RejectedCaptureFormatDimensions;
+	int32 ActiveCaptureFormatKey = INDEX_NONE;
+	FIntPoint ActiveCaptureFormatDimensions = FIntPoint::ZeroValue;
+	double LastCaptureFormatSelectWallSeconds = -1.0;
 };

@@ -26,18 +26,48 @@ class UMediaPipePoseDrivenAnimInstance;
 struct FMediaPipePoseDrivenHeadSignalSnapshot
 {
 	bool bHasDenseFace = false;
+	bool bDenseHeadLocalTargetValid = false;
+	bool bHoldingDenseHeadLocalTarget = false;
 	float DenseFacePitchRatio = 0.0f;
 	float DenseFaceYawRatio = 0.0f;
 	float DenseFaceRollDeg = 0.0f;
 	float DenseFacePitchDelta = 0.0f;
 	float DenseFaceYawDelta = 0.0f;
 	float DenseFaceRollDeltaDeg = 0.0f;
+	float DenseHeadPitchAppliedDeg = 0.0f;
+	float DenseHeadYawAppliedDeg = 0.0f;
+	float DenseHeadRollAppliedDeg = 0.0f;
+	float DenseHeadLocalPitchDeg = 0.0f;
+	float DenseHeadLocalYawDeg = 0.0f;
+	float DenseHeadLocalRollDeg = 0.0f;
 	float ComputedPitchDeg = 0.0f;
 	float ComputedYawDeg = 0.0f;
 	float ComputedRollDeg = 0.0f;
 	float ScreenPitchDeg = 0.0f;
 	float ScreenYawDeg = 0.0f;
 	float ScreenRollDeg = 0.0f;
+	float ScreenLateralAngleDeltaDeg = 0.0f;
+	float ScreenSideBendDeg = 0.0f;
+	float ScreenFacePitchInput = 0.0f;
+	float ScreenCenterDeltaX = 0.0f;
+	float ScreenCenterDeltaY = 0.0f;
+	float ScreenNoseDeltaX = 0.0f;
+	float ScreenNoseDeltaY = 0.0f;
+	float ScreenShoulderNoseDeltaX = 0.0f;
+	float ScreenShoulderNoseDeltaY = 0.0f;
+	float ScreenShoulderNoseAbsX = 0.0f;
+	float ScreenShoulderNoseAbsY = 0.0f;
+	float NoseEyePitchDelta = 0.0f;
+	float MouthEyePitchDelta = 0.0f;
+	float MouthEarPitchDelta = 0.0f;
+	float NoseEarPitchDelta = 0.0f;
+	float WorldMouthEyePitchDelta = 0.0f;
+	float WorldNoseEyePitchDelta = 0.0f;
+	float WorldMouthEarPitchDelta = 0.0f;
+	float WorldNoseEarPitchDelta = 0.0f;
+	float WorldForwardPitchDeltaDeg = 0.0f;
+	float HeadRotationMaxStepDegrees = 0.0f;
+	float HeadRotationMaxSpeedDegreesPerSecond = 0.0f;
 };
 
 struct FMediaPipePoseDrivenShoulderSignalSnapshot

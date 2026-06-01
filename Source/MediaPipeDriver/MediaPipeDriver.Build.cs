@@ -44,10 +44,23 @@ public class MediaPipeDriver : ModuleRules
 			"Json",
 			"Media",
 			"MediaUtils",
-			"OpenXRHMD"
+			"OpenXRHMD",
+			"Slate",
+			"SlateCore"
 		});
 
 		PrivateIncludePathModuleNames.Add("OpenXR");
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenXR");
+
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.AddRange(new string[]
+			{
+				"mf.lib",
+				"mfplat.lib",
+				"mfreadwrite.lib",
+				"mfuuid.lib"
+			});
+		}
 	}
 }

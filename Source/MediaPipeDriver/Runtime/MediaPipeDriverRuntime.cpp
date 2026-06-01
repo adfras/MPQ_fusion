@@ -91,6 +91,11 @@ TAutoConsoleVariable<int32> CVarAutoQuestWebcamHands(
 	1,
 	TEXT("When non-zero, automatically spawns the webcam MediaPipe source and Quest-hand Manny in PIE/VR Preview."));
 
+TAutoConsoleVariable<int32> CVarAutoQuestWebcamAutoStartPlacedManny(
+	TEXT("mp.AutoQuestWebcamAutoStartPlacedManny"),
+	1,
+	TEXT("When non-zero, a placed embodied Manny pawn in the level starts live webcam tracking automatically when PIE starts, even if it is tagged command-only."));
+
 TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandsCameraIndex(
 	TEXT("mp.AutoQuestWebcamHandsCameraIndex"),
 	0,
@@ -104,7 +109,7 @@ TAutoConsoleVariable<float> CVarAutoQuestWebcamHandsHz(
 TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandsInputMaxDimension(
 	TEXT("mp.AutoQuestWebcamHandsInputMaxDimension"),
 	512,
-	TEXT("Maximum webcam frame dimension for the automatic Quest webcam mirror profile. Default 512 preserves the stable MediaPipe pose quality baseline; lower values are performance diagnostics only."));
+	TEXT("Maximum webcam frame dimension for the automatic Quest webcam mirror profile. Default 512 keeps live pose tracking responsive on the webcam path."));
 
 TAutoConsoleVariable<FString> CVarPlacedEmbodiedVideoFile(
 	TEXT("mp.PlacedEmbodiedVideoFile"),
@@ -564,13 +569,13 @@ void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 	SetConsoleInt(TEXT("mp.MediaPipeDriveMetaHumanArmHelpers"), 1);
 	SetConsoleFloat(TEXT("mp.MediaPipeTorsoUprightBlend"), 0.25f);
 	SetConsoleFloat(TEXT("mp.MediaPipeTorsoMaxTiltDegrees"), 45.0f);
-	SetConsoleInt(TEXT("mp.MediaPipeHolisticShoulderSolve"), 1);
-	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.85f);
+	SetConsoleInt(TEXT("mp.MediaPipeHolisticShoulderSolve"), 0);
+	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.20f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 8.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 1.0f);
 	SetConsoleInt(TEXT("mp.MediaPipeHolisticHeadSolve"), 1);
-	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.08f);
+	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 1.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadPitchScale"), 1.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadTwistWeight"), 1.0f);
@@ -602,6 +607,7 @@ void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 	SetConsoleFloat(TEXT("mp.MediaPipeArmRotationMaxStepDegrees"), 18.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeArmMaxElbowStepCm"), 25.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeArmMaxWristStepCm"), 35.0f);
+	SetConsoleInt(TEXT("mp.MediaPipeInputMaxDimension"), ResolveAutoQuestMediaPipeInputMaxDimension());
 }
 
 bool IsAutoQuestWorld(const UWorld* World)
@@ -3542,8 +3548,20 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 	{
 		if (PlacedPawn->Tags.Contains(CommandOnlyEmbodiedStartTag))
 		{
-			UE_LOG(LogMediaPipePose, Log, TEXT("Auto Quest webcam: placed embodied pawn=%s is command-only; run mp.StartPlacedEmbodiedTracking to start tracking."),
-				*GetNameSafe(PlacedPawn));
+			if (CVarAutoQuestWebcamAutoStartPlacedManny.GetValueOnGameThread() == 0)
+			{
+				UE_LOG(LogMediaPipePose, Log, TEXT("Auto Quest webcam: placed embodied pawn=%s is command-only; run mp.StartPlacedEmbodiedTracking to start tracking."),
+					*GetNameSafe(PlacedPawn));
+				return;
+			}
+
+			ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+			PlacedPawn->StartEmbodiedTracking(true);
+			ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+			UE_LOG(LogMediaPipePose, Log, TEXT("Auto Quest webcam: auto-started command-only placed embodied pawn=%s location=%s rotation=%s."),
+				*GetNameSafe(PlacedPawn),
+				*PlacedPawn->GetActorLocation().ToCompactString(),
+				*PlacedPawn->GetActorRotation().ToCompactString());
 			return;
 		}
 

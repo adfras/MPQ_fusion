@@ -136,6 +136,7 @@ struct FMediaPipePoseFrame
 		double SourceVideoFps = 0.0;
 		double MediaPipeOutputFps = 0.0;
 		double UniquePoseTimestampFps = 0.0;
+		float InputAspectYOverX = 1.0f;
 		double TimestampDriftSeconds = 0.0;
 		float SourceAgeMs = 0.0f;
 		float PredictionHorizonMs = 0.0f;

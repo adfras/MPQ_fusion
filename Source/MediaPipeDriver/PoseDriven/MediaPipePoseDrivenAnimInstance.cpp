@@ -150,8 +150,11 @@ namespace
 		float LastDenseHeadLocalPitchDeg = 0.0f;
 		float LastDenseHeadLocalYawDeg = 0.0f;
 		float LastDenseHeadLocalRollDeg = 0.0f;
+		bool bHasDenseFaceRelativeBasisReference = false;
+		FQuat DenseFaceRelativeBasisReference = FQuat::Identity;
 		bool bHasValidDenseHeadTargetBasis = false;
 		FQuat LastDenseHeadTargetBasis = FQuat::Identity;
+		int64 LastDenseHeadTargetPoseTimestampUs = -1;
 		bool bHasBilateralShoulderHeadClearanceReference = false;
 		float BilateralShoulderHeadClearanceReferenceCm = 0.0f;
 		int64 LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;
@@ -185,8 +188,11 @@ namespace
 			LastDenseHeadLocalPitchDeg = 0.0f;
 			LastDenseHeadLocalYawDeg = 0.0f;
 			LastDenseHeadLocalRollDeg = 0.0f;
+			bHasDenseFaceRelativeBasisReference = false;
+			DenseFaceRelativeBasisReference = FQuat::Identity;
 			bHasValidDenseHeadTargetBasis = false;
 			LastDenseHeadTargetBasis = FQuat::Identity;
+			LastDenseHeadTargetPoseTimestampUs = -1;
 			bHasBilateralShoulderHeadClearanceReference = false;
 			BilateralShoulderHeadClearanceReferenceCm = 0.0f;
 			LastBilateralShoulderHeadClearanceReferencePoseTimestampUs = -1;

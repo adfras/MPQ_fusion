@@ -17,6 +17,8 @@
 #include "GameFramework/PlayerController.h"
 #include "Dom/JsonObject.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Materials/MaterialInterface.h"
 #include "MediaPlayer.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -30,6 +32,42 @@ TAutoConsoleVariable<int32> CVarUseMannyBodyRig(
 	TEXT("mp.UseMannyBodyRig"),
 	0,
 	TEXT("When non-zero, explicitly evaluates CR_Mannequin_Body on the verification Manny mesh after the MediaPipe anim instance."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordMannyHeadOnPlay(
+	TEXT("mp.RecordMannyHeadOnPlay"),
+	1,
+	TEXT("When non-zero, automatically records live source-head, solver-head, and Manny-head signals for each PIE run."),
+	ECVF_Default);
+
+TAutoConsoleVariable<float> CVarRecordMannyHeadOnPlayDuration(
+	TEXT("mp.RecordMannyHeadOnPlayDuration"),
+	12.0f,
+	TEXT("Seconds of head signal data to record automatically after Play starts."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordMannyHeadOnPlayPath(
+	TEXT("mp.RecordMannyHeadOnPlayPath"),
+	TEXT("Saved/CodexAgent/Diagnostics/manny_head_trace_latest.json"),
+	TEXT("Output JSON path for automatic Manny head trace recording."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordMannyHeadAnalyzeAfterWrite(
+	TEXT("mp.RecordMannyHeadAnalyzeAfterWrite"),
+	1,
+	TEXT("When non-zero, run Tools/analyze_manny_head_trace.py after a Manny head trace JSON is written."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordMannyHeadAnalyzerPath(
+	TEXT("mp.RecordMannyHeadAnalyzerPath"),
+	TEXT("Tools/analyze_manny_head_trace.py"),
+	TEXT("Python analyzer script path used after automatic Manny head trace recording."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordMannyHeadPythonExe(
+	TEXT("mp.RecordMannyHeadPythonExe"),
+	TEXT("python"),
+	TEXT("Python executable used to analyze Manny head trace recordings."),
 	ECVF_Default);
 
 const AActor* ResolveTrackingSourceActor(const AActor* SourceActor)
@@ -132,10 +170,13 @@ const TCHAR* MediaPipePoseLandmarkNames[] = {
 struct FMannyBoneTimeseriesRecorder
 {
 	bool bActive = false;
+	bool bAutoStarted = false;
 	FString OutputPath;
 	double StartSeconds = 0.0;
 	double DurationSeconds = 0.0;
 	int32 SampleCount = 0;
+	uint32 AutoStartWorldId = 0;
+	uint32 LastAutoStartWorldId = 0;
 	TArray<TSharedPtr<FJsonValue>> Samples;
 };
 
@@ -195,18 +236,48 @@ TSharedRef<FJsonObject> JsonHeadSignalSnapshot(const FMediaPipePoseDrivenHeadSig
 {
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("has_dense_face"), Snapshot.bHasDenseFace);
+	Result->SetBoolField(TEXT("dense_head_local_target_valid"), Snapshot.bDenseHeadLocalTargetValid);
+	Result->SetBoolField(TEXT("holding_dense_head_local_target"), Snapshot.bHoldingDenseHeadLocalTarget);
 	Result->SetNumberField(TEXT("dense_face_pitch_ratio"), Snapshot.DenseFacePitchRatio);
 	Result->SetNumberField(TEXT("dense_face_yaw_ratio"), Snapshot.DenseFaceYawRatio);
 	Result->SetNumberField(TEXT("dense_face_roll_deg"), Snapshot.DenseFaceRollDeg);
 	Result->SetNumberField(TEXT("dense_face_pitch_delta"), Snapshot.DenseFacePitchDelta);
 	Result->SetNumberField(TEXT("dense_face_yaw_delta"), Snapshot.DenseFaceYawDelta);
 	Result->SetNumberField(TEXT("dense_face_roll_delta_deg"), Snapshot.DenseFaceRollDeltaDeg);
+	Result->SetNumberField(TEXT("dense_head_pitch_applied_deg"), Snapshot.DenseHeadPitchAppliedDeg);
+	Result->SetNumberField(TEXT("dense_head_yaw_applied_deg"), Snapshot.DenseHeadYawAppliedDeg);
+	Result->SetNumberField(TEXT("dense_head_roll_applied_deg"), Snapshot.DenseHeadRollAppliedDeg);
+	Result->SetNumberField(TEXT("dense_head_local_pitch_deg"), Snapshot.DenseHeadLocalPitchDeg);
+	Result->SetNumberField(TEXT("dense_head_local_yaw_deg"), Snapshot.DenseHeadLocalYawDeg);
+	Result->SetNumberField(TEXT("dense_head_local_roll_deg"), Snapshot.DenseHeadLocalRollDeg);
 	Result->SetNumberField(TEXT("computed_pitch_deg"), Snapshot.ComputedPitchDeg);
 	Result->SetNumberField(TEXT("computed_yaw_deg"), Snapshot.ComputedYawDeg);
 	Result->SetNumberField(TEXT("computed_roll_deg"), Snapshot.ComputedRollDeg);
 	Result->SetNumberField(TEXT("screen_pitch_deg"), Snapshot.ScreenPitchDeg);
 	Result->SetNumberField(TEXT("screen_yaw_deg"), Snapshot.ScreenYawDeg);
 	Result->SetNumberField(TEXT("screen_roll_deg"), Snapshot.ScreenRollDeg);
+	Result->SetNumberField(TEXT("screen_lateral_angle_delta_deg"), Snapshot.ScreenLateralAngleDeltaDeg);
+	Result->SetNumberField(TEXT("screen_side_bend_deg"), Snapshot.ScreenSideBendDeg);
+	Result->SetNumberField(TEXT("screen_face_pitch_input"), Snapshot.ScreenFacePitchInput);
+	Result->SetNumberField(TEXT("screen_center_delta_x"), Snapshot.ScreenCenterDeltaX);
+	Result->SetNumberField(TEXT("screen_center_delta_y"), Snapshot.ScreenCenterDeltaY);
+	Result->SetNumberField(TEXT("screen_nose_delta_x"), Snapshot.ScreenNoseDeltaX);
+	Result->SetNumberField(TEXT("screen_nose_delta_y"), Snapshot.ScreenNoseDeltaY);
+	Result->SetNumberField(TEXT("screen_shoulder_nose_delta_x"), Snapshot.ScreenShoulderNoseDeltaX);
+	Result->SetNumberField(TEXT("screen_shoulder_nose_delta_y"), Snapshot.ScreenShoulderNoseDeltaY);
+	Result->SetNumberField(TEXT("screen_shoulder_nose_abs_x"), Snapshot.ScreenShoulderNoseAbsX);
+	Result->SetNumberField(TEXT("screen_shoulder_nose_abs_y"), Snapshot.ScreenShoulderNoseAbsY);
+	Result->SetNumberField(TEXT("nose_eye_pitch_delta"), Snapshot.NoseEyePitchDelta);
+	Result->SetNumberField(TEXT("mouth_eye_pitch_delta"), Snapshot.MouthEyePitchDelta);
+	Result->SetNumberField(TEXT("mouth_ear_pitch_delta"), Snapshot.MouthEarPitchDelta);
+	Result->SetNumberField(TEXT("nose_ear_pitch_delta"), Snapshot.NoseEarPitchDelta);
+	Result->SetNumberField(TEXT("world_mouth_eye_pitch_delta"), Snapshot.WorldMouthEyePitchDelta);
+	Result->SetNumberField(TEXT("world_nose_eye_pitch_delta"), Snapshot.WorldNoseEyePitchDelta);
+	Result->SetNumberField(TEXT("world_mouth_ear_pitch_delta"), Snapshot.WorldMouthEarPitchDelta);
+	Result->SetNumberField(TEXT("world_nose_ear_pitch_delta"), Snapshot.WorldNoseEarPitchDelta);
+	Result->SetNumberField(TEXT("world_forward_pitch_delta_deg"), Snapshot.WorldForwardPitchDeltaDeg);
+	Result->SetNumberField(TEXT("head_rotation_max_step_degrees"), Snapshot.HeadRotationMaxStepDegrees);
+	Result->SetNumberField(TEXT("head_rotation_max_speed_degrees_per_second"), Snapshot.HeadRotationMaxSpeedDegreesPerSecond);
 	return Result;
 }
 
@@ -245,11 +316,15 @@ TSharedRef<FJsonObject> JsonSignalSnapshot(const FMediaPipePoseDrivenSignalSnaps
 	return Result;
 }
 
+void AnalyzeMannyHeadTimeseries(const FString& JsonPath);
+
 void WriteMannyBoneTimeseries()
 {
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("schema"), TEXT("manny_visible_bone_timeseries_v2"));
 	Root->SetStringField(TEXT("status"), TEXT("complete"));
+	Root->SetBoolField(TEXT("auto_started"), GMannyBoneTimeseriesRecorder.bAutoStarted);
+	Root->SetNumberField(TEXT("auto_start_world_id"), static_cast<double>(GMannyBoneTimeseriesRecorder.AutoStartWorldId));
 	Root->SetNumberField(TEXT("duration"), GMannyBoneTimeseriesRecorder.DurationSeconds);
 	Root->SetNumberField(TEXT("sample_count"), GMannyBoneTimeseriesRecorder.SampleCount);
 	Root->SetArrayField(TEXT("samples"), GMannyBoneTimeseriesRecorder.Samples);
@@ -280,6 +355,8 @@ void WriteMannyBoneTimeseries()
 		GMannyBoneTimeseriesRecorder.SampleCount,
 		GMannyBoneTimeseriesRecorder.DurationSeconds,
 		*GMannyBoneTimeseriesRecorder.OutputPath);
+
+	AnalyzeMannyHeadTimeseries(GMannyBoneTimeseriesRecorder.OutputPath);
 }
 
 void StopMannyBoneTimeseries()
@@ -301,6 +378,71 @@ FString ResolveRecorderPath(const FString& Path)
 	}
 	return FPaths::ConvertRelativePathToFull(
 		FPaths::IsRelative(Path) ? FPaths::Combine(FPaths::ProjectDir(), Path) : Path);
+}
+
+void AnalyzeMannyHeadTimeseries(const FString& JsonPath)
+{
+	if (CVarRecordMannyHeadAnalyzeAfterWrite.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	const FString PythonExe = CVarRecordMannyHeadPythonExe.GetValueOnAnyThread();
+	const FString ScriptPath = ResolveRecorderPath(CVarRecordMannyHeadAnalyzerPath.GetValueOnAnyThread());
+	if (!FPaths::FileExists(ScriptPath))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordMannyHeadTrace: analyzer script not found: %s"), *ScriptPath);
+		return;
+	}
+
+	const FString OutputDirectory = FPaths::GetPath(JsonPath);
+	const FString Params = FString::Printf(
+		TEXT("\"%s\" \"%s\" --out-dir \"%s\""),
+		*ScriptPath,
+		*JsonPath,
+		*OutputDirectory);
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	const bool bExecuted = FPlatformProcess::ExecProcess(*PythonExe, *Params, &ReturnCode, &StdOut, &StdErr);
+	if (!bExecuted || ReturnCode != 0)
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Warning,
+			TEXT("mp.RecordMannyHeadTrace: analyzer failed executed=%d returnCode=%d stdout=%s stderr=%s"),
+			bExecuted ? 1 : 0,
+			ReturnCode,
+			*StdOut,
+			*StdErr);
+		return;
+	}
+
+	UE_LOG(LogMediaPipePose, Log, TEXT("mp.RecordMannyHeadTrace: analyzer completed stdout=%s"), *StdOut);
+	if (!StdErr.IsEmpty())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordMannyHeadTrace: analyzer stderr=%s"), *StdErr);
+	}
+}
+
+void StartMannyBoneTimeseriesRecording(const double DurationSeconds, const FString& OutputPath, const bool bAutoStarted, const uint32 AutoStartWorldId)
+{
+	GMannyBoneTimeseriesRecorder.bActive = true;
+	GMannyBoneTimeseriesRecorder.bAutoStarted = bAutoStarted;
+	GMannyBoneTimeseriesRecorder.OutputPath = ResolveRecorderPath(OutputPath);
+	GMannyBoneTimeseriesRecorder.StartSeconds = FPlatformTime::Seconds();
+	GMannyBoneTimeseriesRecorder.DurationSeconds = FMath::Clamp(DurationSeconds, 0.1, 120.0);
+	GMannyBoneTimeseriesRecorder.SampleCount = 0;
+	GMannyBoneTimeseriesRecorder.AutoStartWorldId = AutoStartWorldId;
+	GMannyBoneTimeseriesRecorder.Samples.Reset();
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s auto=%d worldId=%u"),
+		GMannyBoneTimeseriesRecorder.DurationSeconds,
+		*GMannyBoneTimeseriesRecorder.OutputPath,
+		bAutoStarted ? 1 : 0,
+		AutoStartWorldId);
 }
 
 void StartMannyBoneTimeseries(const TArray<FString>& Args)
@@ -325,23 +467,63 @@ void StartMannyBoneTimeseries(const TArray<FString>& Args)
 		}
 	}
 
-	GMannyBoneTimeseriesRecorder.bActive = true;
-	GMannyBoneTimeseriesRecorder.OutputPath = ResolveRecorderPath(OutputPath);
-	GMannyBoneTimeseriesRecorder.StartSeconds = FPlatformTime::Seconds();
-	GMannyBoneTimeseriesRecorder.DurationSeconds = DurationSeconds;
-	GMannyBoneTimeseriesRecorder.SampleCount = 0;
-	GMannyBoneTimeseriesRecorder.Samples.Reset();
-	UE_LOG(
-		LogMediaPipePose,
-		Log,
-		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s"),
+	StartMannyBoneTimeseriesRecording(DurationSeconds, OutputPath, false, 0);
+}
+
+void TryAutoStartMannyHeadTimeseries(const AMediaPipePoseDrivenSkeletalActor* Actor)
+{
+	if (!Actor || GMannyBoneTimeseriesRecorder.bActive || CVarRecordMannyHeadOnPlay.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	const UWorld* World = Actor->GetWorld();
+	if (!World || (World->WorldType != EWorldType::PIE && World->WorldType != EWorldType::Game))
+	{
+		return;
+	}
+
+	const uint32 WorldId = World->GetUniqueID();
+	if (WorldId != 0 && GMannyBoneTimeseriesRecorder.LastAutoStartWorldId == WorldId)
+	{
+		return;
+	}
+
+	FMediaPipePoseFrame WarmupPoseFrame;
+	bool bHasValidWarmupPoseFrame = false;
+	if (const AActor* TrackingSourceActor = ResolveTrackingSourceActor(Actor->Source))
+	{
+		if (const UMediaPipePoseTrackerComponent* Tracker = TrackingSourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>())
+		{
+			bHasValidWarmupPoseFrame = Tracker->GetLatestFrame(WarmupPoseFrame) && WarmupPoseFrame.bValid;
+		}
+	}
+	if (!bHasValidWarmupPoseFrame)
+	{
+		return;
+	}
+
+	const double DurationSeconds = FMath::Clamp(
+		static_cast<double>(CVarRecordMannyHeadOnPlayDuration.GetValueOnAnyThread()),
+		0.1,
+		120.0);
+	StartMannyBoneTimeseriesRecording(
 		DurationSeconds,
-		*GMannyBoneTimeseriesRecorder.OutputPath);
+		CVarRecordMannyHeadOnPlayPath.GetValueOnAnyThread(),
+		true,
+		WorldId);
+	GMannyBoneTimeseriesRecorder.LastAutoStartWorldId = WorldId;
 }
 
 void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Actor, USkeletalMeshComponent* DrivenMesh, const float DeltaSeconds)
 {
-	if (!GMannyBoneTimeseriesRecorder.bActive || !Actor || !DrivenMesh || !Actor->Tags.Contains(LiveMannyTag))
+	if (!Actor || !DrivenMesh || !Actor->Tags.Contains(LiveMannyTag))
+	{
+		return;
+	}
+
+	TryAutoStartMannyHeadTimeseries(Actor);
+	if (!GMannyBoneTimeseriesRecorder.bActive)
 	{
 		return;
 	}
@@ -359,7 +541,8 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 	{
 		if (const UMediaPlayer* MediaPlayer = FindObject<UMediaPlayer>(Actor->Source, TEXT("MediaPlayer")))
 		{
-			MediaSeconds = MediaPlayer->GetTime().GetTotalSeconds();
+			const bool bLiveCapture = MediaPlayer->GetUrl().StartsWith(TEXT("vidcap://"), ESearchCase::IgnoreCase);
+			MediaSeconds = bLiveCapture ? FPlatformTime::Seconds() : MediaPlayer->GetTime().GetTotalSeconds();
 		}
 	}
 
@@ -386,6 +569,40 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 	Sample->SetNumberField(TEXT("wall_t"), ElapsedSeconds);
 	Sample->SetNumberField(TEXT("delta"), DeltaSeconds);
 	Sample->SetNumberField(TEXT("media_t"), MediaSeconds);
+	Sample->SetBoolField(TEXT("pose_available"), bHasLatestPoseFrame);
+	if (bHasPosePipelineStats)
+	{
+		TSharedRef<FJsonObject> PipelineObject = MakeShared<FJsonObject>();
+		PipelineObject->SetNumberField(TEXT("component_process_calls"), static_cast<double>(PosePipelineStats.ComponentProcessCalls));
+		PipelineObject->SetNumberField(TEXT("component_media_timestamp_gate_skips"), static_cast<double>(PosePipelineStats.ComponentMediaTimestampGateSkips));
+		PipelineObject->SetNumberField(TEXT("component_async_readback_begin_count"), static_cast<double>(PosePipelineStats.ComponentAsyncReadbackBeginCount));
+		PipelineObject->SetNumberField(TEXT("component_async_readback_begin_fail_count"), static_cast<double>(PosePipelineStats.ComponentAsyncReadbackBeginFailCount));
+		PipelineObject->SetNumberField(TEXT("component_async_readback_in_flight_skips"), static_cast<double>(PosePipelineStats.ComponentAsyncReadbackInFlightSkips));
+		PipelineObject->SetNumberField(TEXT("component_async_readback_complete_count"), static_cast<double>(PosePipelineStats.ComponentAsyncReadbackCompleteCount));
+		PipelineObject->SetNumberField(TEXT("component_async_readback_stale_drops"), static_cast<double>(PosePipelineStats.ComponentAsyncReadbackStaleDrops));
+		PipelineObject->SetNumberField(TEXT("component_dropped_warmup_frames"), static_cast<double>(PosePipelineStats.ComponentDroppedWarmupFrames));
+		PipelineObject->SetNumberField(TEXT("component_enqueue_success_count"), static_cast<double>(PosePipelineStats.ComponentEnqueueSuccessCount));
+		PipelineObject->SetNumberField(TEXT("component_enqueue_fail_count"), static_cast<double>(PosePipelineStats.ComponentEnqueueFailCount));
+		PipelineObject->SetNumberField(TEXT("component_read_fail_count"), static_cast<double>(PosePipelineStats.ComponentReadFailCount));
+		PipelineObject->SetNumberField(TEXT("tracker_enqueue_count"), static_cast<double>(PosePipelineStats.TrackerEnqueueCount));
+		PipelineObject->SetNumberField(TEXT("tracker_clear_count"), static_cast<double>(PosePipelineStats.TrackerClearCount));
+		PipelineObject->SetNumberField(TEXT("tracker_publish_count"), static_cast<double>(PosePipelineStats.TrackerPublishCount));
+		PipelineObject->SetNumberField(TEXT("tracker_stale_reject_count"), static_cast<double>(PosePipelineStats.TrackerStaleRejectCount));
+		PipelineObject->SetNumberField(TEXT("worker_pending_overwrite_count"), static_cast<double>(PosePipelineStats.WorkerPendingOverwriteCount));
+		PipelineObject->SetNumberField(TEXT("worker_invalid_input_count"), static_cast<double>(PosePipelineStats.WorkerInvalidInputCount));
+		PipelineObject->SetNumberField(TEXT("worker_process_count"), static_cast<double>(PosePipelineStats.WorkerProcessCount));
+		PipelineObject->SetNumberField(TEXT("worker_process_fail_count"), static_cast<double>(PosePipelineStats.WorkerProcessFailCount));
+		PipelineObject->SetNumberField(TEXT("worker_landmark_fail_count"), static_cast<double>(PosePipelineStats.WorkerLandmarkFailCount));
+		PipelineObject->SetNumberField(TEXT("last_media_time_seconds"), PosePipelineStats.LastMediaTimeSeconds);
+		PipelineObject->SetNumberField(TEXT("last_media_frame_rate"), PosePipelineStats.LastMediaFrameRate);
+		PipelineObject->SetNumberField(TEXT("last_media_step_seconds"), PosePipelineStats.LastMediaStepSeconds);
+		PipelineObject->SetNumberField(TEXT("last_media_min_advance_seconds"), PosePipelineStats.LastMediaMinAdvanceSeconds);
+		PipelineObject->SetNumberField(TEXT("last_capture_width"), PosePipelineStats.LastCaptureSize.X);
+		PipelineObject->SetNumberField(TEXT("last_capture_height"), PosePipelineStats.LastCaptureSize.Y);
+		PipelineObject->SetNumberField(TEXT("last_inference_width"), PosePipelineStats.LastInferenceSize.X);
+		PipelineObject->SetNumberField(TEXT("last_inference_height"), PosePipelineStats.LastInferenceSize.Y);
+		Sample->SetObjectField(TEXT("pipeline"), PipelineObject);
+	}
 	if (bHasLatestPoseFrame)
 	{
 		Sample->SetNumberField(TEXT("pose_t"), PoseSeconds);
@@ -508,6 +725,11 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 FAutoConsoleCommand GMannyBoneTimeseriesCommand(
 	TEXT("mp.RecordMannyBoneTimeseries"),
 	TEXT("Record live Manny bone transforms to JSON. Usage: mp.RecordMannyBoneTimeseries duration=8.7 path=Saved/CodexAgent/Diagnostics/out.json"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMannyBoneTimeseries));
+
+FAutoConsoleCommand GMannyHeadTimeseriesCommand(
+	TEXT("mp.RecordMannyHeadTimeseries"),
+	TEXT("Record source-head, solver-head, and Manny-head traces to JSON and analyze them. Usage: mp.RecordMannyHeadTimeseries duration=12 path=Saved/CodexAgent/Diagnostics/head.json"),
 	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMannyBoneTimeseries));
 
 int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeletalMeshComponent* PresentationMesh)
@@ -669,6 +891,42 @@ USkeletalMesh* TryLoadSkeletalMeshFallback()
 
 	return nullptr;
 }
+
+void ApplyReadableMannyMaterials(USkeletalMeshComponent* MeshComponent)
+{
+	if (!MeshComponent || !MeshComponent->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+
+	const FString MeshPath = MeshComponent->GetSkeletalMeshAsset()->GetPathName();
+	if (!MeshPath.Contains(TEXT("Manny"), ESearchCase::IgnoreCase) &&
+		!MeshPath.Contains(TEXT("MediaPipeMannyLike"), ESearchCase::IgnoreCase))
+	{
+		return;
+	}
+
+	static UMaterialInterface* BodyMaterial = LoadObject<UMaterialInterface>(
+		nullptr,
+		TEXT("/Game/MCPBench/Materials/M_MannyReadable_Slate.M_MannyReadable_Slate"));
+	static UMaterialInterface* AccentMaterial = LoadObject<UMaterialInterface>(
+		nullptr,
+		TEXT("/Game/MCPBench/Materials/M_MannyReadable_Accent.M_MannyReadable_Accent"));
+	if (!BodyMaterial && !AccentMaterial)
+	{
+		return;
+	}
+
+	const int32 MaterialCount = MeshComponent->GetNumMaterials();
+	for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
+	{
+		UMaterialInterface* Material = MaterialIndex == 1 && AccentMaterial ? AccentMaterial : BodyMaterial;
+		if (Material && MeshComponent->GetMaterial(MaterialIndex) != Material)
+		{
+			MeshComponent->SetMaterial(MaterialIndex, Material);
+		}
+	}
+}
 }
 
 AMediaPipePoseDrivenSkeletalActor::AMediaPipePoseDrivenSkeletalActor()
@@ -698,6 +956,7 @@ AMediaPipePoseDrivenSkeletalActor::AMediaPipePoseDrivenSkeletalActor()
 	if (USkeletalMesh* FallbackMesh = TryLoadSkeletalMeshFallback())
 	{
 		Mesh->SetSkinnedAssetAndUpdate(FallbackMesh);
+		ApplyReadableMannyMaterials(Mesh);
 	}
 }
 
@@ -707,12 +966,23 @@ void AMediaPipePoseDrivenSkeletalActor::BeginPlay()
 	PlaceLiveMannyInFrontOfPlayer(this);
 }
 
+void AMediaPipePoseDrivenSkeletalActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (Tags.Contains(LiveMannyTag))
+	{
+		StopMannyBoneTimeseries();
+	}
+
+	Super::EndPlay(EndPlayReason);
+}
+
 void AMediaPipePoseDrivenSkeletalActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
 #if WITH_EDITOR
 	EnsureSkeletalMeshComponentUpdatesInEditor(Mesh);
 #endif
+	ApplyReadableMannyMaterials(Mesh);
 	if (Mesh)
 	{
 		Mesh->PrimaryComponentTick.AddPrerequisite(this, PrimaryActorTick);
@@ -744,6 +1014,7 @@ void AMediaPipePoseDrivenSkeletalActor::SetPresentationActor(AActor* InPresentat
 		PresentationMesh->bEnableUpdateRateOptimizations = false;
 		PresentationMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 		PresentationMesh->SetDisablePostProcessBlueprint(false);
+		ApplyReadableMannyMaterials(PresentationMesh);
 
 		const USkeletalMesh* PresentationSkeletalMesh = PresentationMesh->GetSkeletalMeshAsset();
 		const TSubclassOf<UAnimInstance> PostProcessClass = PresentationMesh->GetPostProcessAnimBPClassToBeUsed();
@@ -1061,6 +1332,7 @@ void AMediaPipePoseDrivenSkeletalActor::Tick(float DeltaSeconds)
 #if WITH_EDITOR
 	EnsureSkeletalMeshComponentUpdatesInEditor(DrivenMesh);
 #endif
+	ApplyReadableMannyMaterials(DrivenMesh);
 
 	if (DrivenMesh->GetAnimClass() != UMediaPipePoseDrivenAnimInstance::StaticClass())
 	{

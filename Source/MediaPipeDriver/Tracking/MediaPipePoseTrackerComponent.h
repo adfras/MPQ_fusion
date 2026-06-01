@@ -35,6 +35,7 @@ public:
 	bool Initialize();
 	void Shutdown();
 	bool ProcessFrame();
+	bool ProcessRgbFrame(TArray<uint8>&& Rgb, FIntPoint Size, int64 TimestampUs, FIntPoint SourceSize = FIntPoint::ZeroValue, double SourceFrameRate = 0.0);
 
 	bool GetLatestFrame(FMediaPipePoseFrame& OutFrame) const;
 	bool GetCachedConditionedFrame(FMediaPipePoseFrame& OutFrame) const;
@@ -169,6 +170,8 @@ private:
 	int64 MediaTimestampOffsetUs = 0;
 	int64 LastMediaTimestampUs = 0;
 	bool bHasLastMediaTimestamp = false;
+	int64 LastSubmittedNativeTimestampUs = -1;
+	int64 NativeTimestampOffsetUs = 0;
 	double LastProcessWallTimeSeconds = -1.0;
 
 	bool bMediaTextureReadbackInFlight = false;
