@@ -209,31 +209,21 @@ bool FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest::RunTest(co
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetBody,
 			SourceBody,
-			TargetBody,
 			SourceComponents) == SourceBody);
-	TestTrue(TEXT("Self-view face follows the local self-view body pose"),
+	TestTrue(TEXT("Self-view face also samples the live body pose directly"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetFace,
 			SourceBody,
-			TargetBody,
-			SourceComponents) == TargetBody);
-	TestFalse(TEXT("Self-view face no longer reaches across to the live body directly"),
-		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
-			TargetFace,
-			SourceBody,
-			TargetBody,
 			SourceComponents) == SourceBody);
 	TestFalse(TEXT("Self-view face does not follow the source face follower chain"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetFace,
 			SourceBody,
-			TargetBody,
 			SourceComponents) == SourceFace);
 
 	TestTrue(TEXT("Missing source body falls back to matching component lookup"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetFace,
-			nullptr,
 			nullptr,
 			SourceComponents) == SourceFace);
 

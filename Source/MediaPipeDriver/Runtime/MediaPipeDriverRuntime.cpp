@@ -923,17 +923,11 @@ USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(
 USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
 	USkeletalMeshComponent* TargetComponent,
 	USkeletalMeshComponent* SourceBodyComponent,
-	USkeletalMeshComponent* TargetBodyComponent,
 	const TArray<USkeletalMeshComponent*>& SourceComponents)
 {
 	if (!TargetComponent)
 	{
 		return nullptr;
-	}
-
-	if (TargetBodyComponent && TargetComponent != TargetBodyComponent)
-	{
-		return TargetBodyComponent;
 	}
 
 	if (SourceBodyComponent)
