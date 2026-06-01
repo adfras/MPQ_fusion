@@ -165,10 +165,8 @@ bool FMediaPipeBodyFusionPoseWriteContextBuilder::ProtectNeckChainAgainstCollaps
 		return false;
 	}
 
-	// Keep a practical neck-chain floor without over-pulling the MetaHuman collar
-	// away from the head during deep HMD-driven forward bends.
-	constexpr float MinNeckChainReferenceFraction = 0.80f;
-	constexpr float MinNeckChainAbsoluteCm = 26.0f;
+	constexpr float MinNeckChainReferenceFraction = 0.85f;
+	constexpr float MinNeckChainAbsoluteCm = 28.0f;
 	const float MinChestToHeadCm =
 		FMath::Min(RefChestToHeadCm, FMath::Max(MinNeckChainAbsoluteCm, RefChestToHeadCm * MinNeckChainReferenceFraction));
 
