@@ -382,10 +382,9 @@ FMediaPipeAvatarLocalViewPolicy FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid
 		TEXT("Teeth"),
 		TEXT("Eye")
 	};
+	// Keep the neck chain visible so the first-person body proxy does not expose an open torso cutaway.
 	Policy.LocalOnlyHiddenBones = {
 		FName(TEXT("head")),
-		FName(TEXT("neck_01")),
-		FName(TEXT("neck_02")),
 		FName(TEXT("FACIAL_C_FacialRoot")),
 		FName(TEXT("face_root"))
 	};
