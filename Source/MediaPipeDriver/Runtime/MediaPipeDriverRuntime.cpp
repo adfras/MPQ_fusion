@@ -4,6 +4,7 @@
 #include "MediaPipeAvatarRigProfile.h"
 #include "MediaPipeAutoQuestProfilePolicy.h"
 #include "MediaPipeEmbodiedAvatarPawn.h"
+#include "MediaPipeEmbodiedHmdRecenterPolicy.h"
 #include "MediaPipeFirstPersonBodyProxyComponent.h"
 #include "MediaPipeFullArmChainProvider.h"
 #include "MediaPipeMetaHumanProfile.h"
@@ -364,12 +365,12 @@ TAutoConsoleVariable<float> CVarAutoQuestEmbodiedStartupRecenterMaxSpeedCmSec(
 TAutoConsoleVariable<float> CVarAutoQuestEmbodiedStartupRecenterErrorCm(
 	TEXT("mp.AutoQuestEmbodiedStartupRecenterErrorCm"),
 	35.0f,
-	TEXT("HMD-to-Wallace-eye error that permits one more bounded startup recenter after the Quest wakes or is put on."));
+	TEXT("HMD-to-Wallace-eye horizontal error threshold used for embodied startup alignment diagnostics."));
 
 TAutoConsoleVariable<int32> CVarAutoQuestEmbodiedStartupRecenterMaxCount(
 	TEXT("mp.AutoQuestEmbodiedStartupRecenterMaxCount"),
-	2,
-	TEXT("Maximum stable embodied HMD origin resets during the startup recenter window."));
+	1,
+	TEXT("Maximum stable embodied HMD origin resets during the startup recenter window. Default 1 prevents live bends from being interpreted as a new origin error."));
 
 bool bHasAutoQuestMirrorYawCalibration = false;
 float AutoQuestMirrorYawCalibrationDeg = 0.0f;
@@ -2137,6 +2138,25 @@ bool UpdateStableEmbodiedHmdOriginReset(const FQuestMirrorStation& Station, FAut
 		return false;
 	}
 
+	const float RecenterWindowSeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterWindowSeconds.GetValueOnGameThread());
+	const float RecenterDelaySeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterDelaySeconds.GetValueOnGameThread());
+	const float RequiredStableSeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterStableSeconds.GetValueOnGameThread());
+	const float MaxStableSpeedCmSec = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterMaxSpeedCmSec.GetValueOnGameThread());
+	const int32 MaxResetCount = FMath::Clamp(CVarAutoQuestEmbodiedStartupRecenterMaxCount.GetValueOnGameThread(), 0, 4);
+	const double StartupElapsedSeconds = RefreshState.StableEmbodiedStartupPinStartTimeSeconds >= 0.0
+		? FMath::Max(0.0, NowSeconds - RefreshState.StableEmbodiedStartupPinStartTimeSeconds)
+		: 0.0;
+	FMediaPipeEmbodiedHmdRecenterAttemptInput RecenterAttemptInput;
+	RecenterAttemptInput.bAlreadyReset = RefreshState.bStableEmbodiedHmdOriginReset;
+	RecenterAttemptInput.ResetCount = RefreshState.StableEmbodiedHmdOriginResetCount;
+	RecenterAttemptInput.MaxResetCount = MaxResetCount;
+	RecenterAttemptInput.StartupElapsedSeconds = StartupElapsedSeconds;
+	RecenterAttemptInput.RecenterWindowSeconds = RecenterWindowSeconds;
+	if (!FMediaPipeEmbodiedHmdRecenterPolicy::ShouldAttemptStartupRecenter(RecenterAttemptInput))
+	{
+		return false;
+	}
+
 	FVector HmdWorldLocation = FVector::ZeroVector;
 	FRotator HmdWorldRotation = FRotator::ZeroRotator;
 	if (!TryGetHmdWorldPose(HmdWorldLocation, HmdWorldRotation))
@@ -2147,32 +2167,11 @@ bool UpdateStableEmbodiedHmdOriginReset(const FQuestMirrorStation& Station, FAut
 		return false;
 	}
 
-	const float RecenterWindowSeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterWindowSeconds.GetValueOnGameThread());
-	const float RecenterDelaySeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterDelaySeconds.GetValueOnGameThread());
-	const float RequiredStableSeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterStableSeconds.GetValueOnGameThread());
-	const float MaxStableSpeedCmSec = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterMaxSpeedCmSec.GetValueOnGameThread());
-	const float RecenterErrorCm = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterErrorCm.GetValueOnGameThread());
-	const int32 MaxResetCount = FMath::Clamp(CVarAutoQuestEmbodiedStartupRecenterMaxCount.GetValueOnGameThread(), 0, 4);
-	const double StartupElapsedSeconds = RefreshState.StableEmbodiedStartupPinStartTimeSeconds >= 0.0
-		? FMath::Max(0.0, NowSeconds - RefreshState.StableEmbodiedStartupPinStartTimeSeconds)
-		: 0.0;
 	FVector EyeDelta = HmdWorldLocation - Station.CameraLocation;
 	const float RawVerticalEyeDeltaCm = EyeDelta.Z;
 	EyeDelta.Z = 0.0f;
 	const float HorizontalEyeErrorCm = EyeDelta.Size2D();
 	const float EyeErrorCm = FVector::Dist(HmdWorldLocation, Station.CameraLocation);
-
-	if (RefreshState.bStableEmbodiedHmdOriginReset && HorizontalEyeErrorCm <= RecenterErrorCm)
-	{
-		return false;
-	}
-
-	if (MaxResetCount <= 0 ||
-		RefreshState.StableEmbodiedHmdOriginResetCount >= MaxResetCount ||
-		(RecenterWindowSeconds > KINDA_SMALL_NUMBER && StartupElapsedSeconds > static_cast<double>(RecenterWindowSeconds)))
-	{
-		return false;
-	}
 
 	float SampleDeltaSeconds = 0.0f;
 	bool bStableSample = true;
@@ -2207,10 +2206,9 @@ bool UpdateStableEmbodiedHmdOriginReset(const FQuestMirrorStation& Station, FAut
 	const bool bWithinDelay = StartupElapsedSeconds < static_cast<double>(RecenterDelaySeconds);
 	const bool bStableEnough = RefreshState.StableEmbodiedHmdStableSeconds >= static_cast<double>(RequiredStableSeconds);
 	const bool bNeedsFirstReset = !RefreshState.bStableEmbodiedHmdOriginReset;
-	const bool bNeedsWakeReset = RefreshState.bStableEmbodiedHmdOriginReset && HorizontalEyeErrorCm > RecenterErrorCm;
-	if ((!bNeedsFirstReset && !bNeedsWakeReset) || bWithinDelay || !bStableEnough)
+	if (!bNeedsFirstReset || bWithinDelay || !bStableEnough)
 	{
-		if ((bNeedsFirstReset || bNeedsWakeReset) &&
+		if (bNeedsFirstReset &&
 			(RefreshState.LastStableEmbodiedRecenterLogTimeSeconds < 0.0 ||
 			 NowSeconds - RefreshState.LastStableEmbodiedRecenterLogTimeSeconds >= 1.0))
 		{
@@ -2750,7 +2748,7 @@ void PlaceMannyAtEmbodiedStation(UWorld* World, AMediaPipePoseDrivenSkeletalActo
 				 NowSeconds - LastAutoQuestEmbodiedDriftWarningTimeSeconds >= 1.0))
 			{
 				LastAutoQuestEmbodiedDriftWarningTimeSeconds = NowSeconds;
-				UE_LOG(LogMediaPipePose, Warning, TEXT("Auto Quest embodied: HMD eye is horizontally offset from avatar eye station by %.1fcm total=%.1fcm rawZIgnored=%.1fcm hmd=%s camera=%s avatar=%s yaw=%.1f. Startup recenter will only run inside its bounded wake window."),
+				UE_LOG(LogMediaPipePose, Warning, TEXT("Auto Quest embodied: HMD eye is horizontally offset from avatar eye station by %.1fcm total=%.1fcm rawZIgnored=%.1fcm hmd=%s camera=%s avatar=%s yaw=%.1f. Startup recenter runs once during its bounded startup window."),
 					HorizontalEyeErrorCm,
 					EyeErrorCm,
 					RawVerticalEyeDeltaCm,

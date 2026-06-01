@@ -4,6 +4,7 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeAvatarRigProfile.h"
 #include "MediaPipeAutoQuestProfilePolicy.h"
+#include "MediaPipeEmbodiedHmdRecenterPolicy.h"
 #include "MediaPipeFirstPersonBodyProxyComponent.h"
 #include "MediaPipeFullArmChainProvider.h"
 #include "MediaPipeMetaHumanProfile.h"
@@ -381,19 +382,19 @@ void AMediaPipeEmbodiedAvatarPawn::UpdatePlacedEmbodiedHmdRecenter()
 	const float RecenterDelaySeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterDelaySeconds.GetValueOnGameThread());
 	const float RequiredStableSeconds = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterStableSeconds.GetValueOnGameThread());
 	const float MaxStableSpeedCmSec = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterMaxSpeedCmSec.GetValueOnGameThread());
-	const float RecenterErrorCm = FMath::Max(0.0f, CVarAutoQuestEmbodiedStartupRecenterErrorCm.GetValueOnGameThread());
 	const int32 MaxResetCount = FMath::Clamp(CVarAutoQuestEmbodiedStartupRecenterMaxCount.GetValueOnGameThread(), 0, 4);
-
-	if (MaxResetCount <= 0 || PlacedEmbodiedHmdOriginResetCount >= MaxResetCount)
-	{
-		return;
-	}
 
 	const double NowSeconds = World->GetTimeSeconds();
 	const double StartupElapsedSeconds = PlacedEmbodiedHmdRecenterStartTimeSeconds >= 0.0
 		? FMath::Max(0.0, NowSeconds - PlacedEmbodiedHmdRecenterStartTimeSeconds)
 		: 0.0;
-	if (RecenterWindowSeconds > KINDA_SMALL_NUMBER && StartupElapsedSeconds > static_cast<double>(RecenterWindowSeconds))
+	FMediaPipeEmbodiedHmdRecenterAttemptInput RecenterAttemptInput;
+	RecenterAttemptInput.bAlreadyReset = bPlacedEmbodiedHmdOriginReset;
+	RecenterAttemptInput.ResetCount = PlacedEmbodiedHmdOriginResetCount;
+	RecenterAttemptInput.MaxResetCount = MaxResetCount;
+	RecenterAttemptInput.StartupElapsedSeconds = StartupElapsedSeconds;
+	RecenterAttemptInput.RecenterWindowSeconds = RecenterWindowSeconds;
+	if (!FMediaPipeEmbodiedHmdRecenterPolicy::ShouldAttemptStartupRecenter(RecenterAttemptInput))
 	{
 		return;
 	}
@@ -414,10 +415,6 @@ void AMediaPipeEmbodiedAvatarPawn::UpdatePlacedEmbodiedHmdRecenter()
 	EyeDelta.Z = 0.0f;
 	const float HorizontalEyeErrorCm = EyeDelta.Size2D();
 	const float EyeErrorCm = FVector::Dist(HmdWorldLocation, DesiredCameraWorld);
-	if (bPlacedEmbodiedHmdOriginReset && HorizontalEyeErrorCm <= RecenterErrorCm)
-	{
-		return;
-	}
 
 	float SampleDeltaSeconds = 0.0f;
 	bool bStableSample = true;
