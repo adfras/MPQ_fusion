@@ -1898,15 +1898,21 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaLocalHiddenBones(UPoseabl
 	}
 
 	TArray<FName> HiddenBones = Profile.LocalViewPolicy.LocalOnlyHiddenBones;
+	TArray<FName> VisibleBones = Profile.LocalViewPolicy.LocalOnlyVisibleBones;
 	for (const FName VisibleUpperBodyBone : {
 		Profile.BoneMap.Chest,
 		FName(TEXT("spine_04")),
 		FName(TEXT("spine_05"))})
 	{
-		if (PoseableMeshHasBone(Mesh, VisibleUpperBodyBone) && !HiddenBones.Contains(VisibleUpperBodyBone))
+		VisibleBones.AddUnique(VisibleUpperBodyBone);
+	}
+
+	for (const FName VisibleBone : VisibleBones)
+	{
+		if (PoseableMeshHasBone(Mesh, VisibleBone) && !HiddenBones.Contains(VisibleBone))
 		{
-			Mesh->UnHideBoneByName(VisibleUpperBodyBone);
-			Mesh->SetBoneScaleByName(VisibleUpperBodyBone, FVector::OneVector, EBoneSpaces::ComponentSpace);
+			Mesh->UnHideBoneByName(VisibleBone);
+			Mesh->SetBoneScaleByName(VisibleBone, FVector::OneVector, EBoneSpaces::ComponentSpace);
 		}
 	}
 

@@ -15,11 +15,13 @@ UMediaPipeFirstPersonBodyProxyComponent::UMediaPipeFirstPersonBodyProxyComponent
 void UMediaPipeFirstPersonBodyProxyComponent::Configure(
 	USkeletalMeshComponent* InSourceMesh,
 	UPoseableMeshComponent* InBodyProxyMesh,
-	const TArray<FName>& InHiddenBones)
+	const TArray<FName>& InHiddenBones,
+	const TArray<FName>& InVisibleBones)
 {
 	SourceMesh = InSourceMesh;
 	BodyProxyMesh = InBodyProxyMesh;
 	HiddenBones = InHiddenBones;
+	VisibleBones = InVisibleBones;
 	SetComponentTickEnabled(SourceMesh != nullptr && BodyProxyMesh != nullptr);
 
 	if (SourceMesh)
@@ -27,7 +29,7 @@ void UMediaPipeFirstPersonBodyProxyComponent::Configure(
 		PrimaryComponentTick.AddPrerequisite(SourceMesh, SourceMesh->PrimaryComponentTick);
 	}
 
-	ApplyHiddenBones();
+	ApplyBoneVisibility();
 }
 
 void UMediaPipeFirstPersonBodyProxyComponent::TickComponent(
@@ -48,10 +50,10 @@ void UMediaPipeFirstPersonBodyProxyComponent::TickComponent(
 	}
 
 	BodyProxyMesh->CopyPoseFromSkeletalComponent(SourceMesh);
-	ApplyHiddenBones();
+	ApplyBoneVisibility();
 }
 
-void UMediaPipeFirstPersonBodyProxyComponent::ApplyHiddenBones() const
+void UMediaPipeFirstPersonBodyProxyComponent::ApplyBoneVisibility() const
 {
 	if (!BodyProxyMesh)
 	{
@@ -67,5 +69,16 @@ void UMediaPipeFirstPersonBodyProxyComponent::ApplyHiddenBones() const
 
 		BodyProxyMesh->HideBoneByName(BoneName, EPhysBodyOp::PBO_None);
 		BodyProxyMesh->SetBoneScaleByName(BoneName, FVector::ZeroVector, EBoneSpaces::ComponentSpace);
+	}
+
+	for (const FName& BoneName : VisibleBones)
+	{
+		if (BoneName == NAME_None || BodyProxyMesh->GetBoneIndex(BoneName) == INDEX_NONE)
+		{
+			continue;
+		}
+
+		BodyProxyMesh->UnHideBoneByName(BoneName);
+		BodyProxyMesh->SetBoneScaleByName(BoneName, FVector::OneVector, EBoneSpaces::ComponentSpace);
 	}
 }

@@ -19,7 +19,8 @@ public:
 	void Configure(
 		USkeletalMeshComponent* InSourceMesh,
 		UPoseableMeshComponent* InBodyProxyMesh,
-		const TArray<FName>& InHiddenBones);
+		const TArray<FName>& InHiddenBones,
+		const TArray<FName>& InVisibleBones);
 
 	virtual void TickComponent(
 		float DeltaTime,
@@ -27,7 +28,7 @@ public:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-	void ApplyHiddenBones() const;
+	void ApplyBoneVisibility() const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<USkeletalMeshComponent> SourceMesh;
@@ -37,4 +38,7 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<FName> HiddenBones;
+
+	UPROPERTY(Transient)
+	TArray<FName> VisibleBones;
 };

@@ -156,6 +156,8 @@ bool FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest::RunTest(const FStr
 	TestTrue(TEXT("Default local-view policy hides the head bone on first-person body proxy"), Policy.LocalOnlyHiddenBones.Contains(FName(TEXT("head"))));
 	TestFalse(TEXT("Default local-view policy keeps neck_01 visible to avoid an open torso cutaway"), Policy.LocalOnlyHiddenBones.Contains(FName(TEXT("neck_01"))));
 	TestFalse(TEXT("Default local-view policy keeps neck_02 visible to avoid an open torso cutaway"), Policy.LocalOnlyHiddenBones.Contains(FName(TEXT("neck_02"))));
+	TestTrue(TEXT("Default local-view policy explicitly restores neck_01 visibility"), Policy.LocalOnlyVisibleBones.Contains(FName(TEXT("neck_01"))));
+	TestTrue(TEXT("Default local-view policy explicitly restores neck_02 visibility"), Policy.LocalOnlyVisibleBones.Contains(FName(TEXT("neck_02"))));
 
 	UStaticMeshComponent* SingleMeshHeadNamedComponent =
 		NewObject<UStaticMeshComponent>(GetTransientPackage(), FName(TEXT("MannySingleMeshWithHead")));

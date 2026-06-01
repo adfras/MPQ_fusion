@@ -951,6 +951,14 @@ void RestoreMetaHumanSelfViewHiddenBones(
 			MeshComponent->UnHideBoneByName(BoneName);
 		}
 	}
+
+	for (const FName& BoneName : LocalViewPolicy.LocalOnlyVisibleBones)
+	{
+		if (BoneName != NAME_None && MeshComponent->GetBoneIndex(BoneName) != INDEX_NONE)
+		{
+			MeshComponent->UnHideBoneByName(BoneName);
+		}
+	}
 }
 
 bool UsesMetaHumanEmbodiedAvatar(UWorld* World)
@@ -1588,7 +1596,11 @@ void ConfigureEmbodiedLocalViewVisibility(
 			}
 			if (LocalBodyProxyUpdater)
 			{
-				LocalBodyProxyUpdater->Configure(BodyProxySourceSkeletalMesh, LocalBodyProxy, ActivePolicy.LocalOnlyHiddenBones);
+				LocalBodyProxyUpdater->Configure(
+					BodyProxySourceSkeletalMesh,
+					LocalBodyProxy,
+					ActivePolicy.LocalOnlyHiddenBones,
+					ActivePolicy.LocalOnlyVisibleBones);
 			}
 		}
 	}

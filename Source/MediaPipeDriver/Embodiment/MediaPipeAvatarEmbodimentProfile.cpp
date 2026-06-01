@@ -388,6 +388,10 @@ FMediaPipeAvatarLocalViewPolicy FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid
 		FName(TEXT("FACIAL_C_FacialRoot")),
 		FName(TEXT("face_root"))
 	};
+	Policy.LocalOnlyVisibleBones = {
+		FName(TEXT("neck_01")),
+		FName(TEXT("neck_02"))
+	};
 	Policy.bAllowSingleMeshComponentCull = false;
 	Policy.bUseSingleMeshFirstPersonBodyProxy = true;
 	return Policy;
