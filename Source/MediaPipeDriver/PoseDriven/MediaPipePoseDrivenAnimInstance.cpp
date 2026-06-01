@@ -17,7 +17,6 @@
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeQuestHandDebugReporter.h"
 #include "MediaPipeQuestHandCompareDiagnostics.h"
-#include "MediaPipeQuestRuntimeDebugService.h"
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestConstrainedArmSolver.h"
 #include "MediaPipeQuestWristApplyPolicy.h"
@@ -26,14 +25,12 @@
 #include "MediaPipeQuestWristDiagnosticFormatter.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
 #include "MediaPipeShoulderRollbackDiagnostics.h"
-#include "MediaPipePoseTrackerComponent.h"
 #include "MediaPipePoseLog.h"
 #include "MediaPipeSolvedPose.h"
 
 #include "BonePose.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Engine.h"
-#include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/IConsoleManager.h"
@@ -286,38 +283,6 @@ namespace
 	const TStaticArray<FVector, QuestHandKeypointCount>& GetQuestHandPositions(const FQuestHandTrackingSnapshot& Snapshot, const bool bIsLeft)
 	{
 		return bIsLeft ? Snapshot.LeftPositionsWorld : Snapshot.RightPositionsWorld;
-	}
-
-	float EstimateBodyFusionObservedHeightCm(const FMediaPipeTrackingSourceFrame& SourceFrame)
-	{
-		FVector HeadWorld = FVector::ZeroVector;
-		float HeadReliability = 0.0f;
-		if (!SourceFrame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::Nose, HeadWorld, &HeadReliability))
-		{
-			return 0.0f;
-		}
-
-		float FloorZ = TNumericLimits<float>::Max();
-		bool bHasFloor = false;
-		auto ConsiderFloorLandmark = [&](const EMediaPipePoseLandmark Landmark)
-		{
-			FVector PointWorld = FVector::ZeroVector;
-			float Reliability = 0.0f;
-			if (SourceFrame.TryGetMediaPipeLandmark(Landmark, PointWorld, &Reliability))
-			{
-				FloorZ = bHasFloor ? FMath::Min(FloorZ, PointWorld.Z) : PointWorld.Z;
-				bHasFloor = true;
-			}
-		};
-
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::LeftAnkle);
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::RightAnkle);
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::LeftHeel);
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::RightHeel);
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::LeftFootIndex);
-		ConsiderFloorLandmark(EMediaPipePoseLandmark::RightFootIndex);
-
-		return bHasFloor ? FMath::Max(0.0f, HeadWorld.Z - FloorZ) : 0.0f;
 	}
 
 	bool TryBuildQuestHandBasisWorld(const FQuestHandTrackingSnapshot& Snapshot, const bool bIsLeft, FVector& OutForwardWorld, FVector& OutUpWorld, float& OutBasisSin, const bool bUseMannyHandBasisConvention = true)
@@ -632,13 +597,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	LatestSignalSnapshot.Reset();
 	QuestHands.Reset();
 	FullArmChain.Reset();
-	BodyFusionSourceFrame.Reset();
-	BodyFusionFreshnessThresholds = FMediaPipeBodyFusionFreshnessThresholds();
-	LastBodyFusionPose.Reset();
-	LastBodyFusionAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
-	LastBodyFusionAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
-	LastBodyFusionAuthorityReason.Reset();
-	bLastBodyFusionMediaPipeAuthorityAllowed = 0;
+	BodyFusionFrame.ResetTransient();
 	TargetMetaHumanProfile.Reset();
 	bHasCachedQuestHmdPose = false;
 	CachedQuestHmdWorld = FVector::ZeroVector;
@@ -720,36 +679,44 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		World->GetTimeSeconds(),
 		TargetProfileLogState);
 
+	if (!EmbodiedFusionComponent)
+	{
+		if (AActor* OwnerActor = SkelComp->GetOwner())
+		{
+			EmbodiedFusionComponent = OwnerActor->FindComponentByClass<UEmbodiedFusionComponent>();
+		}
+	}
+	if (!EmbodiedFusionComponent)
+	{
+		return;
+	}
+
 	const FMediaPipeBodyFusionRuntimePolicySnapshot BodyFusionRuntimePolicy =
 		FMediaPipeBodyFusionRuntimePolicy::ReadGameThread();
 	const bool bBodyFusionRuntimeActive = BodyFusionRuntimePolicy.bBodyFusionEnabled;
-	FMediaPipeQuestRuntimeTickInput QuestRuntimeInput;
+	FEmbodiedFusionQuestSourcePollInput QuestRuntimeInput;
 	QuestRuntimeInput.World = World;
 	QuestRuntimeInput.TargetComponent = SkelComp;
 	QuestRuntimeInput.TargetActorName = TargetActorName;
 	QuestRuntimeInput.bUseQuestHandTracking = bUseQuestHandTracking;
 	QuestRuntimeInput.bBodyFusionRuntimeActive = bBodyFusionRuntimeActive;
-	const FMediaPipeQuestRuntimeTickOutput QuestRuntimeOutput =
-		FMediaPipeQuestRuntimeDebugService::TickSourcesAndDebug(QuestRuntimeInput, DiagnosticsState);
+	QuestRuntimeInput.bReadFullArmChain =
+		TargetMetaHumanProfile.IsValidForPoseDriving() &&
+		ResolveMediaPipeMetaHumanArmSourceMode(TargetMetaHumanProfile) == 1;
+	const FEmbodiedFusionQuestSourcePollResult QuestRuntimeOutput =
+		EmbodiedFusionComponent->PollQuestRuntimeSources_GameThread(QuestRuntimeInput, DiagnosticsState);
 	QuestHands = QuestRuntimeOutput.QuestHands;
+	FullArmChain = QuestRuntimeOutput.FullArmChain;
 	bHasCachedQuestHmdPose = QuestRuntimeOutput.HmdPose.bHasPose;
 	CachedQuestHmdWorld = QuestRuntimeOutput.HmdPose.LocationWorld;
 	CachedQuestHmdRotWorld = QuestRuntimeOutput.HmdPose.RotationWorld;
 	CachedQuestTrackingUpWorld = QuestRuntimeOutput.HmdPose.TrackingUpWorld;
 
-	if (TargetMetaHumanProfile.IsValidForPoseDriving() &&
-		ResolveMediaPipeMetaHumanArmSourceMode(TargetMetaHumanProfile) == 1)
-	{
-		ReadLatestMediaPipeFullArmChainSnapshot(FullArmChain);
-	}
-
 	const FQuestWristRuntimeState& QuestRuntimeWristState = GetQuestWristRuntimeState(RuntimeStateKey);
-	FMediaPipeQuestCalibrationHudInput QuestCalibrationHudInput;
+	FEmbodiedFusionQuestCalibrationDebugInput QuestCalibrationHudInput;
 	QuestCalibrationHudInput.World = World;
 	QuestCalibrationHudInput.TargetComponent = SkelComp;
 	QuestCalibrationHudInput.WristState = &QuestRuntimeWristState;
-	QuestCalibrationHudInput.QuestHands = &QuestHands;
-	QuestCalibrationHudInput.HmdPose = QuestRuntimeOutput.HmdPose;
 	QuestCalibrationHudInput.bArmLengthCalibrationHudOwner =
 		TargetMetaHumanProfile.bIsMetaHuman && TargetMetaHumanProfile.bIsActiveProfile;
 	QuestCalibrationHudInput.bHasRefArmL = bHasRefArmL;
@@ -758,29 +725,13 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	QuestCalibrationHudInput.RefLowerLenCompL = RefLowerLenCompL;
 	QuestCalibrationHudInput.RefUpperLenCompR = RefUpperLenCompR;
 	QuestCalibrationHudInput.RefLowerLenCompR = RefLowerLenCompR;
-	FMediaPipeQuestRuntimeDebugService::DisplayCalibrationHuds(QuestCalibrationHudInput);
+	EmbodiedFusionComponent->DisplayQuestCalibrationHuds_GameThread(QuestCalibrationHudInput);
 
-	if (!SourceActor)
-	{
-		for (TActorIterator<AActor> It(World); It; ++It)
-		{
-			AActor* Candidate = *It;
-			if (!Candidate)
-			{
-				continue;
-			}
-
-			if (Candidate->FindComponentByClass<UMediaPipePoseTrackerComponent>())
-			{
-				SourceActor = Candidate;
-				break;
-			}
-		}
-	}
-
-	UMediaPipePoseTrackerComponent* TrackerComp = SourceActor ? SourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>() : nullptr;
-	FMediaPipePoseFrame Frame;
-	const bool bHasLivePoseFrame = TrackerComp && TrackerComp->GetLatestFrame(Frame) && Frame.bValid;
+	FEmbodiedFusionMediaPipeSourceRead MediaPipeSourceRead;
+	EmbodiedFusionComponent->ReadMediaPipeSourceFrame_GameThread(World, SourceActor, MediaPipeSourceRead);
+	SourceActor = MediaPipeSourceRead.SourceActor;
+	const FMediaPipePoseFrame& Frame = MediaPipeSourceRead.Frame;
+	const bool bHasLivePoseFrame = MediaPipeSourceRead.bHasLivePoseFrame;
 	const MediaPipePoseFrameContinuity::EFrameAvailability FrameAvailability =
 		MediaPipePoseFrameContinuity::ResolveFrameAvailability(bHasLivePoseFrame ? &Frame : nullptr, bHasPoseFrame);
 	if (FrameAvailability != MediaPipePoseFrameContinuity::EFrameAvailability::Live)
@@ -789,22 +740,20 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	}
 
 	const FTransform NewTargetCompTransform = SkelComp->GetComponentTransform();
-	const FTransform NewPoseToWorldTransform = SourceActor->GetActorTransform();
-	const float NewWorldScale = TrackerComp->WorldScale;
-	const bool bNewMirrorLandmarksLR = TrackerComp->bMirrorLandmarksLR;
-	FMediaPipeQuestHmdRelativeAvatarDebugInput QuestAvatarDebugInput;
+	const FTransform NewPoseToWorldTransform = MediaPipeSourceRead.PoseToWorldTransform;
+	const float NewWorldScale = MediaPipeSourceRead.WorldScale;
+	const bool bNewMirrorLandmarksLR = MediaPipeSourceRead.bMirrorLandmarksLR;
+	FEmbodiedFusionHmdRelativeAvatarDebugInput QuestAvatarDebugInput;
 	QuestAvatarDebugInput.World = World;
-	QuestAvatarDebugInput.QuestHands = &QuestHands;
-	QuestAvatarDebugInput.HmdPose = QuestRuntimeOutput.HmdPose;
 	QuestAvatarDebugInput.TargetCompTransform = NewTargetCompTransform;
-	QuestAvatarDebugInput.bUseQuestHandTracking = bUseQuestHandTracking;
+	QuestAvatarDebugInput.bUseHandTracking = bUseQuestHandTracking;
 	QuestAvatarDebugInput.bHasTargetEmbodimentProfile = bHasTargetEmbodimentProfile;
 	QuestAvatarDebugInput.TargetEmbodimentProfile = TargetEmbodimentProfile;
 	QuestAvatarDebugInput.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
 	QuestAvatarDebugInput.bHasTargetEyeLocalOffset = bHasTargetEyeLocalOffset;
 	QuestAvatarDebugInput.TargetEyeLocalOffset = TargetEyeLocalOffset;
 	QuestAvatarDebugInput.TargetEmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
-	FMediaPipeQuestRuntimeDebugService::DrawHmdRelativeAvatarComparison(QuestAvatarDebugInput);
+	EmbodiedFusionComponent->DrawHmdRelativeAvatarComparison_GameThread(QuestAvatarDebugInput);
 	FPoseYawAlignRuntimeState& PoseYawAlignState = GetPoseYawAlignRuntimeState(SkelComp);
 	const bool bPoseYawAlignToActor = CVarMediaPipePoseYawAlignToActor.GetValueOnGameThread() != 0;
 	if (bPoseYawAlignToActor != PoseYawAlignState.bWasEnabled)
@@ -1012,39 +961,6 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	{
 		const double BodyFusionNowSeconds = FPlatformTime::Seconds();
 
-		FMediaPipeTrackingMediaPipePoseSnapshot MediaPipePoseSnapshot;
-		MediaPipePoseSnapshot.TimestampSeconds = BodyFusionNowSeconds;
-		for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
-		{
-			FVector LandmarkWorld = FVector::ZeroVector;
-			if (IsMeasured(Index) && TryGetLmWorld(Index, LandmarkWorld))
-			{
-				MediaPipePoseSnapshot.SetLandmark(
-					static_cast<EMediaPipePoseLandmark>(Index),
-					LandmarkWorld,
-					GetLandmarkReliability(Index));
-			}
-		}
-
-		FMediaPipeTrackingSourceFrameBuilderInput SourceFrameInput;
-		SourceFrameInput.NowSeconds = BodyFusionNowSeconds;
-		SourceFrameInput.bHasHmdPose = bHasCachedQuestHmdPose;
-		SourceFrameInput.HmdLocationWorld = CachedQuestHmdWorld;
-		SourceFrameInput.HmdRotationWorld = CachedQuestHmdRotWorld;
-		SourceFrameInput.HmdTrackingUpWorld = CachedQuestTrackingUpWorld;
-		SourceFrameInput.QuestHands = QuestHands;
-		SourceFrameInput.FullArmChain = FullArmChain;
-		SourceFrameInput.MediaPipePose = MediaPipePoseSnapshot;
-		SourceFrameInput.bOverrideQuestFullArmChainMaxAgeSeconds = TargetMetaHumanProfile.IsValidForPoseDriving();
-		SourceFrameInput.QuestFullArmChainMaxAgeSeconds =
-			ResolveMediaPipeMetaHumanFullArmChainMaxAgeSeconds(TargetMetaHumanProfile);
-		FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
-			SourceFrameInput,
-			BodyFusionSourceFrame,
-			BodyFusionFreshnessThresholds);
-
-		TryUpdateBodyFusionCalibration_GameThread(BodyFusionNowSeconds);
-
 		FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
 			? TargetEmbodimentProfile
 			: FMediaPipeAvatarEmbodimentProfile();
@@ -1054,370 +970,35 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 			: BodyFusionProfile.DefaultEyeLocalOffset;
 		BodyFusionProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
 
-		FMediaPipeBodyFusionAuthorityGateInput AuthorityGateInput;
-		AuthorityGateInput.MediaPipeAuthorityMode = BodyFusionRuntimePolicy.MediaPipeAuthorityMode;
-		AuthorityGateInput.bCalibrationUsable = BodyFusionCalibration.IsUsable();
-		AuthorityGateInput.CalibrationRejectReason = BodyFusionCalibration.LastRejectReason;
-		AuthorityGateInput.MediaPipePoseStatus = BodyFusionSourceFrame.MediaPipePoseStatus;
-		const FMediaPipeBodyFusionAuthorityGateDecision AuthorityGateDecision =
-			FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(AuthorityGateInput);
-		LastBodyFusionAuthority = AuthorityGateDecision.Authority;
-		LastBodyFusionAuthorityState = AuthorityGateDecision.AuthorityState;
-		LastBodyFusionAuthorityReason = AuthorityGateDecision.Reason;
-		bLastBodyFusionMediaPipeAuthorityAllowed = AuthorityGateDecision.bAllowMediaPipePoseAuthority;
-
-		FMediaPipeBodyFusionSolveInput BodyFusionInput;
-		BodyFusionInput.SourceFrame = BodyFusionSourceFrame;
-		BodyFusionInput.Calibration = BodyFusionCalibration;
-		BodyFusionInput.Authority = LastBodyFusionAuthority;
-		BodyFusionInput.Profile = BodyFusionProfile;
-		BodyFusionInput.AvatarWorldTransform = TargetCompTransform;
-		BodyFusionInput.UserCameraForwardOffsetCm = 0.0f;
-		BodyFusionInput.bAllowMediaPipePoseAuthority = bLastBodyFusionMediaPipeAuthorityAllowed != 0;
-		BodyFusionInput.BodyAuthorityState = LastBodyFusionAuthorityState;
-
-		LastBodyFusionPose.Reset();
-		FMediaPipeBodyFusionSolver::Solve(BodyFusionInput, LastBodyFusionPose);
-
-		if (BodyFusionRuntimePolicy.bDebugEnabled)
+		if (EmbodiedFusionComponent)
 		{
-			EmitBodyFusionDebugLog_GameThread(BodyFusionNowSeconds);
+			EmbodiedFusionComponent->UpdateBodyPoseObservation_GameThread(
+				BodyFusionNowSeconds,
+				PoseFrame,
+				PoseWorld,
+				EverMeasured);
+
+			FEmbodiedFusionUpdateInput FusionInput;
+			FusionInput.TargetActorName = TargetActorName;
+			FusionInput.NowSeconds = BodyFusionNowSeconds;
+			FusionInput.AvatarProfile = BodyFusionProfile;
+			FusionInput.TargetComponentTransform = TargetCompTransform;
+			FusionInput.TargetForwardWorld = GetTargetForwardWorld();
+			FusionInput.RefPelvisTranslationComp = RefPelvisTranslationComp;
+			FusionInput.RefHeadPosComp = RefHeadPosComp;
+			FusionInput.RefChestPosComp = RefSpine05TransformComp.GetTranslation();
+			FusionInput.RefNeckPosComp = RefNeckPosComp;
+			FusionInput.bOverrideArmChainMaxAgeSeconds =
+				TargetMetaHumanProfile.IsValidForPoseDriving();
+			FusionInput.ArmChainMaxAgeSeconds =
+				ResolveMediaPipeMetaHumanFullArmChainMaxAgeSeconds(TargetMetaHumanProfile);
+			FusionInput.bHasRefChestPosComp = !RefSpine05TransformComp.GetTranslation().IsNearlyZero();
+			EmbodiedFusionComponent->UpdateFusion_GameThread(FusionInput);
+			BodyFusionFrame = EmbodiedFusionComponent->GetLatestFusionFrame();
 		}
 	}
 
 	bHasPoseFrame = true;
-}
-
-bool FAnimNode_MediaPipePoseDriven::TryUpdateBodyFusionCalibration_GameThread(const double NowSeconds)
-{
-	const FMediaPipeBodyFusionRuntimePolicySnapshot BodyFusionRuntimePolicy =
-		FMediaPipeBodyFusionRuntimePolicy::ReadGameThread();
-	const int32 ResetSerial = FMediaPipeEmbodimentDebugCommands::GetBodyFusionCalibrationResetSerial();
-	if (LastBodyFusionCalibrationResetSerial != ResetSerial)
-	{
-		LastBodyFusionCalibrationResetSerial = ResetSerial;
-		BodyFusionCalibration.Reset();
-		BodyFusionCalibrationStableFrameCount = 0;
-		BodyFusionCalibrationStableSeconds = 0.0f;
-		LastBodyFusionCalibrationUpdateTimeSeconds = -1.0;
-		if (BodyFusionRuntimePolicy.bDebugEnabled)
-		{
-			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.BodyFusion.Calibration actor=%s reset serial=%d"),
-				*TargetActorName.ToString(),
-				ResetSerial);
-		}
-	}
-
-	if (BodyFusionCalibration.IsUsable())
-	{
-		return true;
-	}
-
-	FVector HipCenterWorld = FVector::ZeroVector;
-	FVector ShoulderCenterWorld = FVector::ZeroVector;
-	float HipReliability = 0.0f;
-	float ShoulderReliability = 0.0f;
-	const bool bHasHipCenter = FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
-		BodyFusionSourceFrame,
-		EMediaPipePoseLandmark::LeftHip,
-		EMediaPipePoseLandmark::RightHip,
-		HipCenterWorld,
-		&HipReliability);
-	const bool bHasShoulderCenter = FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
-		BodyFusionSourceFrame,
-		EMediaPipePoseLandmark::LeftShoulder,
-		EMediaPipePoseLandmark::RightShoulder,
-		ShoulderCenterWorld,
-		&ShoulderReliability);
-
-	FVector LeftHipWorld = FVector::ZeroVector;
-	FVector RightHipWorld = FVector::ZeroVector;
-	float LeftHipReliability = 0.0f;
-	float RightHipReliability = 0.0f;
-	const bool bHasLeftHip = BodyFusionSourceFrame.TryGetMediaPipeLandmark(
-		EMediaPipePoseLandmark::LeftHip,
-		LeftHipWorld,
-		&LeftHipReliability);
-	const bool bHasRightHip = BodyFusionSourceFrame.TryGetMediaPipeLandmark(
-		EMediaPipePoseLandmark::RightHip,
-		RightHipWorld,
-		&RightHipReliability);
-
-	FVector NoseWorld = FVector::ZeroVector;
-	float NoseReliability = 0.0f;
-	BodyFusionSourceFrame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::Nose, NoseWorld, &NoseReliability);
-
-	FMediaPipeAvatarEmbodimentProfile CalibrationProfile = bHasTargetEmbodimentProfile
-		? TargetEmbodimentProfile
-		: FMediaPipeAvatarEmbodimentProfile();
-	CalibrationProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
-	CalibrationProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
-		? TargetEyeLocalOffset
-		: CalibrationProfile.DefaultEyeLocalOffset;
-
-	const FVector AvatarForwardWorld = GetTargetForwardWorld().GetSafeNormal();
-	FVector AvatarUpWorld = FMediaPipeAvatarEmbodimentSolver::GetAvatarUpWorld(TargetCompTransform, AvatarForwardWorld).GetSafeNormal();
-	if (AvatarUpWorld.IsNearlyZero())
-	{
-		AvatarUpWorld = FVector::UpVector;
-	}
-
-	FVector MediaPipeForwardWorld = AvatarForwardWorld;
-	if (bHasHipCenter && bHasShoulderCenter && bHasLeftHip && bHasRightHip)
-	{
-		const FVector MediaPipeUpWorld = (ShoulderCenterWorld - HipCenterWorld).GetSafeNormal();
-		FVector MediaPipeRightWorld = (RightHipWorld - LeftHipWorld).GetSafeNormal();
-		MediaPipeRightWorld = (MediaPipeRightWorld - FVector::DotProduct(MediaPipeRightWorld, MediaPipeUpWorld) * MediaPipeUpWorld).GetSafeNormal();
-		FVector CandidateForwardWorld = FVector::CrossProduct(MediaPipeRightWorld, MediaPipeUpWorld).GetSafeNormal();
-		if (!CandidateForwardWorld.IsNearlyZero())
-		{
-			if (!AvatarForwardWorld.IsNearlyZero())
-			{
-				CandidateForwardWorld = LockVectorToHemisphere(CandidateForwardWorld, AvatarForwardWorld);
-			}
-			MediaPipeForwardWorld = CandidateForwardWorld;
-		}
-	}
-
-	const FVector AvatarPelvisAnchorWorld = !RefPelvisTranslationComp.IsNearlyZero()
-		? TargetCompTransform.TransformPosition(RefPelvisTranslationComp)
-		: TargetCompTransform.TransformPosition(CalibrationProfile.DefaultPelvisLocalOffset);
-	const float Confidence = FMath::Min(
-		BodyFusionSourceFrame.MediaPipePoseStatus.Confidence,
-		FMath::Min(HipReliability, ShoulderReliability));
-	const float ObservedBodyHeightCm = EstimateBodyFusionObservedHeightCm(BodyFusionSourceFrame);
-	const float AvatarBodyHeightCm = FMath::Max(CalibrationProfile.DefaultEyeLocalOffset.Z, ObservedBodyHeightCm);
-
-	FMediaPipeEmbodimentCalibrationInput CalibrationInput;
-	CalibrationInput.MediaPipeHipCenterWorld = HipCenterWorld;
-	CalibrationInput.MediaPipeForwardWorld = MediaPipeForwardWorld;
-	CalibrationInput.AvatarPelvisAnchorWorld = AvatarPelvisAnchorWorld;
-	CalibrationInput.AvatarForwardWorld = AvatarForwardWorld.IsNearlyZero() ? FVector::ForwardVector : AvatarForwardWorld;
-	CalibrationInput.AvatarUpWorld = AvatarUpWorld;
-	CalibrationInput.HmdWorld = BodyFusionSourceFrame.HmdLocationWorld;
-	CalibrationInput.ObservedBodyHeightCm = ObservedBodyHeightCm;
-	CalibrationInput.AvatarBodyHeightCm = AvatarBodyHeightCm;
-	CalibrationInput.Confidence = Confidence;
-	CalibrationInput.bHmdStable = BodyFusionSourceFrame.HmdStatus.IsFresh();
-	CalibrationInput.bMediaPipeStable =
-		BodyFusionSourceFrame.MediaPipePoseStatus.IsFresh() &&
-		bHasHipCenter &&
-		bHasShoulderCenter &&
-		!MediaPipeForwardWorld.IsNearlyZero();
-	CalibrationInput.TimestampSeconds = NowSeconds;
-
-	const float CalibrationDeltaSeconds = LastBodyFusionCalibrationUpdateTimeSeconds >= 0.0
-		? FMath::Clamp(static_cast<float>(NowSeconds - LastBodyFusionCalibrationUpdateTimeSeconds), 0.0f, 0.25f)
-		: 0.0f;
-	LastBodyFusionCalibrationUpdateTimeSeconds = NowSeconds;
-	const bool bCalibrationSampleStable =
-		CalibrationInput.bHmdStable &&
-		CalibrationInput.bMediaPipeStable &&
-		CalibrationInput.Confidence >= 0.5f &&
-		ObservedBodyHeightCm > KINDA_SMALL_NUMBER;
-	if (bCalibrationSampleStable)
-	{
-		++BodyFusionCalibrationStableFrameCount;
-		BodyFusionCalibrationStableSeconds += CalibrationDeltaSeconds;
-	}
-	else
-	{
-		BodyFusionCalibrationStableFrameCount = 0;
-		BodyFusionCalibrationStableSeconds = 0.0f;
-	}
-
-	const int32 RequiredStableFrames = BodyFusionRuntimePolicy.RequiredCalibrationStableFrames;
-	const float RequiredStableSeconds = BodyFusionRuntimePolicy.RequiredCalibrationStableSeconds;
-	const bool bStableGateSatisfied =
-		BodyFusionCalibrationStableFrameCount >= RequiredStableFrames &&
-		BodyFusionCalibrationStableSeconds >= RequiredStableSeconds;
-
-	if (!bStableGateSatisfied)
-	{
-		BodyFusionCalibration.Reset();
-		BodyFusionCalibration.LastRejectReason = bCalibrationSampleStable
-			? TEXT("Waiting for stable MediaPipe calibration")
-			: (CalibrationInput.bMediaPipeStable ? TEXT("Low MediaPipe confidence") : TEXT("MediaPipe unstable"));
-		if (BodyFusionRuntimePolicy.bDebugEnabled &&
-			FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-				NowSeconds,
-				1.0,
-				DiagnosticsState.LastBodyFusionCalibrationLogTimeSeconds))
-		{
-			FMediaPipeBodyFusionDebugFormatter::EmitCalibrationRejected(
-				TargetActorName,
-				BodyFusionCalibration.LastRejectReason,
-				Confidence,
-				BodyFusionSourceFrame,
-				bHasHipCenter,
-				bHasShoulderCenter,
-				ObservedBodyHeightCm,
-				BodyFusionCalibrationStableFrameCount,
-				RequiredStableFrames,
-				BodyFusionCalibrationStableSeconds,
-				RequiredStableSeconds);
-		}
-		return false;
-	}
-
-	const bool bAccepted = FMediaPipeEmbodimentCalibration::TryBuildNeutralCalibration(
-		CalibrationInput,
-		BodyFusionCalibration);
-	if (BodyFusionRuntimePolicy.bDebugEnabled &&
-		FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-			NowSeconds,
-			1.0,
-			DiagnosticsState.LastBodyFusionCalibrationLogTimeSeconds))
-	{
-		if (bAccepted)
-		{
-			FMediaPipeBodyFusionDebugFormatter::EmitCalibrationAccepted(
-				TargetActorName,
-				BodyFusionCalibration.Confidence,
-				ObservedBodyHeightCm,
-				AvatarBodyHeightCm,
-				BodyFusionCalibrationStableFrameCount,
-				RequiredStableFrames,
-				BodyFusionCalibrationStableSeconds,
-				RequiredStableSeconds,
-				BodyFusionCalibration.YawRotation,
-				BodyFusionCalibration.Translation,
-				BodyFusionCalibration.Scale,
-				BodyFusionSourceFrame,
-				HipCenterWorld,
-				ShoulderCenterWorld,
-				MediaPipeForwardWorld);
-		}
-		else
-		{
-			FMediaPipeBodyFusionDebugFormatter::EmitCalibrationRejected(
-				TargetActorName,
-				BodyFusionCalibration.LastRejectReason,
-				Confidence,
-				BodyFusionSourceFrame,
-				bHasHipCenter,
-				bHasShoulderCenter,
-				ObservedBodyHeightCm,
-				BodyFusionCalibrationStableFrameCount,
-				RequiredStableFrames,
-				BodyFusionCalibrationStableSeconds,
-				RequiredStableSeconds);
-		}
-	}
-
-	return bAccepted;
-}
-
-void FAnimNode_MediaPipePoseDriven::EmitBodyFusionDebugLog_GameThread(const double NowSeconds)
-{
-	if (!FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-		NowSeconds,
-		1.0,
-		DiagnosticsState.LastBodyFusionDebugLogTimeSeconds))
-	{
-		return;
-	}
-
-	FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
-		? TargetEmbodimentProfile
-		: FMediaPipeAvatarEmbodimentProfile();
-	BodyFusionProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
-	BodyFusionProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
-		? TargetEyeLocalOffset
-		: BodyFusionProfile.DefaultEyeLocalOffset;
-	BodyFusionProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
-
-	const FVector AvatarForwardWorld = GetTargetForwardWorld().GetSafeNormal();
-	FVector AvatarUpWorld = FMediaPipeAvatarEmbodimentSolver::GetAvatarUpWorld(TargetCompTransform, AvatarForwardWorld).GetSafeNormal();
-	if (AvatarUpWorld.IsNearlyZero())
-	{
-		AvatarUpWorld = FVector::UpVector;
-	}
-
-	const FVector AvatarRootWorld = TargetCompTransform.GetLocation();
-	const FVector AvatarEyeWorld = TargetCompTransform.TransformPosition(BodyFusionProfile.DefaultEyeLocalOffset);
-	const FVector AvatarHeadWorld = !RefHeadPosComp.IsNearlyZero()
-		? TargetCompTransform.TransformPosition(RefHeadPosComp)
-		: TargetCompTransform.TransformPosition(ResolveMediaPipeAvatarProfileHeadLocal(BodyFusionProfile));
-	const FVector AvatarPelvisWorld = !RefPelvisTranslationComp.IsNearlyZero()
-		? TargetCompTransform.TransformPosition(RefPelvisTranslationComp)
-		: TargetCompTransform.TransformPosition(BodyFusionProfile.DefaultPelvisLocalOffset);
-	const FVector AvatarChestWorld = !RefSpine05TransformComp.GetTranslation().IsNearlyZero()
-		? TargetCompTransform.TransformPosition(RefSpine05TransformComp.GetTranslation())
-		: TargetCompTransform.TransformPosition(BodyFusionProfile.DefaultChestLocalOffset);
-	const FVector AvatarNeckWorld = TargetCompTransform.TransformPosition(BodyFusionProfile.DefaultNeckLocalOffset);
-
-	FVector MediaPipeHipCenterWorld = FVector::ZeroVector;
-	FVector MediaPipeShoulderCenterWorld = FVector::ZeroVector;
-	FVector MediaPipeHeadWorld = FVector::ZeroVector;
-	float MediaPipeHipReliability = 0.0f;
-	float MediaPipeShoulderReliability = 0.0f;
-	const bool bHasMediaPipeHip = FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
-		BodyFusionSourceFrame,
-		EMediaPipePoseLandmark::LeftHip,
-		EMediaPipePoseLandmark::RightHip,
-		MediaPipeHipCenterWorld,
-		&MediaPipeHipReliability);
-	const bool bHasMediaPipeShoulder = FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
-		BodyFusionSourceFrame,
-		EMediaPipePoseLandmark::LeftShoulder,
-		EMediaPipePoseLandmark::RightShoulder,
-		MediaPipeShoulderCenterWorld,
-		&MediaPipeShoulderReliability);
-	float MediaPipeHeadReliability = 0.0f;
-	const bool bHasMediaPipeHead = BodyFusionSourceFrame.TryGetMediaPipeLandmark(
-		EMediaPipePoseLandmark::Nose,
-		MediaPipeHeadWorld,
-		&MediaPipeHeadReliability);
-
-	const bool bHasHmd = BodyFusionSourceFrame.HmdStatus.IsFresh();
-	const float CameraToEyeCm = bHasHmd ? FVector::Distance(BodyFusionSourceFrame.HmdLocationWorld, AvatarEyeWorld) : -1.0f;
-	const float CameraToChestCm = bHasHmd ? FVector::Distance(BodyFusionSourceFrame.HmdLocationWorld, AvatarChestWorld) : -1.0f;
-	const float HeadToChestCm = FVector::Distance(AvatarHeadWorld, AvatarChestWorld);
-	const float ChestToPelvisCm = FVector::Distance(AvatarChestWorld, AvatarPelvisWorld);
-	const float HmdYawDeg = bHasHmd ? BodyFusionSourceFrame.HmdRotationWorld.Rotator().Yaw : 0.0f;
-
-	UE_LOG(LogMediaPipePose, Log,
-		TEXT("mp.BodyFusion.Debug actor=%s bodyAuthority=%s mediaPipeAuthority=%d reason=\"%s\" stableFrames=%d stableSeconds=%.2f hmd=%s qHandL=%s qHandR=%s fullChainL=%s fullChainR=%s mediaPipe=%s hmdYaw=%.1f hmd=%s trackingUp=%s avatarRoot=%s eye=%s head=%s neck=%s chest=%s pelvis=%s forward=%s mpHip=%s hipRel=%.2f mpShoulder=%s shoulderRel=%.2f mpHead=%s headRel=%.2f dist(cameraEye=%.1f cameraChest=%.1f headChest=%.1f chestPelvis=%.1f) hmdPlanar(offset=%.1f) solve=%d solveEye=%s solveHead=%s solveChest=%s solvePelvis=%s"),
-		*TargetActorName.ToString(),
-		FMediaPipeBodyFusionDebugFormatter::AuthorityStateName(LastBodyFusionAuthorityState),
-		bLastBodyFusionMediaPipeAuthorityAllowed ? 1 : 0,
-		*LastBodyFusionAuthorityReason,
-		BodyFusionCalibrationStableFrameCount,
-		BodyFusionCalibrationStableSeconds,
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.HmdStatus),
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.QuestLeftHandStatus),
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.QuestRightHandStatus),
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.QuestLeftFullArmChainStatus),
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.QuestRightFullArmChainStatus),
-		*FMediaPipeBodyFusionDebugFormatter::StatusString(BodyFusionSourceFrame.MediaPipePoseStatus),
-		HmdYawDeg,
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionSourceFrame.HmdLocationWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionSourceFrame.TrackingUpWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarRootWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarEyeWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarHeadWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarNeckWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarChestWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarPelvisWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(AvatarForwardWorld),
-		bHasMediaPipeHip ? *FMediaPipeBodyFusionDebugFormatter::VectorString(MediaPipeHipCenterWorld) : TEXT("(missing)"),
-		MediaPipeHipReliability,
-		bHasMediaPipeShoulder ? *FMediaPipeBodyFusionDebugFormatter::VectorString(MediaPipeShoulderCenterWorld) : TEXT("(missing)"),
-		MediaPipeShoulderReliability,
-		bHasMediaPipeHead ? *FMediaPipeBodyFusionDebugFormatter::VectorString(MediaPipeHeadWorld) : TEXT("(missing)"),
-		MediaPipeHeadReliability,
-		CameraToEyeCm,
-		CameraToChestCm,
-		HeadToChestCm,
-		ChestToPelvisCm,
-		LastBodyFusionPose.DebugErrors.HmdHorizontalOffsetCm,
-		LastBodyFusionPose.IsUsable() ? 1 : 0,
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Eye.LocationWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Head.LocationWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Chest.LocationWorld),
-		*FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Pelvis.LocationWorld));
 }
 
 FVector FAnimNode_MediaPipePoseDriven::LerpNormalized(const FVector& A, const FVector& B, float Alpha)
@@ -2023,7 +1604,7 @@ void FAnimNode_MediaPipePoseDriven::ApplyTranslationDeltaCS(FCSPose<FCompactPose
 
 bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionPoseForEvaluation() const
 {
-	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread() || !LastBodyFusionPose.IsUsable())
+	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread() || !BodyFusionFrame.Pose.IsUsable())
 	{
 		return false;
 	}
@@ -2031,7 +1612,7 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionPoseForEvaluation() const
 	const FMediaPipeAvatarEmbodimentProfile Profile = bHasTargetEmbodimentProfile
 		? TargetEmbodimentProfile
 		: FMediaPipeAvatarEmbodimentProfile();
-	return FMediaPipeAvatarPoseWriter::CanWritePose(LastBodyFusionPose, Profile);
+	return FMediaPipeAvatarPoseWriter::CanWritePose(BodyFusionFrame.Pose, Profile);
 }
 
 bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
@@ -2054,11 +1635,11 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	{
 		FVector TargetPelvisOffsetComp = FVector::ZeroVector;
 		bool bHasTargetPelvisOffset = false;
-		if (LastBodyFusionPose.Pelvis.bValid &&
-			(LastBodyFusionPose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe ||
-			 LastBodyFusionPose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused))
+		if (BodyFusionFrame.Pose.Pelvis.bValid &&
+			(BodyFusionFrame.Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe ||
+			 BodyFusionFrame.Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused))
 		{
-			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(LastBodyFusionPose.Pelvis.LocationWorld);
+			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Pelvis.LocationWorld);
 			TargetPelvisOffsetComp = TargetPelvisComp - RefPelvisTranslationComp;
 			bHasTargetPelvisOffset = true;
 		}
@@ -2089,12 +1670,12 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		return true;
 	}
 
-	if (!LastBodyFusionPose.Pelvis.bValid || !LastBodyFusionPose.Chest.bValid || !LastBodyFusionPose.Head.bValid)
+	if (!BodyFusionFrame.Pose.Pelvis.bValid || !BodyFusionFrame.Pose.Chest.bValid || !BodyFusionFrame.Pose.Head.bValid)
 	{
 		return true;
 	}
 
-	FVector ResolvedPelvisComp = WorldToComponent.TransformPosition(LastBodyFusionPose.Pelvis.LocationWorld);
+	FVector ResolvedPelvisComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Pelvis.LocationWorld);
 	bool bHasResolvedPelvisComp = false;
 	if (Pelvis.IsValidToEvaluate())
 	{
@@ -2103,7 +1684,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	}
 
 	FMediaPipeBodyFusionPoseWriteContextInput WriteContextInput;
-	WriteContextInput.Pose = &LastBodyFusionPose;
+	WriteContextInput.Pose = &BodyFusionFrame.Pose;
 	WriteContextInput.TargetComponentToWorld = TargetCompTransform;
 	WriteContextInput.Profile = ForwardProfile;
 	WriteContextInput.ResolvedPelvisComp = ResolvedPelvisComp;
@@ -2185,7 +1766,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 
 	const bool bHmdBodyFusionHeadAuthoritative =
 		WriteContext.bHmdHeadAuthoritative &&
-		BodyFusionSourceFrame.HmdStatus.IsFresh();
+		BodyFusionFrame.SourceFrame.HmdStatus.IsFresh();
 	const float SpineRotAlpha = bHmdBodyFusionHeadAuthoritative
 		? 1.0f
 		: HalfLifeToAlpha(SpineRotationHalfLifeSeconds, FMath::Max(DeltaSeconds, 0.0f));
@@ -2306,7 +1887,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		: HeadAnchorProfile.DefaultEyeLocalOffset;
 	const bool bCanAnchorHeadFromEye =
 		bHasHeadRotationCS &&
-		LastBodyFusionPose.Eye.bValid &&
+		BodyFusionFrame.Pose.Eye.bValid &&
 		Head.IsValidToEvaluate() &&
 		!RefHeadPosComp.IsNearlyZero() &&
 		!HeadAnchorProfile.DefaultEyeLocalOffset.ContainsNaN();
@@ -2326,7 +1907,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	}
 	if (bCanAnchorHeadFromEye)
 	{
-		const FVector TargetEyeComp = WorldToComponent.TransformPosition(LastBodyFusionPose.Eye.LocationWorld);
+		const FVector TargetEyeComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Eye.LocationWorld);
 		FVector EyeAnchoredHeadComp = FVector::ZeroVector;
 		if (bHasEyeLocalInHeadForPose)
 		{
@@ -2340,6 +1921,26 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		{
 			HeadComp = EyeAnchoredHeadComp;
 		}
+	}
+
+	const bool bProtectedNeckChain =
+		ForwardProfile.SkeletonFamily == EMediaPipeAvatarSkeletonFamily::MetaHuman &&
+		bHasRefChestPosComp &&
+		FMediaPipeBodyFusionPoseWriteContextBuilder::ProtectNeckChainAgainstCollapse(
+			RefChestPosComp,
+			RefHeadPosComp,
+			UpComp,
+			ChestComp,
+			HeadComp);
+	if (bProtectedNeckChain)
+	{
+		UE_LOG(LogMediaPipePose, VeryVerbose,
+			TEXT("mp.BodyFusion.NeckChainProtected actor=%s chest=%s head=%s refChest=%s refHead=%s"),
+			*TargetActorName.ToString(),
+			*ChestComp.ToCompactString(),
+			*HeadComp.ToCompactString(),
+			*RefChestPosComp.ToCompactString(),
+			*RefHeadPosComp.ToCompactString());
 	}
 
 	const FQuat NeckTargetBasis = FQuat::Slerp(ChestTargetBasis, HeadTargetBasis, RefNeckAlpha).GetNormalized();
@@ -2370,7 +1971,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			CSPose.GetComponentSpaceTransform(Head.CachedCompactPoseIndex);
 		const FVector PosedEyeComp = HeadPoseComp.TransformPosition(
 			bHasEyeLocalInHeadForPose ? EyeLocalInHeadForPose : EyeLocalInHeadForSolve);
-		const FVector TargetEyeComp = WorldToComponent.TransformPosition(LastBodyFusionPose.Eye.LocationWorld);
+		const FVector TargetEyeComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Eye.LocationWorld);
 		FVector EyeLockDeltaComp = TargetEyeComp - PosedEyeComp;
 		if (!EyeLockDeltaComp.ContainsNaN())
 		{
@@ -2458,22 +2059,22 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			const FVector ExpectedCameraFromPosedEye =
 				PosedEyeWorld + AvatarForwardWorld * DebugProfile.EmbodiedCameraForwardOffsetCm;
 
-			const bool bHasHmd = BodyFusionSourceFrame.HmdStatus.IsFresh();
-			const FVector HmdWorld = BodyFusionSourceFrame.HmdLocationWorld;
+			const bool bHasHmd = BodyFusionFrame.SourceFrame.HmdStatus.IsFresh();
+			const FVector HmdWorld = BodyFusionFrame.SourceFrame.HmdLocationWorld;
 			const float CameraToPosedEyeCameraCm = bHasHmd
 				? FVector::Distance(HmdWorld, ExpectedCameraFromPosedEye)
 				: -1.0f;
 			const FVector SolverCameraFromEye =
-				LastBodyFusionPose.Eye.LocationWorld + AvatarForwardWorld * DebugProfile.EmbodiedCameraForwardOffsetCm;
+				BodyFusionFrame.Pose.Eye.LocationWorld + AvatarForwardWorld * DebugProfile.EmbodiedCameraForwardOffsetCm;
 			const float CameraToSolverCameraCm = bHasHmd
 				? FVector::Distance(HmdWorld, SolverCameraFromEye)
 				: -1.0f;
 			const float SolverEyeToPosedEyeCm =
-				FVector::Distance(LastBodyFusionPose.Eye.LocationWorld, PosedEyeWorld);
+				FVector::Distance(BodyFusionFrame.Pose.Eye.LocationWorld, PosedEyeWorld);
 			const float SolverHeadToPosedHeadCm =
-				FVector::Distance(LastBodyFusionPose.Head.LocationWorld, PosedHeadWorld);
+				FVector::Distance(BodyFusionFrame.Pose.Head.LocationWorld, PosedHeadWorld);
 			const float SolverChestToPosedChestCm =
-				FVector::Distance(LastBodyFusionPose.Chest.LocationWorld, PosedChestWorld);
+				FVector::Distance(BodyFusionFrame.Pose.Chest.LocationWorld, PosedChestWorld);
 			const FVector HmdToPosedChestWorld = PosedChestWorld - HmdWorld;
 			const float HmdToPosedChestCm = bHasHmd ? HmdToPosedChestWorld.Size() : -1.0f;
 			const float HmdToPosedChestForwardCm = bHasHmd
@@ -2546,9 +2147,9 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				return FMath::RadiansToDegrees(FMath::Atan2(SignedSin, Cos));
 			};
 
-			const FRotator HmdRot = bHasHmd ? BodyFusionSourceFrame.HmdRotationWorld.Rotator() : FRotator::ZeroRotator;
+			const FRotator HmdRot = bHasHmd ? BodyFusionFrame.SourceFrame.HmdRotationWorld.Rotator() : FRotator::ZeroRotator;
 			const FVector HmdForwardWorld = bHasHmd
-				? BodyFusionSourceFrame.HmdRotationWorld.RotateVector(FVector::ForwardVector).GetSafeNormal()
+				? BodyFusionFrame.SourceFrame.HmdRotationWorld.RotateVector(FVector::ForwardVector).GetSafeNormal()
 				: FVector::ZeroVector;
 			const float HmdPitchDeg = bHasHmd ? HmdRot.Pitch : 0.0f;
 			const float HmdYawDeg = bHasHmd ? HmdRot.Yaw : 0.0f;
@@ -2557,26 +2158,26 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			const float PosedPelvisChestLeanDeg = ForwardLeanDegrees(PosedChestWorld - PosedPelvisWorld);
 			const float PosedChestHeadLeanDeg = ForwardLeanDegrees(PosedHeadWorld - PosedChestWorld);
 			const float SolverPelvisChestLeanDeg =
-				ForwardLeanDegrees(LastBodyFusionPose.Chest.LocationWorld - LastBodyFusionPose.Pelvis.LocationWorld);
+				ForwardLeanDegrees(BodyFusionFrame.Pose.Chest.LocationWorld - BodyFusionFrame.Pose.Pelvis.LocationWorld);
 			const float SolverChestHeadLeanDeg =
-				ForwardLeanDegrees(LastBodyFusionPose.Head.LocationWorld - LastBodyFusionPose.Chest.LocationWorld);
+				ForwardLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld);
 			const float PosedPelvisChestSideLeanDeg = SideLeanDegrees(PosedChestWorld - PosedPelvisWorld);
 			const float PosedChestNeckSideLeanDeg = SideLeanDegrees(PosedNeckWorld - PosedChestWorld);
 			const float PosedNeckHeadSideLeanDeg = SideLeanDegrees(PosedHeadWorld - PosedNeckWorld);
 			const float PosedChestHeadSideLeanDeg = SideLeanDegrees(PosedHeadWorld - PosedChestWorld);
 			const float SolverPelvisChestSideLeanDeg =
-				SideLeanDegrees(LastBodyFusionPose.Chest.LocationWorld - LastBodyFusionPose.Pelvis.LocationWorld);
+				SideLeanDegrees(BodyFusionFrame.Pose.Chest.LocationWorld - BodyFusionFrame.Pose.Pelvis.LocationWorld);
 			const float SolverChestHeadSideLeanDeg =
-				SideLeanDegrees(LastBodyFusionPose.Head.LocationWorld - LastBodyFusionPose.Chest.LocationWorld);
-			const bool bHasSolverNeck = LastBodyFusionPose.Neck.bValid;
+				SideLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld);
+			const bool bHasSolverNeck = BodyFusionFrame.Pose.Neck.bValid;
 			const float SolverChestNeckSideLeanDeg = bHasSolverNeck
-				? SideLeanDegrees(LastBodyFusionPose.Neck.LocationWorld - LastBodyFusionPose.Chest.LocationWorld)
+				? SideLeanDegrees(BodyFusionFrame.Pose.Neck.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld)
 				: 0.0f;
 			const float SolverNeckHeadSideLeanDeg = bHasSolverNeck
-				? SideLeanDegrees(LastBodyFusionPose.Head.LocationWorld - LastBodyFusionPose.Neck.LocationWorld)
+				? SideLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Neck.LocationWorld)
 				: 0.0f;
 			const FVector SolverNeckToPosedNeckWorld = bHasSolverNeck
-				? PosedNeckWorld - LastBodyFusionPose.Neck.LocationWorld
+				? PosedNeckWorld - BodyFusionFrame.Pose.Neck.LocationWorld
 				: FVector::ZeroVector;
 			const float SolverNeckToPosedNeckCm = bHasSolverNeck
 				? SolverNeckToPosedNeckWorld.Size()
@@ -2596,49 +2197,49 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			float MediaPipeHeadReliability = 0.0f;
 			float MediaPipeShoulderReliability = 0.0f;
 			const bool bHasMediaPipeHead =
-				BodyFusionCalibration.IsUsable() &&
-				BodyFusionSourceFrame.TryGetMediaPipeLandmark(
+				BodyFusionFrame.Calibration.IsUsable() &&
+				BodyFusionFrame.SourceFrame.TryGetBodyLandmark(
 					EMediaPipePoseLandmark::Nose,
 					MediaPipeHeadAvatarWorld,
 					&MediaPipeHeadReliability);
 			if (bHasMediaPipeHead)
 			{
-				MediaPipeHeadAvatarWorld = BodyFusionCalibration.TransformMediaPipePoint(MediaPipeHeadAvatarWorld);
+				MediaPipeHeadAvatarWorld = BodyFusionFrame.Calibration.TransformMediaPipePoint(MediaPipeHeadAvatarWorld);
 			}
 			const bool bHasMediaPipeShoulder =
-				BodyFusionCalibration.IsUsable() &&
+				BodyFusionFrame.Calibration.IsUsable() &&
 				FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
-					BodyFusionSourceFrame,
+					BodyFusionFrame.SourceFrame,
 					EMediaPipePoseLandmark::LeftShoulder,
 					EMediaPipePoseLandmark::RightShoulder,
 					MediaPipeShoulderAvatarWorld,
 					&MediaPipeShoulderReliability);
 			if (bHasMediaPipeShoulder)
 			{
-				MediaPipeShoulderAvatarWorld = BodyFusionCalibration.TransformMediaPipePoint(MediaPipeShoulderAvatarWorld);
+				MediaPipeShoulderAvatarWorld = BodyFusionFrame.Calibration.TransformMediaPipePoint(MediaPipeShoulderAvatarWorld);
 			}
 
 			const float MediaPipeHeadToHmdCm = bHasHmd && bHasMediaPipeHead
 				? FVector::Distance(HmdWorld, MediaPipeHeadAvatarWorld)
 				: -1.0f;
 			const float MediaPipeHeadToSolverHeadCm = bHasMediaPipeHead
-				? FVector::Distance(LastBodyFusionPose.Head.LocationWorld, MediaPipeHeadAvatarWorld)
+				? FVector::Distance(BodyFusionFrame.Pose.Head.LocationWorld, MediaPipeHeadAvatarWorld)
 				: -1.0f;
 			const float MediaPipeShoulderToSolverChestCm = bHasMediaPipeShoulder
-				? FVector::Distance(LastBodyFusionPose.Chest.LocationWorld, MediaPipeShoulderAvatarWorld)
+				? FVector::Distance(BodyFusionFrame.Pose.Chest.LocationWorld, MediaPipeShoulderAvatarWorld)
 				: -1.0f;
 
 			UE_LOG(LogMediaPipePose, Log,
 				TEXT("mp.BodyFusion.HeadAnchor actor=%s skeleton=%s bodyAuthority=%s mediaPipeAuthority=%d reason=\"%s\" directNeckChain=1 hmd=%s solverCamera=%s posedCamera=%s solverEye=%s posedEye=%s posedHead=%s posedChest=%s posedPelvis=%s eyeAnchor(residual=%.1f) err(cameraToSolverCamera=%.1f cameraToPosedCamera=%.1f solverEyeToPosedEye=%.1f solverHeadToPosedHead=%.1f solverChestToPosedChest=%.1f) ownerView(chestDist=%.1f chestForward=%.1f chestUp=%.1f) lean(hmdPitch=%.1f posedPelvisChest=%.1f posedChestHead=%.1f solverPelvisChest=%.1f solverChestHead=%.1f) mediapipe(calibrated=%d scale=%.3f stableFrames=%d stableSeconds=%.2f nose=%s noseRel=%.2f noseToHmd=%.1f noseToSolverHead=%.1f shoulders=%s shoulderRel=%.2f shoulderToSolverChest=%.1f)"),
 				*TargetActorName.ToString(),
 				DebugProfile.SkeletonFamily == EMediaPipeAvatarSkeletonFamily::MetaHuman ? TEXT("MetaHuman") : TEXT("Manny"),
-				FMediaPipeBodyFusionDebugFormatter::AuthorityStateName(LastBodyFusionAuthorityState),
-				bLastBodyFusionMediaPipeAuthorityAllowed ? 1 : 0,
-				*LastBodyFusionAuthorityReason,
+				FMediaPipeBodyFusionDebugFormatter::AuthorityStateName(BodyFusionFrame.AuthorityState),
+				BodyFusionFrame.bMediaPipeAuthorityAllowed ? 1 : 0,
+				*BodyFusionFrame.AuthorityReason,
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(HmdWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(SolverCameraFromEye),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(ExpectedCameraFromPosedEye),
-				*FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Eye.LocationWorld),
+				*FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionFrame.Pose.Eye.LocationWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedEyeWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedHeadWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedChestWorld),
@@ -2657,10 +2258,10 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				PosedChestHeadLeanDeg,
 				SolverPelvisChestLeanDeg,
 				SolverChestHeadLeanDeg,
-				BodyFusionCalibration.IsUsable() ? 1 : 0,
-				BodyFusionCalibration.Scale,
-				BodyFusionCalibrationStableFrameCount,
-				BodyFusionCalibrationStableSeconds,
+				BodyFusionFrame.Calibration.IsUsable() ? 1 : 0,
+				BodyFusionFrame.Calibration.Scale,
+				BodyFusionFrame.CalibrationStableFrameCount,
+				BodyFusionFrame.CalibrationStableSeconds,
 				bHasMediaPipeHead ? *FMediaPipeBodyFusionDebugFormatter::VectorString(MediaPipeHeadAvatarWorld) : TEXT("(missing)"),
 				MediaPipeHeadReliability,
 				MediaPipeHeadToHmdCm,
@@ -2692,7 +2293,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				SolverChestHeadSideLeanDeg,
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedNeckWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedNeck02World),
-				bHasSolverNeck ? *FMediaPipeBodyFusionDebugFormatter::VectorString(LastBodyFusionPose.Neck.LocationWorld) : TEXT("(missing)"),
+				bHasSolverNeck ? *FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionFrame.Pose.Neck.LocationWorld) : TEXT("(missing)"),
 				SolverNeckToPosedNeckCm,
 				SolverNeckToPosedNeckRightCm,
 				SolverNeckToPosedNeckForwardCm,
@@ -2769,21 +2370,25 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	LeftLegState.bCurrentSourceFootGrounded = false;
 	RightLegState.bCurrentSourceFootGrounded = false;
 
-	if (!DriveBodyFusionPoseCS(CSPose, DeltaSeconds))
+	const bool bBodyFusionPoseWritten = DriveBodyFusionPoseCS(CSPose, DeltaSeconds);
+	if (!bBodyFusionPoseWritten)
 	{
 		DrivePelvisTranslationCS(CSPose, DeltaSeconds);
 		DriveSpineCS(CSPose, DeltaSeconds);
 	}
 	DriveLegCS(CSPose, true, DeltaSeconds);
 	DriveLegCS(CSPose, false, DeltaSeconds);
-	UpdateFkRootGroundingCS(CSPose, DeltaSeconds);
+	if (!bBodyFusionPoseWritten)
+	{
+		UpdateFkRootGroundingCS(CSPose, DeltaSeconds);
+	}
 	DriveArmCS(CSPose, true, DeltaSeconds);
 	DriveArmCS(CSPose, false, DeltaSeconds);
 	DriveArmTwistBonesCS(CSPose, DeltaSeconds);
 
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPosesSafe(CSPose, Output.Pose);
 
-	if (!BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
+	if (!bBodyFusionPoseWritten && !BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
 	{
 		FBoneReference RootToTranslate = Root;
 		if (!RootToTranslate.IsValidToEvaluate())
@@ -2866,6 +2471,20 @@ void UMediaPipePoseDrivenAnimInstance::SetSourceActor(AActor* InSource)
 		Proxy.PoseNode.SourceActor = InSource;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
 		Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
+	}
+}
+
+void UMediaPipePoseDrivenAnimInstance::SetEmbodiedFusionComponent(UEmbodiedFusionComponent* InFusionComponent)
+{
+	FMediaPipePoseDrivenAnimInstanceProxy& Proxy = GetProxyOnGameThread<FMediaPipePoseDrivenAnimInstanceProxy>();
+	if (Proxy.PoseNode.EmbodiedFusionComponent != InFusionComponent)
+	{
+		Proxy.PoseNode.EmbodiedFusionComponent = InFusionComponent;
+		Proxy.PoseNode.BodyFusionFrame.ResetTransient();
+		if (InFusionComponent)
+		{
+			InFusionComponent->ResetFusionState();
+		}
 	}
 }
 

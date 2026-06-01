@@ -6,6 +6,7 @@
 #include "MediaPipeTrackedSkeletonActor.generated.h"
 
 class UMaterialInterface;
+class UEmbodiedFusionComponent;
 class UMediaPipePoseTrackerComponent;
 class UPoseableMeshComponent;
 class USceneComponent;
@@ -59,6 +60,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="MediaPipe|Skeleton")
 	UPoseableMeshComponent* PoseDriver = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="MediaPipe|Skeleton")
+	UEmbodiedFusionComponent* EmbodiedFusionComponent = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MediaPipe|Skeleton")
 	EMediaPipeTrackedSkeletonSource TrackingSource = EMediaPipeTrackedSkeletonSource::MediaPipe;

@@ -139,3 +139,54 @@ bool FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(
 	}
 	return true;
 }
+
+bool FMediaPipeAvatarPoseWriter::TryGetUpperLimbSide(
+	const FMediaPipeFusedAvatarPose& Pose,
+	const bool bIsLeft,
+	FMediaPipeFusedUpperLimbSide& OutSide)
+{
+	OutSide = FMediaPipeFusedUpperLimbSide();
+
+	auto TryGetFreshPoint = [&](const EMediaPipeBodyFusionRegion Region, FMediaPipeFusedBodyPoint& OutPoint) -> bool
+	{
+		const FMediaPipeFusedBodyPoint* Point = Pose.GetPoint(Region);
+		if (!Point ||
+			!Point->bValid ||
+			Point->SourceState != EMediaPipeBodyFusionSourceState::Fresh ||
+			Point->Owner == EMediaPipeBodyFusionOwner::None ||
+			Point->Owner == EMediaPipeBodyFusionOwner::AvatarProfile)
+		{
+			return false;
+		}
+
+		OutPoint = *Point;
+		return !OutPoint.LocationWorld.ContainsNaN();
+	};
+
+	const EMediaPipeBodyFusionRegion ShoulderRegion = bIsLeft
+		? EMediaPipeBodyFusionRegion::LeftShoulder
+		: EMediaPipeBodyFusionRegion::RightShoulder;
+	const EMediaPipeBodyFusionRegion ElbowRegion = bIsLeft
+		? EMediaPipeBodyFusionRegion::LeftElbow
+		: EMediaPipeBodyFusionRegion::RightElbow;
+	const EMediaPipeBodyFusionRegion WristRegion = bIsLeft
+		? EMediaPipeBodyFusionRegion::LeftWrist
+		: EMediaPipeBodyFusionRegion::RightWrist;
+
+	FMediaPipeFusedBodyPoint ShoulderPoint;
+	FMediaPipeFusedBodyPoint ElbowPoint;
+	FMediaPipeFusedBodyPoint WristPoint;
+	if (!TryGetFreshPoint(ShoulderRegion, ShoulderPoint) ||
+		!TryGetFreshPoint(ElbowRegion, ElbowPoint) ||
+		!TryGetFreshPoint(WristRegion, WristPoint))
+	{
+		OutSide = FMediaPipeFusedUpperLimbSide();
+		return false;
+	}
+
+	OutSide.ShoulderWorld = ShoulderPoint.LocationWorld;
+	OutSide.ElbowWorld = ElbowPoint.LocationWorld;
+	OutSide.WristWorld = WristPoint.LocationWorld;
+	OutSide.Owner = WristPoint.Owner;
+	return true;
+}

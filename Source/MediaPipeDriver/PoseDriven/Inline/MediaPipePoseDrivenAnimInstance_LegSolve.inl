@@ -20,7 +20,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	if (bUseBodyFusionLowerBody)
 	{
 		FMediaPipeFusedLowerBodySide FusedLowerBodySide;
-		if (!FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(LastBodyFusionPose, bIsLeft, FusedLowerBodySide))
+		if (!FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(BodyFusionFrame.Pose, bIsLeft, FusedLowerBodySide))
 		{
 			return;
 		}
@@ -70,9 +70,9 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	bool bHasLegTorsoBasis = false;
 	if (bUseBodyFusionLowerBody)
 	{
-		if (LastBodyFusionPose.LeftHip.bValid && LastBodyFusionPose.RightHip.bValid)
+		if (BodyFusionFrame.Pose.LeftHip.bValid && BodyFusionFrame.Pose.RightHip.bValid)
 		{
-			const FVector FusedHipRight = (LastBodyFusionPose.RightHip.LocationWorld - LastBodyFusionPose.LeftHip.LocationWorld).GetSafeNormal();
+			const FVector FusedHipRight = (BodyFusionFrame.Pose.RightHip.LocationWorld - BodyFusionFrame.Pose.LeftHip.LocationWorld).GetSafeNormal();
 			if (!FusedHipRight.IsNearlyZero())
 			{
 				LegHipRightWorld = FusedHipRight;
@@ -80,7 +80,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 		}
 
-		const FVector FusedUp = (LastBodyFusionPose.Chest.LocationWorld - LastBodyFusionPose.Pelvis.LocationWorld).GetSafeNormal();
+		const FVector FusedUp = (BodyFusionFrame.Pose.Chest.LocationWorld - BodyFusionFrame.Pose.Pelvis.LocationWorld).GetSafeNormal();
 		if (!FusedUp.IsNearlyZero())
 		{
 			LegUpWorld = FusedUp;

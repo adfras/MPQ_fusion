@@ -1,5 +1,6 @@
 #include "MediaPipeTrackedSkeletonActor.h"
 
+#include "EmbodiedFusionComponent.h"
 #include "MediaPipePoseDrivenAnimInstance.h"
 #include "MediaPipePoseTrackerComponent.h"
 #include "MediaPipePoseTypes.h"
@@ -667,6 +668,8 @@ AMediaPipeTrackedSkeletonActor::AMediaPipeTrackedSkeletonActor()
 	PoseDriver->PrimaryComponentTick.bStartWithTickEnabled = true;
 	PoseDriver->SetComponentTickEnabled(true);
 
+	EmbodiedFusionComponent = CreateDefaultSubobject<UEmbodiedFusionComponent>(TEXT("EmbodiedFusion"));
+
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMeshFinder.Succeeded())
 	{
@@ -937,6 +940,7 @@ void AMediaPipeTrackedSkeletonActor::RefreshTrackingPoseBinding()
 	if (UMediaPipePoseDrivenAnimInstance* PoseDrivenAnim = Cast<UMediaPipePoseDrivenAnimInstance>(Body->GetAnimInstance()))
 	{
 		PoseDrivenAnim->SetSourceActor(SourceActor);
+		PoseDrivenAnim->SetEmbodiedFusionComponent(EmbodiedFusionComponent);
 		PoseDrivenAnim->ApplyRetargetQualitySettings();
 	}
 }

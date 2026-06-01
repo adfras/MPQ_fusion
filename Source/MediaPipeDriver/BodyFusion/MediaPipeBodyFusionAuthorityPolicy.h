@@ -75,7 +75,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionAuthorityGateInput
 	int32 MediaPipeAuthorityMode = 0;
 	bool bCalibrationUsable = false;
 	FString CalibrationRejectReason;
-	FMediaPipeBodyFusionSourceStatus MediaPipePoseStatus;
+	FMediaPipeBodyFusionSourceStatus BodyPoseStatus;
 };
 
 struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionAuthorityGateDecision

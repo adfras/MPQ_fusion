@@ -7,6 +7,7 @@
 
 class AActor;
 class UControlRigComponent;
+class UEmbodiedFusionComponent;
 class UMediaPipePoseDrivenAnimInstance;
 class USkeletalMeshComponent;
 
@@ -27,6 +28,8 @@ public:
 #endif
 
 	void SetPresentationActor(AActor* InPresentationActor, USkeletalMeshComponent* InPresentationMesh);
+	void SetEmbodiedFusionComponent(UEmbodiedFusionComponent* InFusionComponent);
+	UEmbodiedFusionComponent* GetActiveEmbodiedFusionComponent() const;
 	void SyncPresentationActorTransform() const;
 	USkeletalMeshComponent* GetDrivenMesh() const;
 
@@ -35,6 +38,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, Category="MediaPipe")
 	UControlRigComponent* MannyBodyRig = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category="MediaPipe")
+	UEmbodiedFusionComponent* DefaultEmbodiedFusionComponent = nullptr;
 
 	UPROPERTY(EditAnywhere, Category="MediaPipe")
 	AActor* Source = nullptr;
@@ -71,4 +77,7 @@ private:
 
 	UPROPERTY(Transient)
 	USkeletalMeshComponent* PresentationMesh = nullptr;
+
+	UPROPERTY(Transient)
+	UEmbodiedFusionComponent* ExternalEmbodiedFusionComponent = nullptr;
 };

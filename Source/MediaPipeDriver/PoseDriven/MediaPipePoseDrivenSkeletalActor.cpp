@@ -1,5 +1,6 @@
 #include "MediaPipePoseDrivenSkeletalActor.h"
 
+#include "EmbodiedFusionComponent.h"
 #include "MediaPipeTrackedSkeletonActor.h"
 #include "MediaPipePoseDrivenAnimInstance.h"
 #include "MediaPipePoseLog.h"
@@ -945,6 +946,8 @@ AMediaPipePoseDrivenSkeletalActor::AMediaPipePoseDrivenSkeletalActor()
 	MannyBodyRig->SetComponentTickEnabled(true);
 	MannyBodyRig->SetVisibility(false, true);
 
+	DefaultEmbodiedFusionComponent = CreateDefaultSubobject<UEmbodiedFusionComponent>(TEXT("EmbodiedFusion"));
+
 	Mesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	Mesh->SetAnimInstanceClass(UMediaPipePoseDrivenAnimInstance::StaticClass());
 	Mesh->bTickInEditor = true;
@@ -1052,6 +1055,23 @@ void AMediaPipePoseDrivenSkeletalActor::SetPresentationActor(AActor* InPresentat
 	}
 
 	SyncPresentationActorTransform();
+}
+
+void AMediaPipePoseDrivenSkeletalActor::SetEmbodiedFusionComponent(UEmbodiedFusionComponent* InFusionComponent)
+{
+	ExternalEmbodiedFusionComponent = InFusionComponent;
+	if (USkeletalMeshComponent* DrivenMesh = GetDrivenMesh())
+	{
+		if (UMediaPipePoseDrivenAnimInstance* MediaPipeAnim = Cast<UMediaPipePoseDrivenAnimInstance>(DrivenMesh->GetAnimInstance()))
+		{
+			MediaPipeAnim->SetEmbodiedFusionComponent(GetActiveEmbodiedFusionComponent());
+		}
+	}
+}
+
+UEmbodiedFusionComponent* AMediaPipePoseDrivenSkeletalActor::GetActiveEmbodiedFusionComponent() const
+{
+	return ExternalEmbodiedFusionComponent ? ExternalEmbodiedFusionComponent : DefaultEmbodiedFusionComponent;
 }
 
 void AMediaPipePoseDrivenSkeletalActor::SyncPresentationActorTransform() const
@@ -1362,6 +1382,7 @@ void AMediaPipePoseDrivenSkeletalActor::Tick(float DeltaSeconds)
 	if (MediaPipeAnim)
 	{
 		MediaPipeAnim->SetSourceActor(AnimSourceActor);
+		MediaPipeAnim->SetEmbodiedFusionComponent(GetActiveEmbodiedFusionComponent());
 		MediaPipeAnim->ApplyRetargetQualitySettings();
 	}
 

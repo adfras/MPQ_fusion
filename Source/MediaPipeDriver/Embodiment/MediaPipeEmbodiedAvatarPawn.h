@@ -11,10 +11,13 @@ class AActor;
 class AController;
 struct FMinimalViewInfo;
 class UCameraComponent;
+class UEmbodiedFusionComponent;
 class UMotionControllerComponent;
 class UPoseableMeshComponent;
 class USceneComponent;
 class USkeletalMesh;
+struct FEmbodiedFusionBestAvailablePose;
+struct FEmbodiedFusionUpperLimbPose;
 
 UENUM(BlueprintType)
 enum class EMediaPipeEmbodiedAvatarType : uint8
@@ -76,6 +79,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="MediaPipe|Embodiment")
 	UMotionControllerComponent* MotionControllerRight = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="MediaPipe|Embodiment")
+	UEmbodiedFusionComponent* EmbodiedFusionComponent = nullptr;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MediaPipe|Embodiment")
 	bool bStartTrackingOnBeginPlay = true;
 
@@ -108,6 +114,7 @@ public:
 
 private:
 	void ApplySelectedAvatarProfileToRuntimeCVars() const;
+	void ApplyEmbodiedTrackingLaunchProfile() const;
 	void EnsurePlayerPossession();
 	void EnsureCameraHierarchy();
 	void ResetPlacedEmbodiedHmdRecenter();
@@ -125,14 +132,18 @@ private:
 	void UpdateMovementReplicaAvatarPose();
 	void UpdateMovementReplicaMirrorAvatar(bool bLog);
 	void CopyMovementReplicaPoseToMirrorAvatar() const;
-	void ApplyMovementReplicaPoseToMesh(UPoseableMeshComponent* Mesh, bool bFirstPersonMesh, const FQuat& HmdWorldRotation);
+	void ApplyMovementReplicaPoseToMesh(UPoseableMeshComponent* Mesh, bool bFirstPersonMesh, const FEmbodiedFusionBestAvailablePose& FusionPose);
 	void ApplyMovementReplicaReferenceArmPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, bool bLeft) const;
-	void ApplyMovementReplicaArmPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, UMotionControllerComponent* MotionController, bool bLeft) const;
-	bool TryGetMovementReplicaHandWorldTransform(UMotionControllerComponent* MotionController, bool bLeft, FTransform& OutHandWorld, FName& OutSource, bool& bOutTracked) const;
-	bool TryGetMovementReplicaHandJointState(bool bLeft, TArray<FVector>& OutPositions, TArray<FQuat>& OutRotations) const;
-	void ApplyMovementReplicaHandPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, bool bLeft) const;
+	bool ApplyMovementReplicaFusedArmPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, const FEmbodiedFusionUpperLimbPose& LimbPose, bool bLeft) const;
+	void ApplyMovementReplicaHandTargetArmPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, const FEmbodiedFusionUpperLimbPose& LimbPose, bool bLeft) const;
+	void ApplyMovementReplicaHandPoseToMesh(UPoseableMeshComponent* Mesh, const struct FMediaPipeAvatarEmbodimentProfile& Profile, const FEmbodiedFusionUpperLimbPose& LimbPose, bool bLeft) const;
 	void ApplyMovementReplicaLocalHiddenBones(UPoseableMeshComponent* Mesh) const;
 	USkeletalMesh* ResolveMovementReplicaMesh() const;
+	bool RefreshExistingEmbodiedTrackingSource(UWorld* World);
+	AMediaPipeQuestWebcamSourceActor* ResolveOrCreateMediaPipeSourceActor(UWorld* World, const FString& CaptureUrl, const FString& CaptureLabel, bool& bOutSpawnedSourceActor);
+	AMediaPipePoseDrivenSkeletalActor* ResolveOrCreatePoseDrivenAvatarActor(UWorld* World, const FTransform& AvatarTransform);
+	void ConfigurePoseDrivenAvatarActor(AMediaPipePoseDrivenSkeletalActor* InAvatarDriverActor, AMediaPipeQuestWebcamSourceActor* InSourceActor);
+	void ConfigureEmbodiedPresentationTarget(UWorld* World, const FTransform& AvatarTransform);
 
 	UPROPERTY(Transient)
 	AMediaPipeQuestWebcamSourceActor* SourceActor = nullptr;

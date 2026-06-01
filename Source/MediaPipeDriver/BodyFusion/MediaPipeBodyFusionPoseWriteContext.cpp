@@ -142,3 +142,55 @@ bool FMediaPipeBodyFusionPoseWriteContextBuilder::Build(
 	OutContext.bHasTorsoTargets = true;
 	return true;
 }
+
+bool FMediaPipeBodyFusionPoseWriteContextBuilder::ProtectNeckChainAgainstCollapse(
+	const FVector& RefChestPosComp,
+	const FVector& RefHeadPosComp,
+	const FVector& FallbackChestToHeadDirComp,
+	FVector& InOutChestComp,
+	const FVector& HeadComp)
+{
+	if (RefChestPosComp.ContainsNaN() ||
+		RefHeadPosComp.ContainsNaN() ||
+		InOutChestComp.ContainsNaN() ||
+		HeadComp.ContainsNaN())
+	{
+		return false;
+	}
+
+	const FVector RefChestToHeadComp = RefHeadPosComp - RefChestPosComp;
+	const float RefChestToHeadCm = RefChestToHeadComp.Size();
+	if (RefChestToHeadCm <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	constexpr float MinNeckChainReferenceFraction = 0.85f;
+	constexpr float MinNeckChainAbsoluteCm = 28.0f;
+	const float MinChestToHeadCm =
+		FMath::Min(RefChestToHeadCm, FMath::Max(MinNeckChainAbsoluteCm, RefChestToHeadCm * MinNeckChainReferenceFraction));
+
+	const FVector ChestToHeadComp = HeadComp - InOutChestComp;
+	const float CurrentChestToHeadCm = ChestToHeadComp.Size();
+	if (FMath::IsFinite(CurrentChestToHeadCm) && CurrentChestToHeadCm >= MinChestToHeadCm)
+	{
+		return false;
+	}
+
+	FVector ChestToHeadDirComp = ChestToHeadComp.GetSafeNormal();
+	if (ChestToHeadDirComp.IsNearlyZero())
+	{
+		ChestToHeadDirComp = RefChestToHeadComp.GetSafeNormal();
+	}
+	if (ChestToHeadDirComp.IsNearlyZero())
+	{
+		ChestToHeadDirComp = FallbackChestToHeadDirComp.GetSafeNormal();
+	}
+	if (ChestToHeadDirComp.IsNearlyZero())
+	{
+		return false;
+	}
+
+	InOutChestComp = HeadComp - ChestToHeadDirComp * MinChestToHeadCm;
+	return !InOutChestComp.ContainsNaN();
+}

@@ -64,6 +64,14 @@ struct MEDIAPIPEDRIVER_API FMediaPipeFusedLowerBodySide
 	bool bHasFoot = false;
 };
 
+struct MEDIAPIPEDRIVER_API FMediaPipeFusedUpperLimbSide
+{
+	FVector ShoulderWorld = FVector::ZeroVector;
+	FVector ElbowWorld = FVector::ZeroVector;
+	FVector WristWorld = FVector::ZeroVector;
+	EMediaPipeBodyFusionOwner Owner = EMediaPipeBodyFusionOwner::None;
+};
+
 class MEDIAPIPEDRIVER_API FMediaPipeAvatarPoseWriter
 {
 public:
@@ -80,4 +88,8 @@ public:
 		const FMediaPipeFusedAvatarPose& Pose,
 		bool bIsLeft,
 		FMediaPipeFusedLowerBodySide& OutSide);
+	static bool TryGetUpperLimbSide(
+		const FMediaPipeFusedAvatarPose& Pose,
+		bool bIsLeft,
+		FMediaPipeFusedUpperLimbSide& OutSide);
 };

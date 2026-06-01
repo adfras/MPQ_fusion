@@ -64,8 +64,8 @@ bool FMediaPipeBodyFusionDebugFormatter::TryLandmarkMidpoint(
 	FVector PointB = FVector::ZeroVector;
 	float ReliabilityA = 0.0f;
 	float ReliabilityB = 0.0f;
-	if (!SourceFrame.TryGetMediaPipeLandmark(A, PointA, &ReliabilityA) ||
-		!SourceFrame.TryGetMediaPipeLandmark(B, PointB, &ReliabilityB))
+	if (!SourceFrame.TryGetBodyLandmark(A, PointA, &ReliabilityA) ||
+		!SourceFrame.TryGetBodyLandmark(B, PointB, &ReliabilityB))
 	{
 		return false;
 	}
@@ -97,7 +97,7 @@ void FMediaPipeBodyFusionDebugFormatter::EmitCalibrationRejected(
 		*Reason,
 		Confidence,
 		*StatusString(SourceFrame.HmdStatus),
-		*StatusString(SourceFrame.MediaPipePoseStatus),
+		*StatusString(SourceFrame.BodyPoseStatus),
 		bHasHipCenter ? 1 : 0,
 		bHasShoulderCenter ? 1 : 0,
 		ObservedBodyHeightCm,
