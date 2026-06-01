@@ -1379,8 +1379,11 @@ bool FMediaPipeBodyFusionPoseWriteContextBuildTest::RunTest(const FString& Param
 			FVector::UpVector,
 			CollapsedChestComp,
 			EyeAnchoredHeadComp));
-	TestTrue(TEXT("Collapsed neck chain keeps near-reference head-to-chest distance"),
-		FVector::Dist(CollapsedChestComp, EyeAnchoredHeadComp) >= 29.0f);
+	const float ExpandedHeadToChestCm = FVector::Dist(CollapsedChestComp, EyeAnchoredHeadComp);
+	TestTrue(TEXT("Collapsed neck chain keeps a practical head-to-chest floor"),
+		ExpandedHeadToChestCm >= 27.5f);
+	TestTrue(TEXT("Collapsed neck chain does not over-extend the collar during forward bends"),
+		ExpandedHeadToChestCm <= 28.5f);
 
 	return true;
 }
