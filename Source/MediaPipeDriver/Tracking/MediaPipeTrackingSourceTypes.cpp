@@ -55,45 +55,45 @@ void FMediaPipeTrackingSourceFrame::Reset()
 	HmdConfidence = 1.0f;
 	HmdStatus = FMediaPipeBodyFusionSourceStatus();
 
-	bHasQuestLeftHand = false;
-	bHasQuestRightHand = false;
-	QuestLeftHandWorld = FVector::ZeroVector;
-	QuestRightHandWorld = FVector::ZeroVector;
-	QuestLeftHandTimestampSeconds = -1.0;
-	QuestRightHandTimestampSeconds = -1.0;
-	QuestLeftHandConfidence = 0.0f;
-	QuestRightHandConfidence = 0.0f;
-	QuestLeftHandStatus = FMediaPipeBodyFusionSourceStatus();
-	QuestRightHandStatus = FMediaPipeBodyFusionSourceStatus();
+	bHasLeftHand = false;
+	bHasRightHand = false;
+	LeftHandWorld = FVector::ZeroVector;
+	RightHandWorld = FVector::ZeroVector;
+	LeftHandTimestampSeconds = -1.0;
+	RightHandTimestampSeconds = -1.0;
+	LeftHandConfidence = 0.0f;
+	RightHandConfidence = 0.0f;
+	LeftHandStatus = FMediaPipeBodyFusionSourceStatus();
+	RightHandStatus = FMediaPipeBodyFusionSourceStatus();
 
-	bHasQuestLeftFullArmChain = false;
-	bHasQuestRightFullArmChain = false;
-	QuestLeftShoulderWorld = FVector::ZeroVector;
-	QuestLeftElbowWorld = FVector::ZeroVector;
-	QuestLeftWristWorld = FVector::ZeroVector;
-	QuestRightShoulderWorld = FVector::ZeroVector;
-	QuestRightElbowWorld = FVector::ZeroVector;
-	QuestRightWristWorld = FVector::ZeroVector;
-	QuestLeftFullArmChainTimestampSeconds = -1.0;
-	QuestRightFullArmChainTimestampSeconds = -1.0;
-	QuestLeftFullArmChainConfidence = 0.0f;
-	QuestRightFullArmChainConfidence = 0.0f;
-	QuestLeftFullArmChainStatus = FMediaPipeBodyFusionSourceStatus();
-	QuestRightFullArmChainStatus = FMediaPipeBodyFusionSourceStatus();
+	bHasLeftArmChain = false;
+	bHasRightArmChain = false;
+	LeftArmShoulderWorld = FVector::ZeroVector;
+	LeftArmElbowWorld = FVector::ZeroVector;
+	LeftArmWristWorld = FVector::ZeroVector;
+	RightArmShoulderWorld = FVector::ZeroVector;
+	RightArmElbowWorld = FVector::ZeroVector;
+	RightArmWristWorld = FVector::ZeroVector;
+	LeftArmChainTimestampSeconds = -1.0;
+	RightArmChainTimestampSeconds = -1.0;
+	LeftArmChainConfidence = 0.0f;
+	RightArmChainConfidence = 0.0f;
+	LeftArmChainStatus = FMediaPipeBodyFusionSourceStatus();
+	RightArmChainStatus = FMediaPipeBodyFusionSourceStatus();
 
-	bHasMediaPipePose = false;
-	MediaPipePoseTimestampSeconds = -1.0;
-	MediaPipePoseConfidence = 0.0f;
-	MediaPipePoseStatus = FMediaPipeBodyFusionSourceStatus();
+	bHasBodyPose = false;
+	BodyPoseTimestampSeconds = -1.0;
+	BodyPoseConfidence = 0.0f;
+	BodyPoseStatus = FMediaPipeBodyFusionSourceStatus();
 	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
 	{
-		MediaPipeLandmarksWorld[Index] = FVector::ZeroVector;
-		MediaPipeLandmarkReliability[Index] = 0.0f;
-		MediaPipeLandmarkValid[Index] = 0;
+		BodyPoseLandmarksWorld[Index] = FVector::ZeroVector;
+		BodyPoseLandmarkReliability[Index] = 0.0f;
+		BodyPoseLandmarkValid[Index] = 0;
 	}
 }
 
-void FMediaPipeTrackingSourceFrame::SetMediaPipeLandmark(
+void FMediaPipeTrackingSourceFrame::SetBodyLandmark(
 	const EMediaPipePoseLandmark Landmark,
 	const FVector& LocationWorld,
 	const float Reliability)
@@ -104,26 +104,26 @@ void FMediaPipeTrackingSourceFrame::SetMediaPipeLandmark(
 		return;
 	}
 
-	MediaPipeLandmarksWorld[Index] = LocationWorld;
-	MediaPipeLandmarkReliability[Index] = FMath::Clamp(Reliability, 0.0f, 1.0f);
-	MediaPipeLandmarkValid[Index] = IsFiniteVector(LocationWorld) ? 1 : 0;
+	BodyPoseLandmarksWorld[Index] = LocationWorld;
+	BodyPoseLandmarkReliability[Index] = FMath::Clamp(Reliability, 0.0f, 1.0f);
+	BodyPoseLandmarkValid[Index] = IsFiniteVector(LocationWorld) ? 1 : 0;
 }
 
-bool FMediaPipeTrackingSourceFrame::TryGetMediaPipeLandmark(
+bool FMediaPipeTrackingSourceFrame::TryGetBodyLandmark(
 	const EMediaPipePoseLandmark Landmark,
 	FVector& OutLocationWorld,
 	float* OutReliability) const
 {
 	const int32 Index = static_cast<int32>(Landmark);
-	if (Index < 0 || Index >= MediaPipePoseLandmarkCount || MediaPipeLandmarkValid[Index] == 0)
+	if (Index < 0 || Index >= MediaPipePoseLandmarkCount || BodyPoseLandmarkValid[Index] == 0)
 	{
 		return false;
 	}
 
-	OutLocationWorld = MediaPipeLandmarksWorld[Index];
+	OutLocationWorld = BodyPoseLandmarksWorld[Index];
 	if (OutReliability)
 	{
-		*OutReliability = MediaPipeLandmarkReliability[Index];
+		*OutReliability = BodyPoseLandmarkReliability[Index];
 	}
 	return true;
 }
@@ -154,57 +154,57 @@ void FMediaPipeTrackingSourceFrame::UpdateFreshness(const FMediaPipeBodyFusionFr
 		HmdConfidence,
 		Thresholds.MinHmdConfidence);
 
-	QuestLeftHandStatus = ClassifySource(
-		bHasQuestLeftHand,
-		IsFiniteVector(QuestLeftHandWorld),
-		QuestLeftHandTimestampSeconds,
+	LeftHandStatus = ClassifySource(
+		bHasLeftHand,
+		IsFiniteVector(LeftHandWorld),
+		LeftHandTimestampSeconds,
 		FrameTimeSeconds,
-		Thresholds.QuestHandMaxAgeSeconds,
-		QuestLeftHandConfidence,
-		Thresholds.MinQuestConfidence);
-	QuestRightHandStatus = ClassifySource(
-		bHasQuestRightHand,
-		IsFiniteVector(QuestRightHandWorld),
-		QuestRightHandTimestampSeconds,
+		Thresholds.HandMaxAgeSeconds,
+		LeftHandConfidence,
+		Thresholds.MinDeviceConfidence);
+	RightHandStatus = ClassifySource(
+		bHasRightHand,
+		IsFiniteVector(RightHandWorld),
+		RightHandTimestampSeconds,
 		FrameTimeSeconds,
-		Thresholds.QuestHandMaxAgeSeconds,
-		QuestRightHandConfidence,
-		Thresholds.MinQuestConfidence);
+		Thresholds.HandMaxAgeSeconds,
+		RightHandConfidence,
+		Thresholds.MinDeviceConfidence);
 
-	QuestLeftFullArmChainStatus = ClassifySource(
-		bHasQuestLeftFullArmChain,
-		IsFiniteVector(QuestLeftShoulderWorld) && IsFiniteVector(QuestLeftElbowWorld) && IsFiniteVector(QuestLeftWristWorld),
-		QuestLeftFullArmChainTimestampSeconds,
+	LeftArmChainStatus = ClassifySource(
+		bHasLeftArmChain,
+		IsFiniteVector(LeftArmShoulderWorld) && IsFiniteVector(LeftArmElbowWorld) && IsFiniteVector(LeftArmWristWorld),
+		LeftArmChainTimestampSeconds,
 		FrameTimeSeconds,
-		Thresholds.QuestFullArmChainMaxAgeSeconds,
-		QuestLeftFullArmChainConfidence,
-		Thresholds.MinQuestConfidence);
-	QuestRightFullArmChainStatus = ClassifySource(
-		bHasQuestRightFullArmChain,
-		IsFiniteVector(QuestRightShoulderWorld) && IsFiniteVector(QuestRightElbowWorld) && IsFiniteVector(QuestRightWristWorld),
-		QuestRightFullArmChainTimestampSeconds,
+		Thresholds.ArmChainMaxAgeSeconds,
+		LeftArmChainConfidence,
+		Thresholds.MinDeviceConfidence);
+	RightArmChainStatus = ClassifySource(
+		bHasRightArmChain,
+		IsFiniteVector(RightArmShoulderWorld) && IsFiniteVector(RightArmElbowWorld) && IsFiniteVector(RightArmWristWorld),
+		RightArmChainTimestampSeconds,
 		FrameTimeSeconds,
-		Thresholds.QuestFullArmChainMaxAgeSeconds,
-		QuestRightFullArmChainConfidence,
-		Thresholds.MinQuestConfidence);
+		Thresholds.ArmChainMaxAgeSeconds,
+		RightArmChainConfidence,
+		Thresholds.MinDeviceConfidence);
 
-	bool bAnyValidMediaPipeLandmark = false;
+	bool bAnyValidBodyLandmark = false;
 	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
 	{
-		if (MediaPipeLandmarkValid[Index] != 0)
+		if (BodyPoseLandmarkValid[Index] != 0)
 		{
-			bAnyValidMediaPipeLandmark = true;
+			bAnyValidBodyLandmark = true;
 			break;
 		}
 	}
-	MediaPipePoseStatus = ClassifySource(
-		bHasMediaPipePose,
-		bAnyValidMediaPipeLandmark,
-		MediaPipePoseTimestampSeconds,
+	BodyPoseStatus = ClassifySource(
+		bHasBodyPose,
+		bAnyValidBodyLandmark,
+		BodyPoseTimestampSeconds,
 		FrameTimeSeconds,
-		Thresholds.MediaPipePoseMaxAgeSeconds,
-		MediaPipePoseConfidence,
-		Thresholds.MinMediaPipeConfidence);
+		Thresholds.BodyPoseMaxAgeSeconds,
+		BodyPoseConfidence,
+		Thresholds.MinBodyPoseConfidence);
 }
 
 FMediaPipeBodyFusionSourceStatus FMediaPipeTrackingSourceFrame::ClassifySource(

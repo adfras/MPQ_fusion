@@ -7,14 +7,14 @@ bool IsUsableQuestWristPosition(const FVector& WristWorld)
 	return !WristWorld.ContainsNaN() && !WristWorld.IsNearlyZero();
 }
 
-bool IsQuestHandSideTracked(const FQuestHandTrackingSnapshot& Snapshot, const bool bIsLeft)
+bool IsHandSideTracked(const FMediaPipeTrackingHandSourceSnapshot& Snapshot, const bool bIsLeft)
 {
 	return bIsLeft
 		? (Snapshot.bHasLeft != 0 && Snapshot.bLeftTracked != 0)
 		: (Snapshot.bHasRight != 0 && Snapshot.bRightTracked != 0);
 }
 
-bool IsQuestHandSideUsableForWrist(const FQuestHandTrackingSnapshot& Snapshot, const bool bIsLeft)
+bool IsHandSideUsableForWrist(const FMediaPipeTrackingHandSourceSnapshot& Snapshot, const bool bIsLeft)
 {
 	const bool bHasSide = bIsLeft ? (Snapshot.bHasLeft != 0) : (Snapshot.bHasRight != 0);
 	if (!bHasSide)
@@ -22,90 +22,116 @@ bool IsQuestHandSideUsableForWrist(const FQuestHandTrackingSnapshot& Snapshot, c
 		return false;
 	}
 
-	const TStaticArray<FVector, QuestHandKeypointCount>& Positions =
+	const TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& Positions =
 		bIsLeft ? Snapshot.LeftPositionsWorld : Snapshot.RightPositionsWorld;
 	return IsUsableQuestWristPosition(Positions[static_cast<int32>(EHandKeypoint::Wrist)]);
 }
 
-const TStaticArray<FVector, QuestHandKeypointCount>& GetQuestHandPositions(
-	const FQuestHandTrackingSnapshot& Snapshot,
+const TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& GetHandPositions(
+	const FMediaPipeTrackingHandSourceSnapshot& Snapshot,
 	const bool bIsLeft)
 {
 	return bIsLeft ? Snapshot.LeftPositionsWorld : Snapshot.RightPositionsWorld;
 }
 
-void PopulateQuestHandSide(
+void PopulateHandSide(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
-	const FQuestHandTrackingSnapshot& Snapshot,
+	const FMediaPipeTrackingHandSourceSnapshot& Snapshot,
 	const bool bIsLeft,
 	const double NowSeconds)
 {
-	if (!IsQuestHandSideUsableForWrist(Snapshot, bIsLeft))
+	if (!IsHandSideUsableForWrist(Snapshot, bIsLeft))
 	{
 		return;
 	}
 
-	const TStaticArray<FVector, QuestHandKeypointCount>& Positions = GetQuestHandPositions(Snapshot, bIsLeft);
+	const TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& Positions = GetHandPositions(Snapshot, bIsLeft);
 	const FVector WristWorld = Positions[static_cast<int32>(EHandKeypoint::Wrist)];
-	const float Confidence = IsQuestHandSideTracked(Snapshot, bIsLeft) ? 1.0f : 0.5f;
+	const float Confidence = IsHandSideTracked(Snapshot, bIsLeft) ? 1.0f : 0.5f;
 	if (bIsLeft)
 	{
-		InOutFrame.bHasQuestLeftHand = true;
-		InOutFrame.QuestLeftHandWorld = WristWorld;
-		InOutFrame.QuestLeftHandTimestampSeconds = NowSeconds;
-		InOutFrame.QuestLeftHandConfidence = Confidence;
+		InOutFrame.bHasLeftHand = true;
+		InOutFrame.LeftHandWorld = WristWorld;
+		InOutFrame.LeftHandTimestampSeconds = NowSeconds;
+		InOutFrame.LeftHandConfidence = Confidence;
 	}
 	else
 	{
-		InOutFrame.bHasQuestRightHand = true;
-		InOutFrame.QuestRightHandWorld = WristWorld;
-		InOutFrame.QuestRightHandTimestampSeconds = NowSeconds;
-		InOutFrame.QuestRightHandConfidence = Confidence;
+		InOutFrame.bHasRightHand = true;
+		InOutFrame.RightHandWorld = WristWorld;
+		InOutFrame.RightHandTimestampSeconds = NowSeconds;
+		InOutFrame.RightHandConfidence = Confidence;
 	}
 }
 
-void PopulateFullArmChainSide(
+void PopulateArmChainSide(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
-	const FMediaPipeFullArmChainSnapshot& Snapshot,
+	const FMediaPipeTrackingArmChainSourceSnapshot& Snapshot,
 	const bool bIsLeft)
 {
-	const FMediaPipeFullArmChainSideSnapshot& Side = Snapshot.GetSide(bIsLeft);
-	if (Snapshot.bActive == 0 || Side.bActive == 0 || !Side.HasRequiredPositionChain())
+	const FMediaPipeTrackingArmChainSideSnapshot& Side = bIsLeft ? Snapshot.Left : Snapshot.Right;
+	if (!Side.bHasChain)
 	{
 		return;
 	}
 
-	const FVector ShoulderWorld = Side.Shoulder.WorldTransform.GetLocation();
-	const FVector ElbowWorld = Side.LowerArm.WorldTransform.GetLocation();
-	const FVector WristWorld = Side.WristOrPalm.WorldTransform.GetLocation();
-	const float Confidence = FMath::Max(Side.Confidence, Snapshot.Confidence);
 	if (bIsLeft)
 	{
-		InOutFrame.bHasQuestLeftFullArmChain = true;
-		InOutFrame.QuestLeftShoulderWorld = ShoulderWorld;
-		InOutFrame.QuestLeftElbowWorld = ElbowWorld;
-		InOutFrame.QuestLeftWristWorld = WristWorld;
-		InOutFrame.QuestLeftFullArmChainTimestampSeconds = Side.TimestampSeconds;
-		InOutFrame.QuestLeftFullArmChainConfidence = Confidence;
+		InOutFrame.bHasLeftArmChain = true;
+		InOutFrame.LeftArmShoulderWorld = Side.ShoulderWorld;
+		InOutFrame.LeftArmElbowWorld = Side.ElbowWorld;
+		InOutFrame.LeftArmWristWorld = Side.WristWorld;
+		InOutFrame.LeftArmChainTimestampSeconds = Side.TimestampSeconds;
+		InOutFrame.LeftArmChainConfidence = Side.Confidence;
 	}
 	else
 	{
-		InOutFrame.bHasQuestRightFullArmChain = true;
-		InOutFrame.QuestRightShoulderWorld = ShoulderWorld;
-		InOutFrame.QuestRightElbowWorld = ElbowWorld;
-		InOutFrame.QuestRightWristWorld = WristWorld;
-		InOutFrame.QuestRightFullArmChainTimestampSeconds = Side.TimestampSeconds;
-		InOutFrame.QuestRightFullArmChainConfidence = Confidence;
+		InOutFrame.bHasRightArmChain = true;
+		InOutFrame.RightArmShoulderWorld = Side.ShoulderWorld;
+		InOutFrame.RightArmElbowWorld = Side.ElbowWorld;
+		InOutFrame.RightArmWristWorld = Side.WristWorld;
+		InOutFrame.RightArmChainTimestampSeconds = Side.TimestampSeconds;
+		InOutFrame.RightArmChainConfidence = Side.Confidence;
 	}
 }
 }
 
-FMediaPipeTrackingMediaPipePoseSnapshot::FMediaPipeTrackingMediaPipePoseSnapshot()
+FMediaPipeTrackingHandSourceSnapshot::FMediaPipeTrackingHandSourceSnapshot()
 {
 	Reset();
 }
 
-void FMediaPipeTrackingMediaPipePoseSnapshot::Reset()
+void FMediaPipeTrackingHandSourceSnapshot::Reset()
+{
+	ProviderCount = 0;
+	ValidProviderCount = 0;
+	bHasLeft = 0;
+	bHasRight = 0;
+	bLeftTracked = 0;
+	bRightTracked = 0;
+	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
+	{
+		LeftPositionsWorld[Index] = FVector::ZeroVector;
+		LeftRotationsWorld[Index] = FQuat::Identity;
+		LeftRadii[Index] = 0.0f;
+		RightPositionsWorld[Index] = FVector::ZeroVector;
+		RightRotationsWorld[Index] = FQuat::Identity;
+		RightRadii[Index] = 0.0f;
+	}
+}
+
+void FMediaPipeTrackingArmChainSourceSnapshot::Reset()
+{
+	Left = FMediaPipeTrackingArmChainSideSnapshot();
+	Right = FMediaPipeTrackingArmChainSideSnapshot();
+}
+
+FMediaPipeTrackingBodyPoseSnapshot::FMediaPipeTrackingBodyPoseSnapshot()
+{
+	Reset();
+}
+
+void FMediaPipeTrackingBodyPoseSnapshot::Reset()
 {
 	TimestampSeconds = -1.0;
 	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
@@ -116,7 +142,7 @@ void FMediaPipeTrackingMediaPipePoseSnapshot::Reset()
 	}
 }
 
-void FMediaPipeTrackingMediaPipePoseSnapshot::SetLandmark(
+void FMediaPipeTrackingBodyPoseSnapshot::SetLandmark(
 	const EMediaPipePoseLandmark Landmark,
 	const FVector& LocationWorld,
 	const float Reliability)
@@ -151,19 +177,19 @@ void FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 		PopulateHmd(OutFrame, HmdSource);
 	}
 
-	PopulateQuestHands(OutFrame, Input.QuestHands, Input.NowSeconds);
-	PopulateFullArmChain(OutFrame, Input.FullArmChain);
-	PopulateMediaPipePose(
+	PopulateHands(OutFrame, Input.Hands, Input.NowSeconds);
+	PopulateArmChain(OutFrame, Input.ArmChain);
+	PopulateBodyPose(
 		OutFrame,
-		Input.MediaPipePose.TimestampSeconds,
-		Input.MediaPipePose.LandmarksWorld,
-		Input.MediaPipePose.LandmarkReliability,
-		Input.MediaPipePose.LandmarkValid);
+		Input.BodyPose.TimestampSeconds,
+		Input.BodyPose.LandmarksWorld,
+		Input.BodyPose.LandmarkReliability,
+		Input.BodyPose.LandmarkValid);
 
 	OutThresholds = FMediaPipeBodyFusionFreshnessThresholds();
-	if (Input.bOverrideQuestFullArmChainMaxAgeSeconds)
+	if (Input.bOverrideArmChainMaxAgeSeconds)
 	{
-		OutThresholds.QuestFullArmChainMaxAgeSeconds = Input.QuestFullArmChainMaxAgeSeconds;
+		OutThresholds.ArmChainMaxAgeSeconds = Input.ArmChainMaxAgeSeconds;
 	}
 	OutFrame.NormalizeInPlace(OutThresholds);
 }
@@ -193,49 +219,49 @@ void FMediaPipeTrackingSourceFrameBuilder::PopulateHmd(
 	InOutFrame.HmdConfidence = Snapshot.Confidence;
 }
 
-void FMediaPipeTrackingSourceFrameBuilder::PopulateQuestHands(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateHands(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
-	const FQuestHandTrackingSnapshot& Snapshot,
+	const FMediaPipeTrackingHandSourceSnapshot& Snapshot,
 	const double NowSeconds)
 {
-	PopulateQuestHandSide(InOutFrame, Snapshot, true, NowSeconds);
-	PopulateQuestHandSide(InOutFrame, Snapshot, false, NowSeconds);
+	PopulateHandSide(InOutFrame, Snapshot, true, NowSeconds);
+	PopulateHandSide(InOutFrame, Snapshot, false, NowSeconds);
 }
 
-void FMediaPipeTrackingSourceFrameBuilder::PopulateFullArmChain(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateArmChain(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
-	const FMediaPipeFullArmChainSnapshot& Snapshot)
+	const FMediaPipeTrackingArmChainSourceSnapshot& Snapshot)
 {
-	PopulateFullArmChainSide(InOutFrame, Snapshot, true);
-	PopulateFullArmChainSide(InOutFrame, Snapshot, false);
+	PopulateArmChainSide(InOutFrame, Snapshot, true);
+	PopulateArmChainSide(InOutFrame, Snapshot, false);
 }
 
-void FMediaPipeTrackingSourceFrameBuilder::PopulateMediaPipePose(
+void FMediaPipeTrackingSourceFrameBuilder::PopulateBodyPose(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
 	const double TimestampSeconds,
 	const TStaticArray<FVector, MediaPipePoseLandmarkCount>& LandmarksWorld,
 	const TStaticArray<float, MediaPipePoseLandmarkCount>& LandmarkReliability,
 	const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid)
 {
-	InOutFrame.bHasMediaPipePose = true;
-	InOutFrame.MediaPipePoseTimestampSeconds = TimestampSeconds;
+	InOutFrame.bHasBodyPose = true;
+	InOutFrame.BodyPoseTimestampSeconds = TimestampSeconds;
 	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
 	{
 		if (LandmarkValid[Index] != 0)
 		{
-			InOutFrame.SetMediaPipeLandmark(
+			InOutFrame.SetBodyLandmark(
 				static_cast<EMediaPipePoseLandmark>(Index),
 				LandmarksWorld[Index],
 				LandmarkReliability[Index]);
 		}
 	}
 
-	InOutFrame.MediaPipePoseConfidence = CalculateCoreMediaPipePoseConfidence(
-		InOutFrame.MediaPipeLandmarkReliability,
-		InOutFrame.MediaPipeLandmarkValid);
+	InOutFrame.BodyPoseConfidence = CalculateCoreBodyPoseConfidence(
+		InOutFrame.BodyPoseLandmarkReliability,
+		InOutFrame.BodyPoseLandmarkValid);
 }
 
-float FMediaPipeTrackingSourceFrameBuilder::CalculateCoreMediaPipePoseConfidence(
+float FMediaPipeTrackingSourceFrameBuilder::CalculateCoreBodyPoseConfidence(
 	const TStaticArray<float, MediaPipePoseLandmarkCount>& LandmarkReliability,
 	const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid)
 {

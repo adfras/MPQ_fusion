@@ -153,7 +153,7 @@ FMediaPipeBodyFusionAuthorityGateDecision FMediaPipeBodyFusionAuthorityPolicy::R
 
 	if (!Input.bCalibrationUsable)
 	{
-		Decision.AuthorityState = Input.MediaPipePoseStatus.IsFresh()
+		Decision.AuthorityState = Input.BodyPoseStatus.IsFresh()
 			? EMediaPipeBodyFusionAuthorityState::MediaPipeCalibrating
 			: EMediaPipeBodyFusionAuthorityState::MediaPipeRejected;
 		Decision.Reason = Input.CalibrationRejectReason.IsEmpty()
@@ -162,12 +162,12 @@ FMediaPipeBodyFusionAuthorityGateDecision FMediaPipeBodyFusionAuthorityPolicy::R
 		return Decision;
 	}
 
-	if (!Input.MediaPipePoseStatus.IsFresh())
+	if (!Input.BodyPoseStatus.IsFresh())
 	{
 		Decision.AuthorityState = EMediaPipeBodyFusionAuthorityState::MediaPipeRejected;
 		Decision.Reason = FString::Printf(
 			TEXT("mediaPipe %s"),
-			BodyFusionSourceStateName(Input.MediaPipePoseStatus.State));
+			BodyFusionSourceStateName(Input.BodyPoseStatus.State));
 		return Decision;
 	}
 

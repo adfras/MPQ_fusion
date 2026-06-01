@@ -4,6 +4,7 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeAvatarRigProfile.h"
 #include "MediaPipeAutoQuestProfilePolicy.h"
+#include "EmbodiedFusionComponent.h"
 #include "MediaPipeEmbodiedHmdRecenterPolicy.h"
 #include "MediaPipeFirstPersonBodyProxyComponent.h"
 #include "MediaPipeFullArmChainProvider.h"
@@ -14,6 +15,7 @@
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestWebcamSourceActor.h"
 #include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeSkeletonPoseAdapter.h"
 
 #include "Camera/CameraComponent.h"
 #include "Camera/CameraTypes.h"
@@ -34,7 +36,6 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "Features/IModularFeatures.h"
 #include "GameFramework/DefaultPawn.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -43,7 +44,6 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "HAL/IConsoleManager.h"
 #include "HeadMountedDisplayTypes.h"
-#include "IHandTracker.h"
 #include "IMediaCaptureSupport.h"
 #include "IXRTrackingSystem.h"
 #include "Kismet/GameplayStatics.h"
@@ -125,6 +125,8 @@ AMediaPipeEmbodiedAvatarPawn::AMediaPipeEmbodiedAvatarPawn()
 	MotionControllerRight->SetVisibility(false, true);
 	MotionControllerRight->SetHiddenInGame(true);
 
+	EmbodiedFusionComponent = CreateDefaultSubobject<UEmbodiedFusionComponent>(TEXT("EmbodiedFusion"));
+
 	if (USkeletalMesh* ReplicaMesh = TryLoadMovementReplicaMannyMesh())
 	{
 		AvatarMesh->SetSkinnedAssetAndUpdate(ReplicaMesh);
@@ -172,6 +174,18 @@ void AMediaPipeEmbodiedAvatarPawn::ApplySelectedAvatarProfileToRuntimeCVars() co
 	}
 
 	SetConsoleInt(TEXT("mp.AutoQuestAvatar"), 0);
+}
+
+void AMediaPipeEmbodiedAvatarPawn::ApplyEmbodiedTrackingLaunchProfile() const
+{
+	if (Tags.Contains(CommandOnlyEmbodiedStartTag))
+	{
+		ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+	}
+	else
+	{
+		ApplyAutoQuestProfile();
+	}
 }
 
 void AMediaPipeEmbodiedAvatarPawn::OnConstruction(const FTransform& Transform)
@@ -1205,15 +1219,30 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMovementReplicaAvatarPose()
 		return;
 	}
 
-	FVector HmdWorldLocation = FVector::ZeroVector;
-	FRotator HmdWorldRotation = FRotator::ZeroRotator;
-	const bool bHasRuntimeHmdPose = TryGetHmdWorldPose(HmdWorldLocation, HmdWorldRotation);
-	const FQuat HmdWorldQuat = bHasRuntimeHmdPose
-		? HmdWorldRotation.Quaternion()
-		: (VRCamera ? VRCamera->GetComponentQuat() : GetActorQuat());
+	if (!EmbodiedFusionComponent)
+	{
+		return;
+	}
 
-	ApplyMovementReplicaPoseToMesh(AvatarMesh, false, HmdWorldQuat);
-	ApplyMovementReplicaPoseToMesh(LocalAvatarMesh, true, HmdWorldQuat);
+	FEmbodiedFusionMovementReplicaPoseInput FusionInput;
+	FusionInput.World = GetWorld();
+	FusionInput.TargetComponent = AvatarRoot ? AvatarRoot : GetRootComponent();
+	FusionInput.FallbackHeadComponent = VRCamera ? Cast<USceneComponent>(VRCamera) : GetRootComponent();
+	FusionInput.LeftMotionController = MotionControllerLeft;
+	FusionInput.RightMotionController = MotionControllerRight;
+	FusionInput.TargetActorName = GetFName();
+	FusionInput.bUseHandTracking = true;
+	EmbodiedFusionComponent->UpdateMovementReplicaPose_GameThread(FusionInput);
+
+	const FEmbodiedFusionBestAvailablePose& FusionPose =
+		EmbodiedFusionComponent->GetBestAvailablePose();
+	if (!FusionPose.bHasHead)
+	{
+		return;
+	}
+
+	ApplyMovementReplicaPoseToMesh(AvatarMesh, false, FusionPose);
+	ApplyMovementReplicaPoseToMesh(LocalAvatarMesh, true, FusionPose);
 	UpdateMovementReplicaMirrorAvatar(false);
 }
 
@@ -1317,7 +1346,7 @@ void AMediaPipeEmbodiedAvatarPawn::CopyMovementReplicaPoseToMirrorAvatar() const
 void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaPoseToMesh(
 	UPoseableMeshComponent* Mesh,
 	const bool bFirstPersonMesh,
-	const FQuat& HmdWorldRotation)
+	const FEmbodiedFusionBestAvailablePose& FusionPose)
 {
 	if (!Mesh || !Mesh->GetSkinnedAsset() || !bMovementReplicaReferencePoseCached)
 	{
@@ -1331,8 +1360,8 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaPoseToMesh(
 	}
 
 	const FQuat WorldToMesh = Mesh->GetComponentQuat().Inverse();
-	const FVector HmdForwardCS = WorldToMesh.RotateVector(HmdWorldRotation.GetForwardVector()).GetSafeNormal();
-	const FVector HmdUpCS = WorldToMesh.RotateVector(HmdWorldRotation.GetUpVector()).GetSafeNormal();
+	const FVector HmdForwardCS = WorldToMesh.RotateVector(FusionPose.HeadRotationWorld.GetForwardVector()).GetSafeNormal();
+	const FVector HmdUpCS = WorldToMesh.RotateVector(FusionPose.HeadRotationWorld.GetUpVector()).GetSafeNormal();
 	const FVector AvatarForwardCS = Profile.bUseTargetFaceForwardAxis ? FVector::YAxisVector : FVector::XAxisVector;
 	const FQuat ReferenceViewCS = MakeMovementReplicaQuatFromForwardUp(AvatarForwardCS, FVector::UpVector);
 	const FQuat HmdViewCS = MakeMovementReplicaQuatFromForwardUp(HmdForwardCS, HmdUpCS);
@@ -1357,10 +1386,18 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaPoseToMesh(
 
 	ApplyMovementReplicaReferenceArmPoseToMesh(Mesh, Profile, true);
 	ApplyMovementReplicaReferenceArmPoseToMesh(Mesh, Profile, false);
-	ApplyMovementReplicaArmPoseToMesh(Mesh, Profile, MotionControllerLeft, true);
-	ApplyMovementReplicaArmPoseToMesh(Mesh, Profile, MotionControllerRight, false);
-	ApplyMovementReplicaHandPoseToMesh(Mesh, Profile, true);
-	ApplyMovementReplicaHandPoseToMesh(Mesh, Profile, false);
+	const FEmbodiedFusionUpperLimbPose& LeftLimb = FusionPose.GetUpperLimb(true);
+	const FEmbodiedFusionUpperLimbPose& RightLimb = FusionPose.GetUpperLimb(false);
+	if (!ApplyMovementReplicaFusedArmPoseToMesh(Mesh, Profile, LeftLimb, true))
+	{
+		ApplyMovementReplicaHandTargetArmPoseToMesh(Mesh, Profile, LeftLimb, true);
+	}
+	if (!ApplyMovementReplicaFusedArmPoseToMesh(Mesh, Profile, RightLimb, false))
+	{
+		ApplyMovementReplicaHandTargetArmPoseToMesh(Mesh, Profile, RightLimb, false);
+	}
+	ApplyMovementReplicaHandPoseToMesh(Mesh, Profile, LeftLimb, true);
+	ApplyMovementReplicaHandPoseToMesh(Mesh, Profile, RightLimb, false);
 
 	if (bFirstPersonMesh)
 	{
@@ -1393,16 +1430,85 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaReferenceArmPoseToMesh(
 	}
 }
 
-void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaArmPoseToMesh(
+bool AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaFusedArmPoseToMesh(
 	UPoseableMeshComponent* Mesh,
 	const FMediaPipeAvatarEmbodimentProfile& Profile,
-	UMotionControllerComponent* MotionController,
+	const FEmbodiedFusionUpperLimbPose& LimbPose,
 	const bool bLeft) const
 {
-	FTransform HandWorld = FTransform::Identity;
-	FName HandSource = NAME_None;
-	bool bHandTracked = false;
-	if (!Mesh || !TryGetMovementReplicaHandWorldTransform(MotionController, bLeft, HandWorld, HandSource, bHandTracked))
+	if (!Mesh || !LimbPose.bHasJointChain)
+	{
+		return false;
+	}
+
+	const FName UpperArmBone = bLeft ? Profile.BoneMap.LeftUpperArm : Profile.BoneMap.RightUpperArm;
+	const FName LowerArmBone = bLeft ? Profile.BoneMap.LeftLowerArm : Profile.BoneMap.RightLowerArm;
+	const FName HandBone = bLeft ? Profile.BoneMap.LeftHand : Profile.BoneMap.RightHand;
+	const FTransform* UpperArmRefCS = MovementReplicaReferencePoseCS.Find(UpperArmBone);
+	const FTransform* LowerArmRefCS = MovementReplicaReferencePoseCS.Find(LowerArmBone);
+	const FTransform* HandRefCS = MovementReplicaReferencePoseCS.Find(HandBone);
+	if (!UpperArmRefCS || !LowerArmRefCS || !HandRefCS ||
+		!PoseableMeshHasBone(Mesh, UpperArmBone) ||
+		!PoseableMeshHasBone(Mesh, LowerArmBone) ||
+		!PoseableMeshHasBone(Mesh, HandBone))
+	{
+		return false;
+	}
+
+	const FTransform WorldToMesh = Mesh->GetComponentTransform().Inverse();
+	const FVector ShoulderCS = WorldToMesh.TransformPosition(LimbPose.ShoulderWorld);
+	const FVector ElbowCS = WorldToMesh.TransformPosition(LimbPose.ElbowWorld);
+	const FVector WristCS = WorldToMesh.TransformPosition(LimbPose.WristWorld);
+	if (ShoulderCS.ContainsNaN() || ElbowCS.ContainsNaN() || WristCS.ContainsNaN())
+	{
+		return false;
+	}
+
+	auto AimComponentSpaceBone = [Mesh](
+		const FName BoneName,
+		const FTransform& ReferenceCS,
+		const FVector& ReferenceChildCS,
+		const FVector& TargetJointCS,
+		const FVector& TargetChildCS) -> bool
+	{
+		const FVector ReferenceDirCS = (ReferenceChildCS - ReferenceCS.GetLocation()).GetSafeNormal();
+		const FVector TargetDirCS = (TargetChildCS - TargetJointCS).GetSafeNormal();
+		if (ReferenceDirCS.IsNearlyZero() || TargetDirCS.IsNearlyZero())
+		{
+			return false;
+		}
+
+		FTransform TargetCS = ReferenceCS;
+		TargetCS.SetLocation(TargetJointCS);
+		const FQuat AimDeltaCS = FQuat::FindBetweenNormals(ReferenceDirCS, TargetDirCS);
+		TargetCS.SetRotation((AimDeltaCS * ReferenceCS.GetRotation()).GetNormalized());
+		Mesh->SetBoneTransformByName(BoneName, TargetCS, EBoneSpaces::ComponentSpace);
+		return true;
+	};
+
+	const bool bUpperWritten = AimComponentSpaceBone(UpperArmBone, *UpperArmRefCS, LowerArmRefCS->GetLocation(), ShoulderCS, ElbowCS);
+	const bool bLowerWritten = AimComponentSpaceBone(LowerArmBone, *LowerArmRefCS, HandRefCS->GetLocation(), ElbowCS, WristCS);
+
+	const FVector RefHandForwardCS = (HandRefCS->GetLocation() - LowerArmRefCS->GetLocation()).GetSafeNormal();
+	const FVector SolvedHandForwardCS = (WristCS - ElbowCS).GetSafeNormal();
+	FTransform HandCS = *HandRefCS;
+	HandCS.SetLocation(WristCS);
+	if (!RefHandForwardCS.IsNearlyZero() && !SolvedHandForwardCS.IsNearlyZero())
+	{
+		const FQuat HandDeltaCS = FQuat::FindBetweenNormals(RefHandForwardCS, SolvedHandForwardCS);
+		HandCS.SetRotation((HandDeltaCS * HandRefCS->GetRotation()).GetNormalized());
+	}
+	Mesh->SetBoneTransformByName(HandBone, HandCS, EBoneSpaces::ComponentSpace);
+	return bUpperWritten && bLowerWritten;
+}
+
+void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaHandTargetArmPoseToMesh(
+	UPoseableMeshComponent* Mesh,
+	const FMediaPipeAvatarEmbodimentProfile& Profile,
+	const FEmbodiedFusionUpperLimbPose& LimbPose,
+	const bool bLeft) const
+{
+	if (!Mesh || !LimbPose.bHasHandTarget)
 	{
 		if (Mesh == AvatarMesh)
 		{
@@ -1414,9 +1520,8 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaArmPoseToMesh(
 				{
 					LastArmLogTimeSeconds = Now;
 					UE_LOG(LogMediaPipePose, Warning,
-						TEXT("Movement replica arm target: side=%s source=None tracked=0 motionControllerTracked=%d"),
-						bLeft ? TEXT("L") : TEXT("R"),
-						(MotionController && MotionController->IsTracked()) ? 1 : 0);
+						TEXT("Movement replica arm target: side=%s source=None tracked=0"),
+						bLeft ? TEXT("L") : TEXT("R"));
 				}
 			}
 		}
@@ -1447,7 +1552,7 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaArmPoseToMesh(
 		return;
 	}
 
-	const FVector ControllerCS = Mesh->GetComponentTransform().InverseTransformPosition(HandWorld.GetLocation());
+	const FVector ControllerCS = Mesh->GetComponentTransform().InverseTransformPosition(LimbPose.HandTargetWorld.GetLocation());
 	const FVector RawShoulderToWristCS = ControllerCS - ShoulderCS;
 	const FVector RefShoulderToWristCS = RefWristCS - ShoulderCS;
 	FVector ShoulderToWristDirCS = RawShoulderToWristCS.GetSafeNormal();
@@ -1479,18 +1584,18 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaArmPoseToMesh(
 				UE_LOG(LogMediaPipePose, Log,
 					TEXT("Movement replica arm target: side=%s source=%s tracked=%d rawReach=%.1f clampedReach=%.1f maxReach=%.1f targetDeltaCS=(%.1f,%.1f,%.1f) handWorld=(%.1f,%.1f,%.1f) motionControllerTracked=%d"),
 					bLeft ? TEXT("L") : TEXT("R"),
-					*HandSource.ToString(),
-					bHandTracked ? 1 : 0,
+					*LimbPose.Source.ToString(),
+					LimbPose.bHandTargetTracked ? 1 : 0,
 					RawReach,
 					ClampedReach,
 					MaxReach,
 					RefTargetDeltaCS.X,
 					RefTargetDeltaCS.Y,
 					RefTargetDeltaCS.Z,
-					HandWorld.GetLocation().X,
-					HandWorld.GetLocation().Y,
-					HandWorld.GetLocation().Z,
-					(MotionController && MotionController->IsTracked()) ? 1 : 0);
+					LimbPose.HandTargetWorld.GetLocation().X,
+					LimbPose.HandTargetWorld.GetLocation().Y,
+					LimbPose.HandTargetWorld.GetLocation().Z,
+					LimbPose.Source == FName(TEXT("MotionController")) ? 1 : 0);
 			}
 		}
 	}
@@ -1547,41 +1652,10 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaArmPoseToMesh(
 	Mesh->SetBoneTransformByName(HandBone, HandCS, EBoneSpaces::ComponentSpace);
 }
 
-bool AMediaPipeEmbodiedAvatarPawn::TryGetMovementReplicaHandJointState(
-	const bool bLeft,
-	TArray<FVector>& OutPositions,
-	TArray<FQuat>& OutRotations) const
-{
-	OutPositions.Reset();
-	OutRotations.Reset();
-
-	const TArray<IHandTracker*> HandTrackers =
-		IModularFeatures::Get().GetModularFeatureImplementations<IHandTracker>(IHandTracker::GetModularFeatureName());
-	const EControllerHand Hand = bLeft ? EControllerHand::Left : EControllerHand::Right;
-	for (const IHandTracker* HandTracker : HandTrackers)
-	{
-		if (!HandTracker || !HandTracker->IsHandTrackingStateValid())
-		{
-			continue;
-		}
-
-		TArray<float> Radii;
-		bool bTracked = false;
-		if (HandTracker->GetAllKeypointStates(Hand, OutPositions, OutRotations, Radii, bTracked) &&
-			bTracked &&
-			OutPositions.Num() >= EHandKeypointCount &&
-			OutRotations.Num() >= EHandKeypointCount)
-		{
-			return true;
-		}
-	}
-
-	return false;
-}
-
 void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaHandPoseToMesh(
 	UPoseableMeshComponent* Mesh,
 	const FMediaPipeAvatarEmbodimentProfile& Profile,
+	const FEmbodiedFusionUpperLimbPose& LimbPose,
 	const bool bLeft) const
 {
 	if (!Mesh)
@@ -1591,9 +1665,16 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaHandPoseToMesh(
 
 	TArray<FVector> Positions;
 	TArray<FQuat> Rotations;
-	if (!TryGetMovementReplicaHandJointState(bLeft, Positions, Rotations))
+	if (!LimbPose.HandJoints.bHasJoints)
 	{
 		return;
+	}
+	Positions.SetNum(MediaPipeTrackingHandKeypointCount);
+	Rotations.SetNum(MediaPipeTrackingHandKeypointCount);
+	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
+	{
+		Positions[Index] = LimbPose.HandJoints.PositionsWorld[Index];
+		Rotations[Index] = LimbPose.HandJoints.RotationsWorld[Index];
 	}
 
 	const FName LowerArmBone = bLeft ? Profile.BoneMap.LeftLowerArm : Profile.BoneMap.RightLowerArm;
@@ -1803,74 +1884,6 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaHandPoseToMesh(
 	}
 }
 
-bool AMediaPipeEmbodiedAvatarPawn::TryGetMovementReplicaHandWorldTransform(
-	UMotionControllerComponent* MotionController,
-	const bool bLeft,
-	FTransform& OutHandWorld,
-	FName& OutSource,
-	bool& bOutTracked) const
-{
-	OutSource = NAME_None;
-	bOutTracked = false;
-
-	const TArray<IHandTracker*> HandTrackers =
-		IModularFeatures::Get().GetModularFeatureImplementations<IHandTracker>(IHandTracker::GetModularFeatureName());
-	const EControllerHand Hand = bLeft ? EControllerHand::Left : EControllerHand::Right;
-	for (const IHandTracker* HandTracker : HandTrackers)
-	{
-		if (!HandTracker || !HandTracker->IsHandTrackingStateValid())
-		{
-			continue;
-		}
-
-		TArray<FVector> Positions;
-		TArray<FQuat> Rotations;
-		TArray<float> Radii;
-		bool bTracked = false;
-		if (HandTracker->GetAllKeypointStates(Hand, Positions, Rotations, Radii, bTracked) && bTracked)
-		{
-			const int32 WristIndex = static_cast<int32>(EHandKeypoint::Wrist);
-			if (Positions.IsValidIndex(WristIndex))
-			{
-				OutHandWorld = FTransform::Identity;
-				if (Rotations.IsValidIndex(WristIndex))
-				{
-					OutHandWorld.SetRotation(Rotations[WristIndex].GetNormalized());
-				}
-				OutHandWorld.SetLocation(Positions[WristIndex]);
-				OutSource = FName(TEXT("OpenXRHandWrist"));
-				bOutTracked = true;
-				return true;
-			}
-
-			const int32 PalmIndex = static_cast<int32>(EHandKeypoint::Palm);
-			if (Positions.IsValidIndex(PalmIndex))
-			{
-				OutHandWorld = FTransform::Identity;
-				if (Rotations.IsValidIndex(PalmIndex))
-				{
-					OutHandWorld.SetRotation(Rotations[PalmIndex].GetNormalized());
-				}
-				OutHandWorld.SetLocation(Positions[PalmIndex]);
-				OutSource = FName(TEXT("OpenXRHandPalm"));
-				bOutTracked = true;
-				return true;
-			}
-		}
-
-	}
-
-	if (MotionController && MotionController->IsTracked())
-	{
-		OutHandWorld = MotionController->GetComponentTransform();
-		OutSource = FName(TEXT("MotionController"));
-		bOutTracked = true;
-		return true;
-	}
-
-	return false;
-}
-
 void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaLocalHiddenBones(UPoseableMeshComponent* Mesh) const
 {
 	if (!Mesh)
@@ -1909,6 +1922,198 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaLocalHiddenBones(UPoseabl
 	}
 }
 
+bool AMediaPipeEmbodiedAvatarPawn::RefreshExistingEmbodiedTrackingSource(UWorld* World)
+{
+	if (!World || !bUseMediaPipeTracking)
+	{
+		return false;
+	}
+
+	ApplyEmbodiedTrackingLaunchProfile();
+
+	FString CaptureUrl;
+	FString CaptureLabel;
+	if (!TryResolveCaptureDevice(CaptureUrl, CaptureLabel))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no capture device resolved for refresh."));
+		return false;
+	}
+
+	SourceActor = SourceActor ? SourceActor : FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag);
+	if (!SourceActor)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no MediaPipe source actor was found for refresh."));
+		return false;
+	}
+
+	SourceActor->ConfigureLowLoadDefaults(
+		CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
+		ResolveAutoModelPath(),
+		ResolveAutoQuestMediaPipeInputMaxDimension());
+	SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
+
+	AvatarDriverActor = AvatarDriverActor ? AvatarDriverActor : FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag);
+	ConfigurePoseDrivenAvatarActor(AvatarDriverActor, SourceActor);
+
+	UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: refreshed existing MediaPipe source pawn=%s capture=%s label=%s."),
+		*GetNameSafe(this),
+		*CaptureUrl,
+		CaptureLabel.IsEmpty() ? TEXT("unnamed") : *CaptureLabel);
+	return true;
+}
+
+AMediaPipeQuestWebcamSourceActor* AMediaPipeEmbodiedAvatarPawn::ResolveOrCreateMediaPipeSourceActor(
+	UWorld* World,
+	const FString& CaptureUrl,
+	const FString& CaptureLabel,
+	bool& bOutSpawnedSourceActor)
+{
+	bOutSpawnedSourceActor = false;
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	const FTransform SourceTransform(FRotator::ZeroRotator, FVector::ZeroVector);
+	SourceActor = FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag);
+	if (!SourceActor)
+	{
+		SourceActor = World->SpawnActorDeferred<AMediaPipeQuestWebcamSourceActor>(
+			AMediaPipeQuestWebcamSourceActor::StaticClass(),
+			SourceTransform,
+			this,
+			nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (SourceActor)
+		{
+			SourceActor->Tags.AddUnique(LiveVideoTag);
+			SourceActor->ConfigureLowLoadDefaults(
+				CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
+				ResolveAutoModelPath(),
+				ResolveAutoQuestMediaPipeInputMaxDimension());
+			SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
+#if WITH_EDITOR
+			SourceActor->SetActorLabel(TEXT("MP_LiveMediaPipeVideo"));
+#endif
+			UGameplayStatics::FinishSpawningActor(SourceActor, SourceTransform);
+			bOutSpawnedSourceActor = true;
+		}
+	}
+
+	if (SourceActor && !bOutSpawnedSourceActor)
+	{
+		SourceActor->ConfigureLowLoadDefaults(
+			CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
+			ResolveAutoModelPath(),
+			ResolveAutoQuestMediaPipeInputMaxDimension());
+		SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
+	}
+
+	return SourceActor;
+}
+
+AMediaPipePoseDrivenSkeletalActor* AMediaPipeEmbodiedAvatarPawn::ResolveOrCreatePoseDrivenAvatarActor(
+	UWorld* World,
+	const FTransform& AvatarTransform)
+{
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	AvatarDriverActor = FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag);
+	if (!AvatarDriverActor)
+	{
+		AvatarDriverActor = World->SpawnActorDeferred<AMediaPipePoseDrivenSkeletalActor>(
+			AMediaPipePoseDrivenSkeletalActor::StaticClass(),
+			AvatarTransform,
+			this,
+			nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (AvatarDriverActor)
+		{
+			AvatarDriverActor->Tags.AddUnique(LiveMannyTag);
+			AvatarDriverActor->bAutoPositionNextToSource = false;
+			AvatarDriverActor->bAutoAlignYawToPose = false;
+#if WITH_EDITOR
+			AvatarDriverActor->SetActorLabel(TEXT("MP_LiveMediaPipeManny"));
+#endif
+			UGameplayStatics::FinishSpawningActor(AvatarDriverActor, AvatarTransform);
+		}
+	}
+
+	return AvatarDriverActor;
+}
+
+void AMediaPipeEmbodiedAvatarPawn::ConfigurePoseDrivenAvatarActor(
+	AMediaPipePoseDrivenSkeletalActor* InAvatarDriverActor,
+	AMediaPipeQuestWebcamSourceActor* InSourceActor)
+{
+	if (!InAvatarDriverActor)
+	{
+		return;
+	}
+
+	InAvatarDriverActor->SetOwner(this);
+	InAvatarDriverActor->Source = InSourceActor;
+	InAvatarDriverActor->SetEmbodiedFusionComponent(EmbodiedFusionComponent);
+	InAvatarDriverActor->bAutoPositionNextToSource = false;
+	InAvatarDriverActor->bAutoAlignYawToPose = false;
+}
+
+void AMediaPipeEmbodiedAvatarPawn::ConfigureEmbodiedPresentationTarget(
+	UWorld* World,
+	const FTransform& AvatarTransform)
+{
+	if (!World || !AvatarDriverActor)
+	{
+		return;
+	}
+
+	FMediaPipeAvatarEmbodimentProfile VisibilityProfile;
+	TryBuildActiveEmbodimentProfileForWorld(World, VisibilityProfile);
+	const FMediaPipeAvatarLocalViewPolicy* VisibilityPolicy = VisibilityProfile.IsValid()
+		? &VisibilityProfile.LocalViewPolicy
+		: nullptr;
+
+	const bool bUseMetaHuman = UsesMetaHumanEmbodiedAvatar(World);
+	FMediaPipeMetaHumanProfileDefinition ActiveMetaHumanProfile;
+	if (!TryGetMediaPipeMetaHumanProfile(ResolveActiveMetaHumanProfileIdForWorld(World), ActiveMetaHumanProfile))
+	{
+		TryGetMediaPipeMetaHumanProfile(GetMediaPipeDefaultMetaHumanProfileId(), ActiveMetaHumanProfile);
+	}
+
+	if (bUseMetaHuman && ActiveMetaHumanProfile.ProfileId != NAME_None)
+	{
+		if (AActor* MetaHumanActor = FindOrSpawnMetaHumanActor(World, AvatarTransform, ActiveMetaHumanProfile))
+		{
+			USkeletalMeshComponent* MetaHumanBodyMesh = FindMetaHumanBodyMesh(MetaHumanActor, ActiveMetaHumanProfile);
+			if (MetaHumanBodyMesh)
+			{
+				AvatarDriverActor->SetPresentationActor(MetaHumanActor, MetaHumanBodyMesh);
+				ConfigureEmbodiedLocalViewVisibility(MetaHumanActor, this, true, true, VisibilityPolicy);
+			}
+			else
+			{
+				AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
+				ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
+				UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: MetaHuman profile=%s has no usable body mesh; using internal Manny."),
+					*ActiveMetaHumanProfile.ProfileId.ToString());
+			}
+		}
+		else
+		{
+			AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
+			ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
+		}
+	}
+	else
+	{
+		AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
+		ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
+	}
+}
+
 void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking(bool bRefreshExistingSource)
 {
 	UWorld* World = GetWorld();
@@ -1922,53 +2127,14 @@ void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking(bool bRefreshExistingSo
 
 	if (bTrackingStarted)
 	{
+		if (AvatarDriverActor)
+		{
+			ConfigurePoseDrivenAvatarActor(AvatarDriverActor, SourceActor);
+		}
+
 		if (bRefreshExistingSource && bUseMediaPipeTracking)
 		{
-			if (Tags.Contains(CommandOnlyEmbodiedStartTag))
-			{
-				ApplyMediaPipeOnlyEmbodiedWebcamProfile();
-			}
-			else
-			{
-				ApplyAutoQuestProfile();
-			}
-
-			FString CaptureUrl;
-			FString CaptureLabel;
-			if (TryResolveCaptureDevice(CaptureUrl, CaptureLabel))
-			{
-				SourceActor = SourceActor ? SourceActor : FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag);
-				if (SourceActor)
-				{
-					SourceActor->ConfigureLowLoadDefaults(
-						CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
-						ResolveAutoModelPath(),
-						ResolveAutoQuestMediaPipeInputMaxDimension());
-					SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
-
-					AvatarDriverActor = AvatarDriverActor ? AvatarDriverActor : FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag);
-					if (AvatarDriverActor)
-					{
-						AvatarDriverActor->SetOwner(this);
-						AvatarDriverActor->Source = SourceActor;
-						AvatarDriverActor->bAutoPositionNextToSource = false;
-						AvatarDriverActor->bAutoAlignYawToPose = false;
-					}
-
-					UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: refreshed existing MediaPipe source pawn=%s capture=%s label=%s."),
-						*GetNameSafe(this),
-						*CaptureUrl,
-						CaptureLabel.IsEmpty() ? TEXT("unnamed") : *CaptureLabel);
-				}
-				else
-				{
-					UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no MediaPipe source actor was found for refresh."));
-				}
-			}
-			else
-			{
-				UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: tracking was already started but no capture device resolved for refresh."));
-			}
+			RefreshExistingEmbodiedTrackingSource(World);
 		}
 
 		if (ShouldUseMovementReplicaAvatar())
@@ -2013,14 +2179,7 @@ void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking(bool bRefreshExistingSo
 		return;
 	}
 
-	if (Tags.Contains(CommandOnlyEmbodiedStartTag))
-	{
-		ApplyMediaPipeOnlyEmbodiedWebcamProfile();
-	}
-	else
-	{
-		ApplyAutoQuestProfile();
-	}
+	ApplyEmbodiedTrackingLaunchProfile();
 	if (!ShouldUseMovementReplicaAvatar())
 	{
 		SetMovementReplicaAvatarVisible(false);
@@ -2028,136 +2187,37 @@ void AMediaPipeEmbodiedAvatarPawn::StartEmbodiedTracking(bool bRefreshExistingSo
 	EnsureStableEmbodiedTrackingOrigin();
 	ResetPlacedEmbodiedHmdRecenter();
 
-	const FTransform SourceTransform(FRotator::ZeroRotator, FVector::ZeroVector);
-	SourceActor = FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag);
 	bool bSpawnedSourceActor = false;
-	if (!SourceActor)
-	{
-		SourceActor = World->SpawnActorDeferred<AMediaPipeQuestWebcamSourceActor>(
-			AMediaPipeQuestWebcamSourceActor::StaticClass(),
-			SourceTransform,
-			this,
-			nullptr,
-			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-		if (SourceActor)
-		{
-			SourceActor->Tags.AddUnique(LiveVideoTag);
-			SourceActor->ConfigureLowLoadDefaults(
-				CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
-				ResolveAutoModelPath(),
-				ResolveAutoQuestMediaPipeInputMaxDimension());
-			SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
-#if WITH_EDITOR
-			SourceActor->SetActorLabel(TEXT("MP_LiveMediaPipeVideo"));
-#endif
-			UGameplayStatics::FinishSpawningActor(SourceActor, SourceTransform);
-			bSpawnedSourceActor = true;
-		}
-	}
-
+	SourceActor = ResolveOrCreateMediaPipeSourceActor(World, CaptureUrl, CaptureLabel, bSpawnedSourceActor);
 	if (!SourceActor)
 	{
 		UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: failed to spawn or find MediaPipe source actor."));
 		return;
 	}
 
-	if (!bSpawnedSourceActor)
-	{
-		SourceActor->ConfigureLowLoadDefaults(
-			CVarAutoQuestWebcamHandsHz.GetValueOnGameThread(),
-			ResolveAutoModelPath(),
-			ResolveAutoQuestMediaPipeInputMaxDimension());
-		SourceActor->ConfigureCaptureDevice(CaptureUrl, CaptureLabel);
-	}
-
 	const FTransform AvatarTransform(GetActorRotation(), GetActorLocation(), GetActorScale3D());
-	AvatarDriverActor = FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag);
-	if (!AvatarDriverActor)
-	{
-		AvatarDriverActor = World->SpawnActorDeferred<AMediaPipePoseDrivenSkeletalActor>(
-			AMediaPipePoseDrivenSkeletalActor::StaticClass(),
-			AvatarTransform,
-			this,
-			nullptr,
-			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-		if (AvatarDriverActor)
-		{
-			AvatarDriverActor->Tags.AddUnique(LiveMannyTag);
-			AvatarDriverActor->Source = SourceActor;
-			AvatarDriverActor->bAutoPositionNextToSource = false;
-			AvatarDriverActor->bAutoAlignYawToPose = false;
-#if WITH_EDITOR
-			AvatarDriverActor->SetActorLabel(TEXT("MP_LiveMediaPipeManny"));
-#endif
-			UGameplayStatics::FinishSpawningActor(AvatarDriverActor, AvatarTransform);
-		}
-	}
-
+	AvatarDriverActor = ResolveOrCreatePoseDrivenAvatarActor(World, AvatarTransform);
 	if (!AvatarDriverActor)
 	{
 		UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: failed to spawn or find avatar driver actor."));
 		return;
 	}
 
-	AvatarDriverActor->SetOwner(this);
-	AvatarDriverActor->Source = SourceActor;
-	AvatarDriverActor->bAutoPositionNextToSource = false;
-	AvatarDriverActor->bAutoAlignYawToPose = false;
-
-	FMediaPipeAvatarEmbodimentProfile VisibilityProfile;
-	TryBuildActiveEmbodimentProfileForWorld(World, VisibilityProfile);
-	const FMediaPipeAvatarLocalViewPolicy* VisibilityPolicy = VisibilityProfile.IsValid()
-		? &VisibilityProfile.LocalViewPolicy
-		: nullptr;
-
-	const bool bUseMetaHuman = UsesMetaHumanEmbodiedAvatar(World);
-	FMediaPipeMetaHumanProfileDefinition ActiveMetaHumanProfile;
-	if (!TryGetMediaPipeMetaHumanProfile(ResolveActiveMetaHumanProfileIdForWorld(World), ActiveMetaHumanProfile))
-	{
-		TryGetMediaPipeMetaHumanProfile(GetMediaPipeDefaultMetaHumanProfileId(), ActiveMetaHumanProfile);
-	}
-
-	if (bUseMetaHuman && ActiveMetaHumanProfile.ProfileId != NAME_None)
-	{
-		if (AActor* MetaHumanActor = FindOrSpawnMetaHumanActor(World, AvatarTransform, ActiveMetaHumanProfile))
-		{
-			USkeletalMeshComponent* MetaHumanBodyMesh = FindMetaHumanBodyMesh(MetaHumanActor, ActiveMetaHumanProfile);
-			if (MetaHumanBodyMesh)
-			{
-				AvatarDriverActor->SetPresentationActor(MetaHumanActor, MetaHumanBodyMesh);
-				ConfigureEmbodiedLocalViewVisibility(MetaHumanActor, this, true, true, VisibilityPolicy);
-			}
-			else
-			{
-				AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
-				ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
-				UE_LOG(LogMediaPipePose, Warning, TEXT("Placed embodied pawn: MetaHuman profile=%s has no usable body mesh; using internal Manny."),
-					*ActiveMetaHumanProfile.ProfileId.ToString());
-			}
-		}
-		else
-		{
-			AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
-			ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
-		}
-	}
-	else
-	{
-		AvatarDriverActor->SetPresentationActor(nullptr, nullptr);
-		ConfigureEmbodiedLocalViewVisibility(AvatarDriverActor, this, true, true, VisibilityPolicy);
-	}
+	ConfigurePoseDrivenAvatarActor(AvatarDriverActor, SourceActor);
+	ConfigureEmbodiedPresentationTarget(World, AvatarTransform);
 
 	UpdateCameraFromActiveProfile();
 	SyncAvatarToPawnRoot(true);
 	UpdateMediaPipeSelfViewAvatar(true);
 	bTrackingStarted = true;
 
-	UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: tracking started pawn=%s vrOriginRelative=%s cameraRelative=%s cameraLockHmd=%d source=%s avatar=%s capture=%s."),
+	UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: tracking started pawn=%s vrOriginRelative=%s cameraRelative=%s cameraLockHmd=%d source=%s spawnedSource=%d avatar=%s capture=%s."),
 		*GetNameSafe(this),
 		VROrigin ? *VROrigin->GetRelativeLocation().ToCompactString() : TEXT("None"),
 		VRCamera ? *VRCamera->GetRelativeLocation().ToCompactString() : TEXT("None"),
 		VRCamera && VRCamera->bLockToHmd ? 1 : 0,
 		*GetNameSafe(SourceActor),
+		bSpawnedSourceActor ? 1 : 0,
 		*GetNameSafe(AvatarDriverActor),
 		*CaptureLabel);
 }

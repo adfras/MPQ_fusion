@@ -63,17 +63,17 @@ FMediaPipeEmbodimentCalibration MakeIdentityCalibration()
 
 void AddReliableLowerBodyAt(FMediaPipeTrackingSourceFrame& Frame, const FVector& HipCenter)
 {
-	Frame.bHasMediaPipePose = true;
-	Frame.MediaPipePoseTimestampSeconds = 9.95;
-	Frame.MediaPipePoseConfidence = 0.9f;
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, HipCenter + FVector(0.0f, -10.0f, 0.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightHip, HipCenter + FVector(0.0f, 10.0f, 0.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftKnee, HipCenter + FVector(0.0f, -10.0f, -32.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightKnee, HipCenter + FVector(0.0f, 10.0f, -32.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftAnkle, HipCenter + FVector(0.0f, -10.0f, -67.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightAnkle, HipCenter + FVector(0.0f, 10.0f, -67.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftFootIndex, HipCenter + FVector(10.0f, -10.0f, -69.0f), 0.8f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightFootIndex, HipCenter + FVector(10.0f, 10.0f, -69.0f), 0.8f);
+	Frame.bHasBodyPose = true;
+	Frame.BodyPoseTimestampSeconds = 9.95;
+	Frame.BodyPoseConfidence = 0.9f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHip, HipCenter + FVector(0.0f, -10.0f, 0.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightHip, HipCenter + FVector(0.0f, 10.0f, 0.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftKnee, HipCenter + FVector(0.0f, -10.0f, -32.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightKnee, HipCenter + FVector(0.0f, 10.0f, -32.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftAnkle, HipCenter + FVector(0.0f, -10.0f, -67.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightAnkle, HipCenter + FVector(0.0f, 10.0f, -67.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftFootIndex, HipCenter + FVector(10.0f, -10.0f, -69.0f), 0.8f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightFootIndex, HipCenter + FVector(10.0f, 10.0f, -69.0f), 0.8f);
 }
 
 void AddReliableLowerBody(FMediaPipeTrackingSourceFrame& Frame, const float PelvisZ)
@@ -83,47 +83,47 @@ void AddReliableLowerBody(FMediaPipeTrackingSourceFrame& Frame, const float Pelv
 
 void AddUnreliableLowerBody(FMediaPipeTrackingSourceFrame& Frame, const float PelvisZ)
 {
-	Frame.bHasMediaPipePose = true;
-	Frame.MediaPipePoseTimestampSeconds = 9.95;
-	Frame.MediaPipePoseConfidence = 0.9f;
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, PelvisZ), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightHip, FVector(0.0f, 10.0f, PelvisZ), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftKnee, FVector(0.0f, -10.0f, 40.0f), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightKnee, FVector(0.0f, 10.0f, 40.0f), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftAnkle, FVector(0.0f, -10.0f, 5.0f), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightAnkle, FVector(0.0f, 10.0f, 5.0f), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftFootIndex, FVector(10.0f, -10.0f, 3.0f), 0.1f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightFootIndex, FVector(10.0f, 10.0f, 3.0f), 0.1f);
+	Frame.bHasBodyPose = true;
+	Frame.BodyPoseTimestampSeconds = 9.95;
+	Frame.BodyPoseConfidence = 0.9f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, PelvisZ), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightHip, FVector(0.0f, 10.0f, PelvisZ), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftKnee, FVector(0.0f, -10.0f, 40.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightKnee, FVector(0.0f, 10.0f, 40.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftAnkle, FVector(0.0f, -10.0f, 5.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightAnkle, FVector(0.0f, 10.0f, 5.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftFootIndex, FVector(10.0f, -10.0f, 3.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightFootIndex, FVector(10.0f, 10.0f, 3.0f), 0.1f);
 }
 
 void AddReliableUpperBody(FMediaPipeTrackingSourceFrame& Frame)
 {
-	Frame.bHasMediaPipePose = true;
-	Frame.MediaPipePoseTimestampSeconds = 9.95;
-	Frame.MediaPipePoseConfidence = 0.9f;
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(40.0f, -25.0f, 132.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftElbow, FVector(62.0f, -45.0f, 98.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(80.0f, -58.0f, 72.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightShoulder, FVector(40.0f, 25.0f, 132.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightElbow, FVector(62.0f, 45.0f, 98.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightWrist, FVector(80.0f, 58.0f, 72.0f), 0.9f);
+	Frame.bHasBodyPose = true;
+	Frame.BodyPoseTimestampSeconds = 9.95;
+	Frame.BodyPoseConfidence = 0.9f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(40.0f, -25.0f, 132.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftElbow, FVector(62.0f, -45.0f, 98.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(80.0f, -58.0f, 72.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, FVector(40.0f, 25.0f, 132.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightElbow, FVector(62.0f, 45.0f, 98.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightWrist, FVector(80.0f, 58.0f, 72.0f), 0.9f);
 }
 
 void AddFreshQuestFullArmChain(FMediaPipeTrackingSourceFrame& Frame)
 {
-	Frame.bHasQuestLeftFullArmChain = true;
-	Frame.QuestLeftShoulderWorld = FVector(0.0f, -28.0f, 134.0f);
-	Frame.QuestLeftElbowWorld = FVector(10.0f, -42.0f, 102.0f);
-	Frame.QuestLeftWristWorld = FVector(18.0f, -52.0f, 82.0f);
-	Frame.QuestLeftFullArmChainTimestampSeconds = 9.95;
-	Frame.QuestLeftFullArmChainConfidence = 1.0f;
+	Frame.bHasLeftArmChain = true;
+	Frame.LeftArmShoulderWorld = FVector(0.0f, -28.0f, 134.0f);
+	Frame.LeftArmElbowWorld = FVector(10.0f, -42.0f, 102.0f);
+	Frame.LeftArmWristWorld = FVector(18.0f, -52.0f, 82.0f);
+	Frame.LeftArmChainTimestampSeconds = 9.95;
+	Frame.LeftArmChainConfidence = 1.0f;
 
-	Frame.bHasQuestRightFullArmChain = true;
-	Frame.QuestRightShoulderWorld = FVector(0.0f, 28.0f, 134.0f);
-	Frame.QuestRightElbowWorld = FVector(10.0f, 42.0f, 102.0f);
-	Frame.QuestRightWristWorld = FVector(18.0f, 52.0f, 82.0f);
-	Frame.QuestRightFullArmChainTimestampSeconds = 9.95;
-	Frame.QuestRightFullArmChainConfidence = 1.0f;
+	Frame.bHasRightArmChain = true;
+	Frame.RightArmShoulderWorld = FVector(0.0f, 28.0f, 134.0f);
+	Frame.RightArmElbowWorld = FVector(10.0f, 42.0f, 102.0f);
+	Frame.RightArmWristWorld = FVector(18.0f, 52.0f, 82.0f);
+	Frame.RightArmChainTimestampSeconds = 9.95;
+	Frame.RightArmChainConfidence = 1.0f;
 }
 }
 
@@ -140,26 +140,26 @@ bool FMediaPipeBodyFusionSourceFreshnessAutomationTest::RunTest(const FString& P
 	Frame.HmdLocationWorld = FVector(10.0f, 0.0f, 170.0f);
 	Frame.HmdTimestampSeconds = 9.95;
 	Frame.HmdConfidence = 1.0f;
-	Frame.bHasQuestLeftHand = true;
-	Frame.QuestLeftHandWorld = FVector(20.0f, -30.0f, 120.0f);
-	Frame.QuestLeftHandTimestampSeconds = 9.70;
-	Frame.QuestLeftHandConfidence = 1.0f;
-	Frame.bHasQuestRightHand = true;
-	Frame.QuestRightHandWorld = FVector(20.0f, 30.0f, 120.0f);
-	Frame.QuestRightHandTimestampSeconds = 9.95;
-	Frame.QuestRightHandConfidence = 0.0f;
-	Frame.bHasMediaPipePose = true;
-	Frame.MediaPipePoseTimestampSeconds = 9.90;
-	Frame.MediaPipePoseConfidence = 0.9f;
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, 90.0f), 0.9f);
+	Frame.bHasLeftHand = true;
+	Frame.LeftHandWorld = FVector(20.0f, -30.0f, 120.0f);
+	Frame.LeftHandTimestampSeconds = 9.70;
+	Frame.LeftHandConfidence = 1.0f;
+	Frame.bHasRightHand = true;
+	Frame.RightHandWorld = FVector(20.0f, 30.0f, 120.0f);
+	Frame.RightHandTimestampSeconds = 9.95;
+	Frame.RightHandConfidence = 0.0f;
+	Frame.bHasBodyPose = true;
+	Frame.BodyPoseTimestampSeconds = 9.90;
+	Frame.BodyPoseConfidence = 0.9f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, 90.0f), 0.9f);
 
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	TestTrue(TEXT("Fresh HMD pose is classified as fresh"), Frame.HmdStatus.State == EMediaPipeBodyFusionSourceState::Fresh);
-	TestTrue(TEXT("Old Quest hand is classified as stale"), Frame.QuestLeftHandStatus.State == EMediaPipeBodyFusionSourceState::Stale);
-	TestTrue(TEXT("Low-confidence Quest hand is classified as invalid"), Frame.QuestRightHandStatus.State == EMediaPipeBodyFusionSourceState::Invalid);
-	TestTrue(TEXT("Missing right full-arm chain remains missing"), Frame.QuestRightFullArmChainStatus.State == EMediaPipeBodyFusionSourceState::Missing);
-	TestTrue(TEXT("Reliable MediaPipe pose is classified as fresh"), Frame.MediaPipePoseStatus.State == EMediaPipeBodyFusionSourceState::Fresh);
+	TestTrue(TEXT("Old Quest hand is classified as stale"), Frame.LeftHandStatus.State == EMediaPipeBodyFusionSourceState::Stale);
+	TestTrue(TEXT("Low-confidence Quest hand is classified as invalid"), Frame.RightHandStatus.State == EMediaPipeBodyFusionSourceState::Invalid);
+	TestTrue(TEXT("Missing right full-arm chain remains missing"), Frame.RightArmChainStatus.State == EMediaPipeBodyFusionSourceState::Missing);
+	TestTrue(TEXT("Reliable MediaPipe pose is classified as fresh"), Frame.BodyPoseStatus.State == EMediaPipeBodyFusionSourceState::Fresh);
 	return true;
 }
 
@@ -601,15 +601,15 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 {
 	FMediaPipeTrackingSourceFrame Frame = MakeFreshHmdFrame(FVector(0.0f, 0.0f, 170.0f));
 	AddReliableLowerBody(Frame, 70.0f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(5.0f, -25.0f, 130.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftElbow, FVector(20.0f, -40.0f, 100.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(25.0f, -45.0f, 75.0f), 0.9f);
-	Frame.bHasQuestLeftFullArmChain = true;
-	Frame.QuestLeftShoulderWorld = FVector(0.0f, -30.0f, 135.0f);
-	Frame.QuestLeftElbowWorld = FVector(10.0f, -45.0f, 105.0f);
-	Frame.QuestLeftWristWorld = FVector(15.0f, -50.0f, 80.0f);
-	Frame.QuestLeftFullArmChainTimestampSeconds = 9.95;
-	Frame.QuestLeftFullArmChainConfidence = 1.0f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(5.0f, -25.0f, 130.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftElbow, FVector(20.0f, -40.0f, 100.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(25.0f, -45.0f, 75.0f), 0.9f);
+	Frame.bHasLeftArmChain = true;
+	Frame.LeftArmShoulderWorld = FVector(0.0f, -30.0f, 135.0f);
+	Frame.LeftArmElbowWorld = FVector(10.0f, -45.0f, 105.0f);
+	Frame.LeftArmWristWorld = FVector(15.0f, -50.0f, 80.0f);
+	Frame.LeftArmChainTimestampSeconds = 9.95;
+	Frame.LeftArmChainConfidence = 1.0f;
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	FMediaPipeBodyFusionSolveInput Input;
@@ -690,6 +690,8 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	TestTrue(TEXT("Forward/down HMD-only MetaHuman lean keeps chest under the HMD-owned head"),
 		ForwardLoweredHmdOnlyMetaHumanPose.Chest.LocationWorld.Z <
 			ForwardLoweredHmdOnlyMetaHumanPose.Head.LocationWorld.Z - 20.0f);
+	TestTrue(TEXT("Forward/down HMD-only MetaHuman lean keeps a minimum head-to-chest clearance"),
+		ForwardLoweredHmdOnlyMetaHumanPose.DebugErrors.HeadToChestCm >= 22.0f);
 	TestTrue(TEXT("Forward/down HMD-only MetaHuman lean solves chest toward the forward HMD offset"),
 		ForwardLoweredHmdOnlyMetaHumanPose.Chest.LocationWorld.X > 20.0f);
 	TestTrue(TEXT("Forward/down HMD-only MetaHuman lean moves pelvis with the calibrated upper-body follow"),
@@ -701,18 +703,18 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeFusedAvatarPose LeanHmdOnlyMetaHumanPose;
 	TestTrue(TEXT("Lean HMD-only MetaHuman embodied solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, LeanHmdOnlyMetaHumanPose));
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestLeftFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftShoulderWorld = FVector(36.0f, -28.0f, 96.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftElbowWorld = FVector(48.0f, -42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftWristWorld = FVector(60.0f, -52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainConfidence = 1.0f;
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestRightFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightShoulderWorld = FVector(36.0f, 28.0f, 96.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightElbowWorld = FVector(48.0f, 42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightWristWorld = FVector(60.0f, 52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasLeftArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmShoulderWorld = FVector(36.0f, -28.0f, 96.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmElbowWorld = FVector(48.0f, -42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmWristWorld = FVector(60.0f, -52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasRightArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmShoulderWorld = FVector(36.0f, 28.0f, 96.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmElbowWorld = FVector(48.0f, 42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmWristWorld = FVector(60.0f, 52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainConfidence = 1.0f;
 	HmdOnlyMetaHumanInput.SourceFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 	FMediaPipeFusedAvatarPose ArmDrivenMetaHumanPose;
 	TestTrue(TEXT("Arm-driven MetaHuman embodied solve succeeds"),
@@ -735,18 +737,18 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 			0.1f));
 
 	HmdOnlyMetaHumanInput.SourceFrame = MakeFreshHmdFrame(FVector(-60.0f, 0.0f, 170.0f));
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestLeftFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftShoulderWorld = FVector(-96.0f, -28.0f, 116.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftElbowWorld = FVector(-104.0f, -42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftWristWorld = FVector(-112.0f, -52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainConfidence = 1.0f;
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestRightFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightShoulderWorld = FVector(-96.0f, 28.0f, 116.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightElbowWorld = FVector(-104.0f, 42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightWristWorld = FVector(-112.0f, 52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasLeftArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmShoulderWorld = FVector(-96.0f, -28.0f, 116.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmElbowWorld = FVector(-104.0f, -42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmWristWorld = FVector(-112.0f, -52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasRightArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmShoulderWorld = FVector(-96.0f, 28.0f, 116.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmElbowWorld = FVector(-104.0f, 42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmWristWorld = FVector(-112.0f, 52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainConfidence = 1.0f;
 	HmdOnlyMetaHumanInput.SourceFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 	FMediaPipeFusedAvatarPose AgreeingArmDrivenMetaHumanPose;
 	TestTrue(TEXT("Agreeing Quest shoulder chain MetaHuman embodied solve succeeds"),
@@ -759,18 +761,18 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeFusedAvatarPose CenteredHmdOnlyMetaHumanPose;
 	TestTrue(TEXT("Centered HMD-only MetaHuman embodied solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, CenteredHmdOnlyMetaHumanPose));
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestLeftFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftShoulderWorld = FVector(60.0f, -28.0f, 116.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftElbowWorld = FVector(80.0f, -42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftWristWorld = FVector(96.0f, -52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestLeftFullArmChainConfidence = 1.0f;
-	HmdOnlyMetaHumanInput.SourceFrame.bHasQuestRightFullArmChain = true;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightShoulderWorld = FVector(60.0f, 28.0f, 116.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightElbowWorld = FVector(80.0f, 42.0f, 104.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightWristWorld = FVector(96.0f, 52.0f, 82.0f);
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainTimestampSeconds = 9.95;
-	HmdOnlyMetaHumanInput.SourceFrame.QuestRightFullArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasLeftArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmShoulderWorld = FVector(60.0f, -28.0f, 116.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmElbowWorld = FVector(80.0f, -42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmWristWorld = FVector(96.0f, -52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.LeftArmChainConfidence = 1.0f;
+	HmdOnlyMetaHumanInput.SourceFrame.bHasRightArmChain = true;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmShoulderWorld = FVector(60.0f, 28.0f, 116.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmElbowWorld = FVector(80.0f, 42.0f, 104.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmWristWorld = FVector(96.0f, 52.0f, 82.0f);
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainTimestampSeconds = 9.95;
+	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainConfidence = 1.0f;
 	HmdOnlyMetaHumanInput.SourceFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 	FMediaPipeFusedAvatarPose ArmOnlyMetaHumanPose;
 	TestTrue(TEXT("Arm-only shared upper-body MetaHuman solve succeeds"),
@@ -818,9 +820,9 @@ bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FS
 	TestTrue(TEXT("Quest right elbow remains authoritative over MediaPipe"), Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
 	TestTrue(TEXT("Quest right wrist remains authoritative over MediaPipe"), Pose.RightWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
 	TestTrue(TEXT("Left Quest wrist position is not overwritten by MediaPipe"),
-		Pose.LeftWrist.LocationWorld.Equals(Frame.QuestLeftWristWorld, 0.001f));
+		Pose.LeftWrist.LocationWorld.Equals(Frame.LeftArmWristWorld, 0.001f));
 	TestTrue(TEXT("Right Quest wrist position is not overwritten by MediaPipe"),
-		Pose.RightWrist.LocationWorld.Equals(Frame.QuestRightWristWorld, 0.001f));
+		Pose.RightWrist.LocationWorld.Equals(Frame.RightArmWristWorld, 0.001f));
 	return true;
 }
 
@@ -833,10 +835,10 @@ bool FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest::RunTest(const FSt
 {
 	FMediaPipeTrackingSourceFrame Frame = MakeFreshHmdFrame(FVector(0.0f, 0.0f, 170.0f));
 	AddReliableUpperBody(Frame);
-	Frame.bHasQuestLeftHand = true;
-	Frame.QuestLeftHandWorld = FVector(16.0f, -51.0f, 80.0f);
-	Frame.QuestLeftHandTimestampSeconds = 9.95;
-	Frame.QuestLeftHandConfidence = 1.0f;
+	Frame.bHasLeftHand = true;
+	Frame.LeftHandWorld = FVector(16.0f, -51.0f, 80.0f);
+	Frame.LeftHandTimestampSeconds = 9.95;
+	Frame.LeftHandConfidence = 1.0f;
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	FMediaPipeBodyFusionSolveInput Input;
@@ -849,7 +851,7 @@ bool FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest::RunTest(const FSt
 	TestTrue(TEXT("Fusion solve succeeds with Quest wrist plus MediaPipe arm hints"), FMediaPipeBodyFusionSolver::Solve(Input, Pose));
 	TestTrue(TEXT("Fresh Quest wrist remains the left wrist authority"), Pose.LeftWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
 	TestTrue(TEXT("Quest wrist position is not overwritten by MediaPipe"),
-		Pose.LeftWrist.LocationWorld.Equals(Frame.QuestLeftHandWorld, 0.001f));
+		Pose.LeftWrist.LocationWorld.Equals(Frame.LeftHandWorld, 0.001f));
 	TestTrue(TEXT("MediaPipe left shoulder is retained as an arm hint when Quest has wrist authority"),
 		Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestTrue(TEXT("MediaPipe left elbow is retained as an arm hint when Quest has wrist authority"),
@@ -895,9 +897,9 @@ bool FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest::RunTest(con
 		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain right elbow authority"), *ProfileId.ToString()),
 			Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
 		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain left wrist position"), *ProfileId.ToString()),
-			Pose.LeftWrist.LocationWorld.Equals(Input.SourceFrame.QuestLeftWristWorld, 0.001f));
+			Pose.LeftWrist.LocationWorld.Equals(Input.SourceFrame.LeftArmWristWorld, 0.001f));
 		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain right wrist position"), *ProfileId.ToString()),
-			Pose.RightWrist.LocationWorld.Equals(Input.SourceFrame.QuestRightWristWorld, 0.001f));
+			Pose.RightWrist.LocationWorld.Equals(Input.SourceFrame.RightArmWristWorld, 0.001f));
 	}
 	return true;
 }
@@ -1004,7 +1006,7 @@ bool FMediaPipeBodyFusionLowerBodySourceLossAutomationTest::RunTest(const FStrin
 
 	FMediaPipeTrackingSourceFrame StaleFrame = MakeFreshHmdFrame(FVector(0.0f, 0.0f, 170.0f));
 	AddReliableLowerBody(StaleFrame, 72.0f);
-	StaleFrame.MediaPipePoseTimestampSeconds = 8.0;
+	StaleFrame.BodyPoseTimestampSeconds = 8.0;
 	StaleFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	FMediaPipeFusedAvatarPose StalePose;
@@ -1095,11 +1097,11 @@ FMediaPipeTrackingSourceFrame MakeInvariantFrame(const FVector& HmdLocationWorld
 	Frame.HmdTimestampSeconds = 9.95;
 	Frame.HmdConfidence = 1.0f;
 
-	Frame.bHasMediaPipePose = true;
-	Frame.MediaPipePoseTimestampSeconds = 9.95;
-	Frame.MediaPipePoseConfidence = 0.9f;
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, 96.0f), 0.9f);
-	Frame.SetMediaPipeLandmark(EMediaPipePoseLandmark::RightHip, FVector(0.0f, 10.0f, 96.0f), 0.9f);
+	Frame.bHasBodyPose = true;
+	Frame.BodyPoseTimestampSeconds = 9.95;
+	Frame.BodyPoseConfidence = 0.9f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHip, FVector(0.0f, -10.0f, 96.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightHip, FVector(0.0f, 10.0f, 96.0f), 0.9f);
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 	return Frame;
 }
@@ -1200,7 +1202,7 @@ bool FMediaPipeBodyFusionAuthorityGateTraceOnlyTest::RunTest(const FString& Para
 	FMediaPipeBodyFusionAuthorityGateInput Input;
 	Input.MediaPipeAuthorityMode = 0;
 	Input.bCalibrationUsable = true;
-	Input.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+	Input.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
 
 	const FMediaPipeBodyFusionAuthorityGateDecision Decision =
 		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(Input);
@@ -1226,7 +1228,7 @@ bool FMediaPipeBodyFusionAuthorityGateCalibrationTest::RunTest(const FString& Pa
 	FMediaPipeBodyFusionAuthorityGateInput FreshInput;
 	FreshInput.MediaPipeAuthorityMode = 1;
 	FreshInput.bCalibrationUsable = false;
-	FreshInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+	FreshInput.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
 	const FMediaPipeBodyFusionAuthorityGateDecision FreshDecision =
 		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(FreshInput);
 	TestEqual(TEXT("Fresh MediaPipe pose without calibration enters calibrating state"),
@@ -1240,7 +1242,7 @@ bool FMediaPipeBodyFusionAuthorityGateCalibrationTest::RunTest(const FString& Pa
 		static_cast<uint8>(0));
 
 	FMediaPipeBodyFusionAuthorityGateInput StaleInput = FreshInput;
-	StaleInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
+	StaleInput.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
 	StaleInput.CalibrationRejectReason = TEXT("Low MediaPipe confidence");
 	const FMediaPipeBodyFusionAuthorityGateDecision StaleDecision =
 		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StaleInput);
@@ -1263,7 +1265,7 @@ bool FMediaPipeBodyFusionAuthorityGateStableAndStaleTest::RunTest(const FString&
 	FMediaPipeBodyFusionAuthorityGateInput StableInput;
 	StableInput.MediaPipeAuthorityMode = 1;
 	StableInput.bCalibrationUsable = true;
-	StableInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
+	StableInput.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Fresh);
 	const FMediaPipeBodyFusionAuthorityGateDecision StableDecision =
 		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StableInput);
 	TestEqual(TEXT("Fresh calibrated MediaPipe pose is stable"),
@@ -1285,7 +1287,7 @@ bool FMediaPipeBodyFusionAuthorityGateStableAndStaleTest::RunTest(const FString&
 		FString(TEXT("legacy calibrated fresh")));
 
 	FMediaPipeBodyFusionAuthorityGateInput StaleInput = StableInput;
-	StaleInput.MediaPipePoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
+	StaleInput.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
 	const FMediaPipeBodyFusionAuthorityGateDecision StaleDecision =
 		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(StaleInput);
 	TestEqual(TEXT("Stale calibrated MediaPipe pose is rejected"),
@@ -1356,6 +1358,29 @@ bool FMediaPipeBodyFusionPoseWriteContextBuildTest::RunTest(const FString& Param
 	TestTrue(TEXT("Torso up points along solved pelvis-to-chest"), Context.UpComp.Equals(FVector::UpVector));
 	TestTrue(TEXT("Neck chain targets are available"), Context.bHasNeckChainTargets);
 	TestTrue(TEXT("Neck02 alpha is after neck alpha"), Context.RefNeck02Alpha >= Context.RefNeckAlpha);
+
+	FVector StableChestComp = FVector(0.0, 0.0, 140.0);
+	TestFalse(TEXT("Stable neck chain is not adjusted"),
+		FMediaPipeBodyFusionPoseWriteContextBuilder::ProtectNeckChainAgainstCollapse(
+			Profile.DefaultChestLocalOffset,
+			Profile.DefaultHeadLocalOffset,
+			FVector::UpVector,
+			StableChestComp,
+			FVector(0.0, 0.0, 175.0)));
+	TestTrue(TEXT("Stable neck chain chest target is unchanged"),
+		StableChestComp.Equals(FVector(0.0, 0.0, 140.0), 0.01f));
+
+	FVector CollapsedChestComp = FVector(0.0, 0.0, 170.0);
+	const FVector EyeAnchoredHeadComp = FVector(0.0, 0.0, 175.0);
+	TestTrue(TEXT("Collapsed neck chain is expanded after eye anchoring"),
+		FMediaPipeBodyFusionPoseWriteContextBuilder::ProtectNeckChainAgainstCollapse(
+			Profile.DefaultChestLocalOffset,
+			Profile.DefaultHeadLocalOffset,
+			FVector::UpVector,
+			CollapsedChestComp,
+			EyeAnchoredHeadComp));
+	TestTrue(TEXT("Collapsed neck chain keeps near-reference head-to-chest distance"),
+		FVector::Dist(CollapsedChestComp, EyeAnchoredHeadComp) >= 29.0f);
 
 	return true;
 }
@@ -1438,22 +1463,22 @@ bool FMediaPipeTrackingSourceFrameBuilderBuildsNormalizedFrameTest::RunTest(cons
 	Input.HmdRotationWorld = FQuat(FVector::UpVector, PI * 0.25f);
 	Input.HmdTrackingUpWorld = FVector::UpVector;
 
-	Input.QuestHands.bHasLeft = 1;
-	Input.QuestHands.bLeftTracked = 1;
-	Input.QuestHands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] =
+	Input.Hands.bHasLeft = 1;
+	Input.Hands.bLeftTracked = 1;
+	Input.Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] =
 		FVector(10.0f, -20.0f, 90.0f);
 
-	Input.MediaPipePose.TimestampSeconds = 41.95;
-	Input.MediaPipePose.SetLandmark(
+	Input.BodyPose.TimestampSeconds = 41.95;
+	Input.BodyPose.SetLandmark(
 		EMediaPipePoseLandmark::LeftHip,
 		FVector(0.0f, -8.0f, 92.0f),
 		0.8f);
-	Input.MediaPipePose.SetLandmark(
+	Input.BodyPose.SetLandmark(
 		EMediaPipePoseLandmark::RightHip,
 		FVector(0.0f, 8.0f, 92.0f),
 		0.6f);
-	Input.bOverrideQuestFullArmChainMaxAgeSeconds = true;
-	Input.QuestFullArmChainMaxAgeSeconds = 0.75f;
+	Input.bOverrideArmChainMaxAgeSeconds = true;
+	Input.ArmChainMaxAgeSeconds = 0.75f;
 
 	FMediaPipeTrackingSourceFrame Frame;
 	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
@@ -1464,19 +1489,19 @@ bool FMediaPipeTrackingSourceFrameBuilderBuildsNormalizedFrameTest::RunTest(cons
 	TestEqual(TEXT("HMD status is fresh"),
 		static_cast<uint8>(Frame.HmdStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
-	TestTrue(TEXT("Quest left hand is copied"), Frame.bHasQuestLeftHand);
-	TestEqual(TEXT("Quest full-arm freshness override is applied"),
-		Thresholds.QuestFullArmChainMaxAgeSeconds,
+	TestTrue(TEXT("Left hand source is copied"), Frame.bHasLeftHand);
+	TestEqual(TEXT("Arm-chain freshness override is applied"),
+		Thresholds.ArmChainMaxAgeSeconds,
 		0.75f);
 
 	FVector LeftHipWorld = FVector::ZeroVector;
 	float LeftHipReliability = 0.0f;
 	TestTrue(TEXT("MediaPipe landmark is copied"),
-		Frame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
+		Frame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
 	TestTrue(TEXT("MediaPipe landmark location matches"), LeftHipWorld.Equals(FVector(0.0f, -8.0f, 92.0f), 0.01f));
 	TestEqual(TEXT("MediaPipe landmark reliability matches"), LeftHipReliability, 0.8f);
 	TestEqual(TEXT("MediaPipe pose status is fresh"),
-		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(Frame.BodyPoseStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
 	return true;
 }
@@ -1499,9 +1524,9 @@ bool FMediaPipeTrackingSourceFrameBuilderMissingHmdTest::RunTest(const FString& 
 	TestEqual(TEXT("Missing HMD status remains missing"),
 		static_cast<uint8>(Frame.HmdStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Missing));
-	TestTrue(TEXT("Empty MediaPipe pose sample is still present to preserve legacy builder behavior"), Frame.bHasMediaPipePose);
+	TestTrue(TEXT("Empty MediaPipe pose sample is still present to preserve legacy builder behavior"), Frame.bHasBodyPose);
 	TestEqual(TEXT("Empty MediaPipe pose is classified invalid"),
-		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(Frame.BodyPoseStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Invalid));
 	return true;
 }
@@ -1511,28 +1536,17 @@ bool FMediaPipeTrackingSourceFrameBuilderMissingHmdTest::RunTest(const FString& 
 
 namespace MediaPipeTrackingSourceFrameBuilderTests
 {
-namespace
-{
-void MarkFullArmJoint(FMediaPipeFullArmChainJointSnapshot& Joint, const FVector& LocationWorld)
-{
-	Joint.WorldTransform = FTransform(FQuat::Identity, LocationWorld);
-	Joint.bValid = 1;
-	Joint.bPositionValid = 1;
-	Joint.bOrientationValid = 1;
-}
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FMediaPipeTrackingSourceFrameBuilderQuestHandsTest,
-	"MediaPipe.TrackingSourceFrameBuilder.QuestHands",
+	FMediaPipeTrackingSourceFrameBuilderHandsTest,
+	"MediaPipe.TrackingSourceFrameBuilder.Hands",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FMediaPipeTrackingSourceFrameBuilderQuestHandsTest::RunTest(const FString& Parameters)
+bool FMediaPipeTrackingSourceFrameBuilderHandsTest::RunTest(const FString& Parameters)
 {
 	FMediaPipeTrackingSourceFrame Frame;
 	FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(Frame, 12.0);
 
-	FQuestHandTrackingSnapshot Hands;
+	FMediaPipeTrackingHandSourceSnapshot Hands;
 	Hands.bHasLeft = 1;
 	Hands.bLeftTracked = 1;
 	Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = FVector(10.0f, -20.0f, 90.0f);
@@ -1540,17 +1554,17 @@ bool FMediaPipeTrackingSourceFrameBuilderQuestHandsTest::RunTest(const FString& 
 	Hands.bRightTracked = 0;
 	Hands.RightPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = FVector(11.0f, 20.0f, 91.0f);
 
-	FMediaPipeTrackingSourceFrameBuilder::PopulateQuestHands(Frame, Hands, 12.0);
+	FMediaPipeTrackingSourceFrameBuilder::PopulateHands(Frame, Hands, 12.0);
 	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
 
-	TestTrue(TEXT("Left Quest hand wrist is copied"), Frame.bHasQuestLeftHand);
-	TestTrue(TEXT("Right Quest hand wrist is copied even when side is untracked but available"), Frame.bHasQuestRightHand);
-	TestTrue(TEXT("Left wrist location matches"), Frame.QuestLeftHandWorld.Equals(FVector(10.0f, -20.0f, 90.0f), 0.01f));
-	TestTrue(TEXT("Right wrist location matches"), Frame.QuestRightHandWorld.Equals(FVector(11.0f, 20.0f, 91.0f), 0.01f));
-	TestEqual(TEXT("Tracked Quest hand confidence is live"), Frame.QuestLeftHandConfidence, 1.0f);
-	TestEqual(TEXT("Available untracked Quest hand confidence is held"), Frame.QuestRightHandConfidence, 0.5f);
-	TestEqual(TEXT("Left Quest hand status is fresh"),
-		static_cast<uint8>(Frame.QuestLeftHandStatus.State),
+	TestTrue(TEXT("Left hand wrist is copied"), Frame.bHasLeftHand);
+	TestTrue(TEXT("Right hand wrist is copied even when side is untracked but available"), Frame.bHasRightHand);
+	TestTrue(TEXT("Left wrist location matches"), Frame.LeftHandWorld.Equals(FVector(10.0f, -20.0f, 90.0f), 0.01f));
+	TestTrue(TEXT("Right wrist location matches"), Frame.RightHandWorld.Equals(FVector(11.0f, 20.0f, 91.0f), 0.01f));
+	TestEqual(TEXT("Tracked hand confidence is live"), Frame.LeftHandConfidence, 1.0f);
+	TestEqual(TEXT("Available untracked hand confidence is held"), Frame.RightHandConfidence, 0.5f);
+	TestEqual(TEXT("Left hand status is fresh"),
+		static_cast<uint8>(Frame.LeftHandStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
 	return true;
 }
@@ -1565,35 +1579,32 @@ bool FMediaPipeTrackingSourceFrameBuilderFullArmChainTest::RunTest(const FString
 	FMediaPipeTrackingSourceFrame Frame;
 	FMediaPipeTrackingSourceFrameBuilder::ResetForTimestamp(Frame, 20.0);
 
-	FMediaPipeFullArmChainSnapshot FullArm;
-	FullArm.bActive = 1;
-	FullArm.Confidence = 0.75f;
-	FullArm.Left.bActive = 1;
-	FullArm.Left.Confidence = 0.6f;
+	FMediaPipeTrackingArmChainSourceSnapshot FullArm;
+	FullArm.Left.bHasChain = true;
+	FullArm.Left.Confidence = 0.75f;
 	FullArm.Left.TimestampSeconds = 19.9;
-	MarkFullArmJoint(FullArm.Left.Shoulder, FVector(1.0f, -20.0f, 140.0f));
-	MarkFullArmJoint(FullArm.Left.UpperArm, FVector(5.0f, -25.0f, 130.0f));
-	MarkFullArmJoint(FullArm.Left.LowerArm, FVector(15.0f, -35.0f, 115.0f));
-	MarkFullArmJoint(FullArm.Left.WristOrPalm, FVector(28.0f, -48.0f, 95.0f));
+	FullArm.Left.ShoulderWorld = FVector(1.0f, -20.0f, 140.0f);
+	FullArm.Left.ElbowWorld = FVector(15.0f, -35.0f, 115.0f);
+	FullArm.Left.WristWorld = FVector(28.0f, -48.0f, 95.0f);
 
-	FMediaPipeTrackingSourceFrameBuilder::PopulateFullArmChain(Frame, FullArm);
+	FMediaPipeTrackingSourceFrameBuilder::PopulateArmChain(Frame, FullArm);
 	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
 
-	TestTrue(TEXT("Left full-arm chain is copied"), Frame.bHasQuestLeftFullArmChain);
-	TestTrue(TEXT("Shoulder location matches"), Frame.QuestLeftShoulderWorld.Equals(FVector(1.0f, -20.0f, 140.0f), 0.01f));
-	TestTrue(TEXT("Lower arm joint is used as elbow location"), Frame.QuestLeftElbowWorld.Equals(FVector(15.0f, -35.0f, 115.0f), 0.01f));
-	TestTrue(TEXT("Wrist location matches"), Frame.QuestLeftWristWorld.Equals(FVector(28.0f, -48.0f, 95.0f), 0.01f));
-	TestEqual(TEXT("Full-arm chain confidence uses side/global max"), Frame.QuestLeftFullArmChainConfidence, 0.75f);
+	TestTrue(TEXT("Left full-arm chain is copied"), Frame.bHasLeftArmChain);
+	TestTrue(TEXT("Shoulder location matches"), Frame.LeftArmShoulderWorld.Equals(FVector(1.0f, -20.0f, 140.0f), 0.01f));
+	TestTrue(TEXT("Lower arm joint is used as elbow location"), Frame.LeftArmElbowWorld.Equals(FVector(15.0f, -35.0f, 115.0f), 0.01f));
+	TestTrue(TEXT("Wrist location matches"), Frame.LeftArmWristWorld.Equals(FVector(28.0f, -48.0f, 95.0f), 0.01f));
+	TestEqual(TEXT("Full-arm chain confidence is copied"), Frame.LeftArmChainConfidence, 0.75f);
 	TestEqual(TEXT("Left full-arm chain status is fresh"),
-		static_cast<uint8>(Frame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(Frame.LeftArmChainStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
-	TestFalse(TEXT("Missing right full-arm chain remains absent"), Frame.bHasQuestRightFullArmChain);
+	TestFalse(TEXT("Missing right full-arm chain remains absent"), Frame.bHasRightArmChain);
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest,
-	"MediaPipe.TrackingSourceFrameBuilder.MediaPipePoseConfidence",
+	"MediaPipe.TrackingSourceFrameBuilder.BodyPoseConfidence",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest::RunTest(const FString& Parameters)
@@ -1624,7 +1635,7 @@ bool FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest::RunTest(const FStrin
 	LandmarkReliability[RightHipIndex] = 0.9f;
 	LandmarkValid[RightHipIndex] = 1;
 
-	FMediaPipeTrackingSourceFrameBuilder::PopulateMediaPipePose(
+	FMediaPipeTrackingSourceFrameBuilder::PopulateBodyPose(
 		Frame,
 		29.95,
 		LandmarksWorld,
@@ -1632,16 +1643,16 @@ bool FMediaPipeTrackingSourceFrameBuilderMediaPipePoseTest::RunTest(const FStrin
 		LandmarkValid);
 	Frame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
 
-	TestTrue(TEXT("MediaPipe pose is marked present"), Frame.bHasMediaPipePose);
-	TestEqual(TEXT("Core MediaPipe pose confidence averages valid core landmarks"), Frame.MediaPipePoseConfidence, 0.6f);
+	TestTrue(TEXT("MediaPipe pose is marked present"), Frame.bHasBodyPose);
+	TestEqual(TEXT("Core MediaPipe pose confidence averages valid core landmarks"), Frame.BodyPoseConfidence, 0.6f);
 	TestEqual(TEXT("MediaPipe pose status is fresh"),
-		static_cast<uint8>(Frame.MediaPipePoseStatus.State),
+		static_cast<uint8>(Frame.BodyPoseStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
 
 	FVector LeftHipWorld = FVector::ZeroVector;
 	float LeftHipReliability = 0.0f;
 	TestTrue(TEXT("Left hip landmark is available"),
-		Frame.TryGetMediaPipeLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
+		Frame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftHip, LeftHipWorld, &LeftHipReliability));
 	TestTrue(TEXT("Left hip location matches"), LeftHipWorld.Equals(FVector(0.0f, -10.0f, 90.0f), 0.01f));
 	TestEqual(TEXT("Left hip reliability matches"), LeftHipReliability, 0.6f);
 	return true;
@@ -1665,12 +1676,12 @@ FMediaPipeTrackingSourceFrame MakeSourceNormalizationFrame()
 	Frame.HmdTimestampSeconds = 9.95;
 	Frame.HmdConfidence = 1.0f;
 
-	Frame.bHasQuestLeftFullArmChain = true;
-	Frame.QuestLeftShoulderWorld = FVector(0.0f, -20.0f, 145.0f);
-	Frame.QuestLeftElbowWorld = FVector(15.0f, -35.0f, 120.0f);
-	Frame.QuestLeftWristWorld = FVector(30.0f, -50.0f, 95.0f);
-	Frame.QuestLeftFullArmChainTimestampSeconds = 9.60;
-	Frame.QuestLeftFullArmChainConfidence = 0.9f;
+	Frame.bHasLeftArmChain = true;
+	Frame.LeftArmShoulderWorld = FVector(0.0f, -20.0f, 145.0f);
+	Frame.LeftArmElbowWorld = FVector(15.0f, -35.0f, 120.0f);
+	Frame.LeftArmWristWorld = FVector(30.0f, -50.0f, 95.0f);
+	Frame.LeftArmChainTimestampSeconds = 9.60;
+	Frame.LeftArmChainConfidence = 0.9f;
 	return Frame;
 }
 }
@@ -1700,7 +1711,7 @@ bool FMediaPipeTrackingSourceFrameNormalizationFreshnessTest::RunTest(const FStr
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
 	TestEqual(
 		TEXT("Default full-arm threshold marks 0.4s sample stale"),
-		static_cast<uint8>(NormalizedFrame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(NormalizedFrame.LeftArmChainStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Stale));
 	return true;
 }
@@ -1713,14 +1724,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FMediaPipeTrackingSourceFrameNormalizationThresholdPolicyTest::RunTest(const FString& Parameters)
 {
 	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
-	Thresholds.QuestFullArmChainMaxAgeSeconds = 0.5f;
+	Thresholds.ArmChainMaxAgeSeconds = 0.5f;
 
 	FMediaPipeTrackingSourceFrame NormalizedFrame = MakeSourceNormalizationFrame();
 	NormalizedFrame.NormalizeInPlace(Thresholds);
 
 	TestEqual(
 		TEXT("Provided full-arm threshold keeps 0.4s sample fresh"),
-		static_cast<uint8>(NormalizedFrame.QuestLeftFullArmChainStatus.State),
+		static_cast<uint8>(NormalizedFrame.LeftArmChainStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
 	return true;
 }

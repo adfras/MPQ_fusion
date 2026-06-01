@@ -93,14 +93,23 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		FullArmChainLogInput.ChainAgeSeconds = FullArmChainAgeSeconds;
 		UE_LOG(LogMediaPipePose, Log, TEXT("%s"), *FormatMediaPipeMetaHumanFullArmChainLog(FullArmChainLogInput));
 	};
+	const bool bQuestSideTrackedForArm = bQuestHandTrackingEnabled && IsQuestHandSideTracked(QuestHands, bIsLeft);
+	const bool bQuestSideUsableForArm = bQuestHandTrackingEnabled && IsQuestHandSideUsableForWrist(QuestHands, bIsLeft);
 	const int32 QuestArmMode = FMath::Clamp(CVarQuestArmMode.GetValueOnAnyThread(), 0, 3);
 	const bool bQuestArmFallbackAllowed = !bMetaHumanFullArmChainFresh;
 	const bool bQuestArmUsesWristEndpoint = QuestArmMode >= 1 && bQuestArmFallbackAllowed;
 	const bool bQuestArmUsesConstrainedSolve = QuestArmMode >= 2 && bQuestArmFallbackAllowed;
 	const bool bQuestArmUsesLegacyReachAssist = QuestArmMode == 1 && bQuestArmFallbackAllowed;
 	const bool bUseHmdRelativeAvatarArmFrame = QuestArmMode >= 3 && bQuestArmFallbackAllowed;
-	const bool bQuestSideTrackedForArm = bQuestHandTrackingEnabled && IsQuestHandSideTracked(QuestHands, bIsLeft);
-	const bool bQuestSideUsableForArm = bQuestHandTrackingEnabled && IsQuestHandSideUsableForWrist(QuestHands, bIsLeft);
+	FMediaPipeFusedUpperLimbSide FusedArmSide;
+	const bool bBodyFusionArmFallbackAllowed =
+		!bMetaHumanFullArmChainFresh &&
+		!bQuestArmUsesWristEndpoint &&
+		!bUseHmdRelativeAvatarArmFrame;
+	const bool bUseBodyFusionArm =
+		bBodyFusionArmFallbackAllowed &&
+		ShouldUseBodyFusionPoseForEvaluation() &&
+		FMediaPipeAvatarPoseWriter::TryGetUpperLimbSide(BodyFusionFrame.Pose, bIsLeft, FusedArmSide);
 
 	auto TryGetBoneWorld = [&](const FBoneReference& Bone, FVector& OutWorld) -> bool
 	{
@@ -133,7 +142,13 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		EmitMetaHumanFullArmChainLog(false, false, 0.0f, 0.0f, FVector::ZeroVector);
 	}
 
-	if (bMetaHumanFullArmChainFresh)
+	if (bUseBodyFusionArm)
+	{
+		ShoulderWorld = FusedArmSide.ShoulderWorld;
+		ElbowWorld = FusedArmSide.ElbowWorld;
+		WristWorld = FusedArmSide.WristWorld;
+	}
+	else if (bMetaHumanFullArmChainFresh)
 	{
 		ShoulderWorld = FullArmChainResult.ShoulderWorld;
 		ElbowWorld = FullArmChainResult.ElbowWorld;
@@ -203,6 +218,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 
 	FMediaPipeQuestArmHoldOnLossInput ArmHoldInput;
 	ArmHoldInput.bHoldOnQuestHandLossEnabled =
+		!bUseBodyFusionArm &&
 		!bMetaHumanFullArmChainFresh &&
 		CVarMediaPipeArmHoldOnQuestHandLoss.GetValueOnAnyThread() != 0;
 	ArmHoldInput.bQuestHandTrackingEnabled = bQuestHandTrackingEnabled;
@@ -213,7 +229,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		FMediaPipeQuestWristApplyPolicy::ShouldHoldArmOnQuestHandLoss(ArmHoldInput);
 
 	float ArmObservationAlphaScale = 1.0f;
-	if (!bMetaHumanFullArmChainFresh && bHoldArmOnQuestHandLoss)
+	if (!bUseBodyFusionArm && !bMetaHumanFullArmChainFresh && bHoldArmOnQuestHandLoss)
 	{
 		ShoulderWorld = LastReliableShoulderWorld;
 		ElbowWorld = LastReliableElbowWorld;
@@ -221,7 +237,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		ArmObservationAlphaScale = 0.0f;
 	}
 
-	if (!bMetaHumanFullArmChainFresh &&
+	if (!bUseBodyFusionArm &&
+		!bMetaHumanFullArmChainFresh &&
 		!bUseHmdRelativeAvatarArmFrame &&
 		CVarMediaPipeArmReliabilityGate.GetValueOnAnyThread() != 0)
 	{
@@ -1135,7 +1152,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 		ArmObservationAlphaScale = 1.0f;
 	}
-	if (!bMetaHumanFullArmChainFresh &&
+	if (!bUseBodyFusionArm &&
+		!bMetaHumanFullArmChainFresh &&
 		CVarMediaPipeArmHoldOnQuestHandLoss.GetValueOnAnyThread() != 0 &&
 		bQuestHandTrackingEnabled &&
 		bQuestSideTrackedForArm)
@@ -1606,6 +1624,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	ArmPoseWriteInput.bUseHmdRelativeAvatarArmFrame = bUseHmdRelativeAvatarArmFrame;
 	ArmPoseWriteInput.bQuestWristPositionApplied = bQuestWristPositionApplied;
 	const bool bFrameCoherentQuestArmPoseWrite =
+		bUseBodyFusionArm ||
 		bMetaHumanFullArmChainFresh ||
 		FMediaPipeQuestWristApplyPolicy::ShouldWriteFrameCoherentQuestArmPose(ArmPoseWriteInput);
 	const float EffectiveArmTargetHalfLifeSeconds = bFrameCoherentQuestArmPoseWrite
@@ -2779,12 +2798,13 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		SolvedPlaneInput.bHasRefUpperBasis = bHasRef;
 		SolvedPlaneInput.bHasRefLowerBasis = bHasRef;
 		const float DirectArmPlaneMinSin = FMath::Clamp(CVarMediaPipeArmElbowPlaneMinSin.GetValueOnAnyThread(), 0.0f, 1.0f);
-		SolvedPlaneInput.MinElbowPlaneSin = (bQuestConstrainedArmSolveApplied || bMetaHumanFullArmChainFresh)
+		SolvedPlaneInput.MinElbowPlaneSin = (bUseBodyFusionArm || bQuestConstrainedArmSolveApplied || bMetaHumanFullArmChainFresh)
 			? FMath::Clamp(CVarQuestConstrainedArmSolvedPlaneMinSin.GetValueOnAnyThread(), 0.0f, 1.0f)
 			: DirectArmPlaneMinSin;
 
 		FMediaPipeSolvedElbowPlaneArmResult SolvedPlaneResult;
 		const bool bShouldUseSolvedElbowPlane =
+			bUseBodyFusionArm ||
 			bMetaHumanFullArmChainFresh ||
 			bQuestConstrainedArmSolveApplied ||
 			CVarMediaPipeArmUseElbowPlaneRoll.GetValueOnAnyThread() != 0;

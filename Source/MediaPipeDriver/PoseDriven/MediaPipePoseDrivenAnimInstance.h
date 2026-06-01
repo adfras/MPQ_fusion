@@ -10,6 +10,7 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeAvatarProfileResolver.h"
 #include "MediaPipeBodyFusion.h"
+#include "EmbodiedFusionComponent.h"
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseDrivenSolverState.h"
 #include "MediaPipePoseTypes.h"
@@ -20,7 +21,6 @@
 #include "MediaPipePoseDrivenAnimInstance.generated.h"
 
 class AActor;
-class UMediaPipePoseTrackerComponent;
 class UMediaPipePoseDrivenAnimInstance;
 
 struct FMediaPipePoseDrivenHeadSignalSnapshot
@@ -563,18 +563,7 @@ private:
 	FMediaPipeRawHandPair PoseHands{};
 	FQuestHandTrackingSnapshot QuestHands{};
 	FMediaPipeFullArmChainSnapshot FullArmChain{};
-	FMediaPipeTrackingSourceFrame BodyFusionSourceFrame;
-	FMediaPipeBodyFusionFreshnessThresholds BodyFusionFreshnessThresholds;
-	FMediaPipeFusedAvatarPose LastBodyFusionPose;
-	FMediaPipeBodyFusionAuthority LastBodyFusionAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
-	FMediaPipeEmbodimentCalibration BodyFusionCalibration;
-	int32 LastBodyFusionCalibrationResetSerial = 0;
-	int32 BodyFusionCalibrationStableFrameCount = 0;
-	float BodyFusionCalibrationStableSeconds = 0.0f;
-	double LastBodyFusionCalibrationUpdateTimeSeconds = -1.0;
-	EMediaPipeBodyFusionAuthorityState LastBodyFusionAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
-	FString LastBodyFusionAuthorityReason;
-	uint8 bLastBodyFusionMediaPipeAuthorityAllowed = 0;
+	FEmbodiedFusionFrame BodyFusionFrame;
 	FMediaPipeResolvedMetaHumanTarget TargetMetaHumanProfile;
 	FMediaPipeAvatarProfileResolverLogState TargetProfileLogState;
 	bool bHasCachedQuestHmdPose = false;
@@ -615,6 +604,9 @@ private:
 	FMediaPipeQuestHandSolverState LeftQuestHandState;
 	FMediaPipeQuestHandSolverState RightQuestHandState;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UEmbodiedFusionComponent> EmbodiedFusionComponent = nullptr;
+
 	// Helpers.
 	static FVector LerpNormalized(const FVector& A, const FVector& B, float Alpha);
 	static FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up);
@@ -633,8 +625,6 @@ private:
 	bool BuildReferencePoseCache(const FBoneContainer& RequiredBones);
 	bool TryGetQuestHmdWorldPose(FVector& OutLocationWorld, FQuat& OutRotationWorld) const;
 	FVector GetCachedQuestTrackingUpWorld() const;
-	bool TryUpdateBodyFusionCalibration_GameThread(double NowSeconds);
-	void EmitBodyFusionDebugLog_GameThread(double NowSeconds);
 	bool TryGetMediaPipeHeadFrameWorld(FVector& OutHeadWorld, FQuat& OutBodyBasisWorld);
 	bool TryBuildQuestMediaSpaceCalibration();
 	bool TryGetCurrentQuestToMediaSpaceRotation(FQuat& OutQuestToMediaSpaceWorld);
@@ -692,6 +682,7 @@ class MEDIAPIPEDRIVER_API UMediaPipePoseDrivenAnimInstance : public UAnimInstanc
 public:
 	// Convenience setter for C++ callers (actors/components).
 	void SetSourceActor(AActor* InSource);
+	void SetEmbodiedFusionComponent(UEmbodiedFusionComponent* InFusionComponent);
 	void ResetRetargetState();
 	void ApplyRetargetQualitySettings();
 	void SetDriveClavicles(bool bInDriveClavicles);

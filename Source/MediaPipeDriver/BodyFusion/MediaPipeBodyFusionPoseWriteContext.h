@@ -61,4 +61,10 @@ public:
 	static bool Build(
 		const FMediaPipeBodyFusionPoseWriteContextInput& Input,
 		FMediaPipeBodyFusionPoseWriteContext& OutContext);
+	static bool ProtectNeckChainAgainstCollapse(
+		const FVector& RefChestPosComp,
+		const FVector& RefHeadPosComp,
+		const FVector& FallbackChestToHeadDirComp,
+		FVector& InOutChestComp,
+		const FVector& HeadComp);
 };
