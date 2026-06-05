@@ -574,7 +574,7 @@ void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.20f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 1.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 4.5f);
 	SetConsoleInt(TEXT("mp.MediaPipeHolisticHeadSolve"), 1);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 1.0f);
@@ -920,6 +920,24 @@ USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(
 	return nullptr;
 }
 
+USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
+	USkeletalMeshComponent* TargetComponent,
+	USkeletalMeshComponent* SourceBodyComponent,
+	const TArray<USkeletalMeshComponent*>& SourceComponents)
+{
+	if (!TargetComponent)
+	{
+		return nullptr;
+	}
+
+	if (SourceBodyComponent)
+	{
+		return SourceBodyComponent;
+	}
+
+	return FindMatchingMetaHumanSkeletalComponent(TargetComponent, SourceComponents);
+}
+
 void ConfigureMetaHumanSelfViewSkeletalComponent(USkeletalMeshComponent* MeshComponent)
 {
 	if (!MeshComponent)
@@ -945,6 +963,14 @@ void RestoreMetaHumanSelfViewHiddenBones(
 	}
 
 	for (const FName& BoneName : LocalViewPolicy.LocalOnlyHiddenBones)
+	{
+		if (BoneName != NAME_None && MeshComponent->GetBoneIndex(BoneName) != INDEX_NONE)
+		{
+			MeshComponent->UnHideBoneByName(BoneName);
+		}
+	}
+
+	for (const FName& BoneName : LocalViewPolicy.LocalOnlyVisibleBones)
 	{
 		if (BoneName != NAME_None && MeshComponent->GetBoneIndex(BoneName) != INDEX_NONE)
 		{
@@ -1588,7 +1614,11 @@ void ConfigureEmbodiedLocalViewVisibility(
 			}
 			if (LocalBodyProxyUpdater)
 			{
-				LocalBodyProxyUpdater->Configure(BodyProxySourceSkeletalMesh, LocalBodyProxy, ActivePolicy.LocalOnlyHiddenBones);
+				LocalBodyProxyUpdater->Configure(
+					BodyProxySourceSkeletalMesh,
+					LocalBodyProxy,
+					ActivePolicy.LocalOnlyHiddenBones,
+					ActivePolicy.LocalOnlyVisibleBones);
 			}
 		}
 	}

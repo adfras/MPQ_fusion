@@ -45,6 +45,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeAvatarLocalViewPolicy
 {
 	TArray<FString> LocalOnlyCullNameFragments;
 	TArray<FName> LocalOnlyHiddenBones;
+	TArray<FName> LocalOnlyVisibleBones;
 	bool bAllowSingleMeshComponentCull = false;
 	bool bUseSingleMeshFirstPersonBodyProxy = true;
 

@@ -724,7 +724,6 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 	MetaHumanSelfViewActor->SetActorHiddenInGame(false);
 
 	USkeletalMeshComponent* SourceBodyComponent = FindMetaHumanBodyMesh(SourceMetaHumanActor, ActiveMetaHumanProfile);
-	USkeletalMeshComponent* TargetBodyComponent = FindMetaHumanBodyMesh(MetaHumanSelfViewActor, ActiveMetaHumanProfile);
 
 	TArray<USkeletalMeshComponent*> SourceSkeletalComponents;
 	SourceMetaHumanActor->GetComponents<USkeletalMeshComponent>(SourceSkeletalComponents);
@@ -737,6 +736,7 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 	MetaHumanSelfViewActor->GetComponents<USkeletalMeshComponent>(TargetSkeletalComponents);
 
 	int32 LeaderPoseComponentCount = 0;
+	int32 DirectBodyPoseLeaderCount = 0;
 	for (USkeletalMeshComponent* TargetComponent : TargetSkeletalComponents)
 	{
 		if (!TargetComponent)
@@ -744,20 +744,17 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 			continue;
 		}
 
-		USkeletalMeshComponent* SourceComponent = nullptr;
-		if (TargetComponent == TargetBodyComponent && SourceBodyComponent)
-		{
-			SourceComponent = SourceBodyComponent;
-		}
-		else
-		{
-			SourceComponent = FindMatchingMetaHumanSkeletalComponent(TargetComponent, SourceSkeletalComponents);
-		}
+		USkeletalMeshComponent* SourceComponent =
+			FindMetaHumanSelfViewPoseLeader(TargetComponent, SourceBodyComponent, SourceSkeletalComponents);
 
 		if (SourceComponent && SourceComponent != TargetComponent)
 		{
 			ConfigureMetaHumanSelfViewSkeletalComponent(SourceComponent);
 			TargetComponent->SetLeaderPoseComponent(SourceComponent, true, true);
+			if (SourceComponent == SourceBodyComponent)
+			{
+				++DirectBodyPoseLeaderCount;
+			}
 			++LeaderPoseComponentCount;
 		}
 
@@ -789,7 +786,7 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 
 	if (bLog)
 	{
-		UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: MetaHuman self-view enabled profile=%s source=%s selfView=%s location=%s viewer=%s componentYaw=%.1f sourceScale=%s mirrorScale=%s mirrorAxis=%s skeletalFollowers=%d/%d distance=%.1f visibleOffset=%.1f."),
+		UE_LOG(LogMediaPipePose, Log, TEXT("Placed embodied pawn: MetaHuman self-view enabled profile=%s source=%s selfView=%s location=%s viewer=%s componentYaw=%.1f sourceScale=%s mirrorScale=%s mirrorAxis=%s skeletalFollowers=%d/%d directBodyPoseFollowers=%d distance=%.1f visibleOffset=%.1f."),
 			*ActiveMetaHumanProfile.ProfileId.ToString(),
 			*GetNameSafe(SourceMetaHumanActor),
 			*GetNameSafe(MetaHumanSelfViewActor),
@@ -801,6 +798,7 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 			Profile.bUseTargetFaceForwardAxis ? TEXT("X") : TEXT("Y"),
 			LeaderPoseComponentCount,
 			TargetSkeletalComponents.Num(),
+			DirectBodyPoseLeaderCount,
 			MediaPipeSelfViewPlaneDistanceCm,
 			MediaPipeSelfViewVisibleOffsetCm);
 	}
@@ -1898,15 +1896,21 @@ void AMediaPipeEmbodiedAvatarPawn::ApplyMovementReplicaLocalHiddenBones(UPoseabl
 	}
 
 	TArray<FName> HiddenBones = Profile.LocalViewPolicy.LocalOnlyHiddenBones;
+	TArray<FName> VisibleBones = Profile.LocalViewPolicy.LocalOnlyVisibleBones;
 	for (const FName VisibleUpperBodyBone : {
 		Profile.BoneMap.Chest,
 		FName(TEXT("spine_04")),
 		FName(TEXT("spine_05"))})
 	{
-		if (PoseableMeshHasBone(Mesh, VisibleUpperBodyBone) && !HiddenBones.Contains(VisibleUpperBodyBone))
+		VisibleBones.AddUnique(VisibleUpperBodyBone);
+	}
+
+	for (const FName VisibleBone : VisibleBones)
+	{
+		if (PoseableMeshHasBone(Mesh, VisibleBone) && !HiddenBones.Contains(VisibleBone))
 		{
-			Mesh->UnHideBoneByName(VisibleUpperBodyBone);
-			Mesh->SetBoneScaleByName(VisibleUpperBodyBone, FVector::OneVector, EBoneSpaces::ComponentSpace);
+			Mesh->UnHideBoneByName(VisibleBone);
+			Mesh->SetBoneScaleByName(VisibleBone, FVector::OneVector, EBoneSpaces::ComponentSpace);
 		}
 	}
 
