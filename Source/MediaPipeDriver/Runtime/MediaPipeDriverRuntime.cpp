@@ -574,7 +574,7 @@ void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.20f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 2.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeClavicleShrugFullCm"), 8.0f);
-	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 1.0f);
+	SetConsoleFloat(TEXT("mp.MediaPipeShoulderLiftTranslationScale"), 4.5f);
 	SetConsoleInt(TEXT("mp.MediaPipeHolisticHeadSolve"), 1);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadRotationHalfLife"), 0.0f);
 	SetConsoleFloat(TEXT("mp.MediaPipeHeadFaceBlend"), 1.0f);

@@ -19,6 +19,37 @@
 
 // Consolidated from MediaPipeAvatarEmbodimentProfileTests.cpp
 
+namespace MediaPipeRuntimeProfileTestHelpers
+{
+struct FScopedConsoleVariableSnapshot
+{
+	explicit FScopedConsoleVariableSnapshot(const TArray<const TCHAR*>& Names)
+	{
+		for (const TCHAR* Name : Names)
+		{
+			if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+			{
+				Values.Emplace(Variable, Variable->GetString());
+			}
+		}
+	}
+
+	~FScopedConsoleVariableSnapshot()
+	{
+		for (const TPair<IConsoleVariable*, FString>& Value : Values)
+		{
+			if (Value.Key)
+			{
+				Value.Key->Set(*Value.Value, ECVF_SetByConsole);
+			}
+		}
+	}
+
+private:
+	TArray<TPair<IConsoleVariable*, FString>> Values;
+};
+}
+
 namespace MediaPipeAvatarEmbodimentProfileTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -63,6 +94,105 @@ bool FMediaPipeAvatarEmbodimentMannySolveAutomationTest::RunTest(const FString& 
 		Profile.MaxUpperArmLengthCm > Profile.ExpectedUpperArmLengthCm &&
 		Profile.MinLowerArmLengthCm < Profile.ExpectedLowerArmLengthCm &&
 		Profile.MaxLowerArmLengthCm > Profile.ExpectedLowerArmLengthCm);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeOnlyEmbodiedWebcamProfileShoulderShrugAutomationTest,
+	"TestingKit5.MediaPipe.RuntimeProfile.MediaPipeOnlyEmbodiedWebcamShoulderShrugDefaults",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeOnlyEmbodiedWebcamProfileShoulderShrugAutomationTest::RunTest(const FString& Parameters)
+{
+	const TArray<const TCHAR*> ProfileCVarNames = {
+		TEXT("mp.MediaPipeDriveClavicles"),
+		TEXT("mp.MediaPipeDriveSpine"),
+		TEXT("mp.MediaPipeDriveArmTwistBones"),
+		TEXT("mp.MediaPipeDriveMetaHumanArmHelpers"),
+		TEXT("mp.MediaPipeTorsoUprightBlend"),
+		TEXT("mp.MediaPipeTorsoMaxTiltDegrees"),
+		TEXT("mp.MediaPipeHolisticShoulderSolve"),
+		TEXT("mp.MediaPipeClavicleShrugWeight"),
+		TEXT("mp.MediaPipeClavicleShrugMinCm"),
+		TEXT("mp.MediaPipeClavicleShrugFullCm"),
+		TEXT("mp.MediaPipeShoulderLiftTranslationScale"),
+		TEXT("mp.MediaPipeHolisticHeadSolve"),
+		TEXT("mp.MediaPipeHeadRotationHalfLife"),
+		TEXT("mp.MediaPipeHeadFaceBlend"),
+		TEXT("mp.MediaPipeHeadPitchScale"),
+		TEXT("mp.MediaPipeHeadTwistWeight"),
+		TEXT("mp.MediaPipeHeadRotationMaxStepDegrees"),
+		TEXT("mp.MediaPipeHeadRotationMaxSpeedDegreesPerSecond"),
+		TEXT("mp.AutoQuestArmReachAssistProfile"),
+		TEXT("mp.QuestHandTracking"),
+		TEXT("mp.QuestHandDriveFingerBones"),
+		TEXT("mp.QuestHandRotationBlend"),
+		TEXT("mp.QuestHandHud"),
+		TEXT("mp.QuestHandDebug"),
+		TEXT("mp.QuestFingerDebug"),
+		TEXT("mp.QuestArmMode"),
+		TEXT("mp.QuestWristPositionBlend"),
+		TEXT("mp.QuestWristReachAssist"),
+		TEXT("mp.QuestConstrainedArmSolve"),
+		TEXT("mp.QuestArmDropoutDownFallback"),
+		TEXT("mp.QuestArmLengthCalibrationStartup"),
+		TEXT("mp.QuestArmLengthCalibrationHud"),
+		TEXT("mp.QuestWristDebug"),
+		TEXT("mp.QuestWristTrace"),
+		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
+		TEXT("mp.BodyFusion.Enable"),
+		TEXT("mp.BodyFusion.Debug"),
+		TEXT("mp.BodyFusion.MediaPipeAuthority"),
+		TEXT("mp.MediaPipeArmTargetHalfLife"),
+		TEXT("mp.MediaPipeArmRotationHalfLife"),
+		TEXT("mp.MediaPipeSourceSmoothingHalfLife"),
+		TEXT("mp.MediaPipeArmRotationMaxStepDegrees"),
+		TEXT("mp.MediaPipeArmMaxElbowStepCm"),
+		TEXT("mp.MediaPipeArmMaxWristStepCm"),
+		TEXT("mp.MediaPipeInputMaxDimension"),
+	};
+	const MediaPipeRuntimeProfileTestHelpers::FScopedConsoleVariableSnapshot Snapshot(ProfileCVarNames);
+
+	IConsoleVariable* DriveClavicles = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeDriveClavicles"));
+	IConsoleVariable* ClavicleShrugWeight = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeClavicleShrugWeight"));
+	IConsoleVariable* ClavicleShrugMinCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeClavicleShrugMinCm"));
+	IConsoleVariable* ClavicleShrugFullCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeClavicleShrugFullCm"));
+	IConsoleVariable* ShoulderLiftTranslationScale =
+		IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeShoulderLiftTranslationScale"));
+	IConsoleVariable* HolisticHeadSolve = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeHolisticHeadSolve"));
+
+	TestNotNull(TEXT("Drive clavicles CVar is registered"), DriveClavicles);
+	TestNotNull(TEXT("Clavicle shrug weight CVar is registered"), ClavicleShrugWeight);
+	TestNotNull(TEXT("Clavicle shrug minimum CVar is registered"), ClavicleShrugMinCm);
+	TestNotNull(TEXT("Clavicle shrug full-range CVar is registered"), ClavicleShrugFullCm);
+	TestNotNull(TEXT("Shoulder lift translation scale CVar is registered"), ShoulderLiftTranslationScale);
+	TestNotNull(TEXT("Holistic head solve CVar is registered"), HolisticHeadSolve);
+	if (!DriveClavicles ||
+		!ClavicleShrugWeight ||
+		!ClavicleShrugMinCm ||
+		!ClavicleShrugFullCm ||
+		!ShoulderLiftTranslationScale ||
+		!HolisticHeadSolve)
+	{
+		return false;
+	}
+
+	MediaPipeDriverRuntime::ApplyMediaPipeOnlyEmbodiedWebcamProfile();
+
+	TestEqual(TEXT("MediaPipe-only embodied webcam profile drives Manny clavicles"), DriveClavicles->GetInt(), 1);
+	TestTrue(
+		TEXT("Manny shrug weight remains visible but conservative"),
+		FMath::IsNearlyEqual(ClavicleShrugWeight->GetFloat(), 0.20f, 0.001f));
+	TestTrue(
+		TEXT("Manny shrug ignores tiny shoulder jitter"),
+		FMath::IsNearlyEqual(ClavicleShrugMinCm->GetFloat(), 2.0f, 0.001f));
+	TestTrue(
+		TEXT("Manny shrug reaches full lift over the recovered shoulder range"),
+		FMath::IsNearlyEqual(ClavicleShrugFullCm->GetFloat(), 8.0f, 0.001f));
+	TestTrue(
+		TEXT("Manny visible shoulder translation scale preserves recovered iPhone/Camo shrug behavior"),
+		FMath::IsNearlyEqual(ShoulderLiftTranslationScale->GetFloat(), 4.5f, 0.001f));
+	TestEqual(TEXT("MediaPipe-only webcam profile keeps holistic head solve enabled"), HolisticHeadSolve->GetInt(), 1);
 	return true;
 }
 
