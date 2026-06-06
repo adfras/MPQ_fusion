@@ -1,0 +1,20 @@
+Build/test evidence after MPQ auto-start observability patch.
+
+Build command:
+D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat TestingKit5Editor Win64 Development -Project="D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -WaitMutex
+
+UBT result excerpt:
+67:Checking for live coding mutex: Global\LiveCoding_D++Epic+UE_5.8+Engine+Binaries+Win64+UnrealEditor.exe
+151:Result: Succeeded
+152:Total execution time: 334.52 seconds
+
+Automation command:
+D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject -ExecCmds="Automation RunTests TestingKit3.MediaPipe.Runtime.CVars; Quit" -TestExit="Automation Test Queue Empty" -unattended -nop4 -nosplash
+
+Automation result excerpt:
+32:LogCsvProfiler: Display: Metadata set : commandline="" D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject -ExecCmds="Automation RunTests TestingKit3.MediaPipe.Runtime.CVars; Quit" -TestExit="Automation Test Queue Empty" -unattended -nop4 -nosplash""
+416:LogInit: Command Line: -ExecCmds="Automation RunTests TestingKit3.MediaPipe.Runtime.CVars; Quit" -TestExit="Automation Test Queue Empty" -unattended -nop4 -nosplash
+2132:[2026.06.05-08.47.29:306][  0]Cmd: Automation RunTests TestingKit3.MediaPipe.Runtime.CVars; Quit
+2177:[2026.06.05-08.47.41:788][194]LogMediaPipePose: mp.MPQShadowAutoStart: armed serial=1 duration=45.000s path=Saved/CodexAgent/Diagnostics/mpq_shadow_latency_automation_cvar_test_20260605_164741.json label=automation_cvar_test shadowOnly=1 authority=0 writePose=0 armFallbacks=off
+2178:[2026.06.05-08.47.41:788][194]LogMediaPipePose: mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=384 duration=45.000s prediction=1 maxPredictionMs=50.0 path=Saved/CodexAgent/Diagnostics/mpq_shadow_latency_automation_cvar_test_20260605_164741.json BodyFusion shadow-only armFallbacks=off
+2179:[2026.06.05-08.47.41:796][195]LogAutomationController: Display: Test Completed. Result={Success} Name={CVars} Path={TestingKit3.MediaPipe.Runtime.CVars}
