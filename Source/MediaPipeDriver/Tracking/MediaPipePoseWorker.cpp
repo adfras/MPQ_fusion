@@ -79,6 +79,7 @@ uint32 FMediaPipePoseWorker::Run()
 			UE_LOG(LogMediaPipePose, Verbose, TEXT("ProcessFrame failed."));
 			continue;
 		}
+		const double NativeProcessEndSeconds = FPlatformTime::Seconds();
 		const double ProcessMs = FMath::Max(0.0, (FPlatformTime::Seconds() - ProcessStartSeconds) * 1000.0);
 		{
 			FScopeLock StatsLock(&StatsMutex);
@@ -92,6 +93,10 @@ uint32 FMediaPipePoseWorker::Run()
 
 		FMediaPipePoseFrame Output;
 		Output.TimestampUs = Frame->TimestampUs;
+		Output.SourceCaptureWallSeconds = Frame->SourceCaptureWallSeconds;
+		Output.EnqueueWallSeconds = Frame->EnqueuedWallSeconds;
+		Output.WorkerStartWallSeconds = ProcessStartSeconds;
+		Output.NativeProcessEndWallSeconds = NativeProcessEndSeconds;
 		const double LandmarkStartSeconds = FPlatformTime::Seconds();
 		Output.bValid = Wrapper.GetLandmarks(Output.Normalized, Output.World);
 		if (Output.bValid && Wrapper.AreHandsEnabled())
@@ -102,6 +107,7 @@ uint32 FMediaPipePoseWorker::Run()
 		{
 			Output.bHasFace = Wrapper.GetFacePose(Output.Face) && Output.Face.bHasFace != 0;
 		}
+		Output.LandmarkEndWallSeconds = FPlatformTime::Seconds();
 		const double LandmarkMs = FMath::Max(0.0, (FPlatformTime::Seconds() - LandmarkStartSeconds) * 1000.0);
 		{
 			FScopeLock StatsLock(&StatsMutex);

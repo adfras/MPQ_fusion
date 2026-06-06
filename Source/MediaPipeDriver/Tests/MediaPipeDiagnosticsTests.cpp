@@ -18,6 +18,7 @@
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeShoulderRollbackDiagnostics.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDeviceNull.h"
 #include "Misc/Paths.h"
 
 // Consolidated from MediaPipeBodyDiagnosticsTests.cpp
@@ -1083,6 +1084,14 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("BodyFusion debug header handle matches registry value"), CVarBodyFusionDebug.GetValueOnAnyThread(), BodyFusionDebug->GetInt());
 	}
 
+	IConsoleVariable* BodyFusionWritePose = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.WritePose"));
+	TestNotNull(TEXT("BodyFusion write-pose CVar is registered"), BodyFusionWritePose);
+	if (BodyFusionWritePose)
+	{
+		TestEqual(TEXT("BodyFusion write-pose defaults off for shadow comparison"), 0, BodyFusionWritePose->GetInt());
+		TestEqual(TEXT("BodyFusion write-pose header handle matches registry value"), CVarBodyFusionWritePose.GetValueOnAnyThread(), BodyFusionWritePose->GetInt());
+	}
+
 	IConsoleVariable* BodyFusionMediaPipeAuthority = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.MediaPipeAuthority"));
 	TestNotNull(TEXT("BodyFusion MediaPipe authority CVar is registered"), BodyFusionMediaPipeAuthority);
 	if (BodyFusionMediaPipeAuthority)
@@ -1109,6 +1118,137 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 
 	IConsoleObject* BodyFusionResetCalibration = IConsoleManager::Get().FindConsoleObject(TEXT("mp.BodyFusion.ResetCalibration"));
 	TestNotNull(TEXT("BodyFusion reset calibration command is registered"), BodyFusionResetCalibration);
+
+	IConsoleObject* MPQShadowFusionCapture = IConsoleManager::Get().FindConsoleObject(TEXT("mp.StartMPQShadowFusionCapture"));
+	TestNotNull(TEXT("MPQ shadow-fusion capture command is registered"), MPQShadowFusionCapture);
+
+	IConsoleObject* MPQShadowLatencyTrial = IConsoleManager::Get().FindConsoleObject(TEXT("mp.PrepareMPQShadowLatencyTrial"));
+	TestNotNull(TEXT("MPQ shadow-fusion latency trial command is registered"), MPQShadowLatencyTrial);
+
+	IConsoleVariable* MPQShadowFusionOnPlay = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlay"));
+	TestNotNull(TEXT("MPQ shadow-fusion on-play CVar is registered"), MPQShadowFusionOnPlay);
+	if (MPQShadowFusionOnPlay)
+	{
+		TestEqual(TEXT("MPQ shadow-fusion on-play defaults off"), 0, MPQShadowFusionOnPlay->GetInt());
+	}
+
+	IConsoleVariable* MPQShadowFusionDuration = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlayDuration"));
+	TestNotNull(TEXT("MPQ shadow-fusion duration CVar is registered"), MPQShadowFusionDuration);
+	if (MPQShadowFusionDuration)
+	{
+		TestEqual(TEXT("MPQ shadow-fusion duration default"), 12.0f, MPQShadowFusionDuration->GetFloat());
+	}
+
+	IConsoleVariable* MPQShadowFusionAnalyze = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"));
+	TestNotNull(TEXT("MPQ shadow-fusion analyze CVar is registered"), MPQShadowFusionAnalyze);
+	if (MPQShadowFusionAnalyze)
+	{
+		TestEqual(TEXT("MPQ shadow-fusion analyze defaults on"), 1, MPQShadowFusionAnalyze->GetInt());
+	}
+
+	IConsoleVariable* MPQShadowFusionPath = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlayPath"));
+	TestNotNull(TEXT("MPQ shadow-fusion path CVar is registered"), MPQShadowFusionPath);
+
+	TArray<TPair<IConsoleVariable*, FString>> ConsoleSnapshots;
+	auto SnapshotConsoleVariable = [&ConsoleSnapshots](const TCHAR* Name)
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+		{
+			ConsoleSnapshots.Emplace(Variable, Variable->GetString());
+		}
+	};
+	auto RestoreConsoleSnapshots = [&ConsoleSnapshots]()
+	{
+		for (const TPair<IConsoleVariable*, FString>& Snapshot : ConsoleSnapshots)
+		{
+			if (Snapshot.Key)
+			{
+				Snapshot.Key->Set(*Snapshot.Value, ECVF_SetByConsole);
+			}
+		}
+	};
+
+	for (const TCHAR* Name : {
+		TEXT("mp.BodyFusion.Enable"),
+		TEXT("mp.BodyFusion.Debug"),
+		TEXT("mp.BodyFusion.WritePose"),
+		TEXT("mp.BodyFusion.MediaPipeAuthority"),
+		TEXT("mp.QuestArmDropoutDownFallback"),
+		TEXT("mp.QuestConstrainedArmBodyFallback"),
+		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
+		TEXT("mp.RecordMPQShadowFusionOnPlay"),
+		TEXT("mp.RecordMPQShadowFusionOnPlayDuration"),
+		TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"),
+		TEXT("mp.RecordMPQShadowFusionOnPlayPath"),
+		TEXT("mp.AutoQuestWebcamHandsCameraIndex"),
+		TEXT("mp.AutoQuestWebcamDirectWmfCapture"),
+		TEXT("mp.AutoQuestWebcamPreview"),
+		TEXT("mp.AutoQuestWebcamHandsInputMaxDimension"),
+		TEXT("mp.MediaPipeInputMaxDimension"),
+		TEXT("mp.MediaPipeAdaptivePosePrediction"),
+		TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"),
+		TEXT("mp.MediaPipeAdaptivePoseQualityDebug"),
+		TEXT("mp.MediaPipeAdaptivePoseLog") })
+	{
+		SnapshotConsoleVariable(Name);
+	}
+
+	if (MPQShadowLatencyTrial)
+	{
+		FOutputDeviceNull OutputDevice;
+		const bool bProcessed = IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=automation_cvar_test"),
+			OutputDevice,
+			nullptr);
+		TestTrue(TEXT("MPQ shadow-fusion latency trial command executes"), bProcessed);
+
+		if (BodyFusionEnable)
+		{
+			TestEqual(TEXT("Prepared MPQ trial enables BodyFusion"), 1, BodyFusionEnable->GetInt());
+		}
+		if (BodyFusionDebug)
+		{
+			TestEqual(TEXT("Prepared MPQ trial enables BodyFusion debug"), 1, BodyFusionDebug->GetInt());
+		}
+		if (BodyFusionWritePose)
+		{
+			TestEqual(TEXT("Prepared MPQ trial remains shadow-only for pose writes"), 0, BodyFusionWritePose->GetInt());
+		}
+		if (BodyFusionMediaPipeAuthority)
+		{
+			TestEqual(TEXT("Prepared MPQ trial keeps MediaPipe authority diagnostic-only"), 0, BodyFusionMediaPipeAuthority->GetInt());
+		}
+
+		if (IConsoleVariable* QuestArmDropoutDownFallback = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmDropoutDownFallback")))
+		{
+			TestEqual(TEXT("Prepared MPQ trial leaves Quest arm dropout fallback off"), 0, QuestArmDropoutDownFallback->GetInt());
+		}
+		if (IConsoleVariable* QuestConstrainedArmBodyFallback = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestConstrainedArmBodyFallback")))
+		{
+			TestEqual(TEXT("Prepared MPQ trial leaves constrained arm body fallback off"), 0, QuestConstrainedArmBodyFallback->GetInt());
+		}
+		if (IConsoleVariable* MediaPipeArmHoldOnQuestHandLoss = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeArmHoldOnQuestHandLoss")))
+		{
+			TestEqual(TEXT("Prepared MPQ trial leaves MediaPipe arm hold fallback off"), 0, MediaPipeArmHoldOnQuestHandLoss->GetInt());
+		}
+		if (MPQShadowFusionOnPlay)
+		{
+			TestEqual(TEXT("Prepared MPQ trial arms one-shot on-play capture"), 1, MPQShadowFusionOnPlay->GetInt());
+		}
+		if (MPQShadowFusionDuration)
+		{
+			TestEqual(TEXT("Prepared MPQ trial stores requested duration"), 45.0f, MPQShadowFusionDuration->GetFloat());
+		}
+		if (MPQShadowFusionAnalyze)
+		{
+			TestEqual(TEXT("Prepared MPQ trial enables analyzer"), 1, MPQShadowFusionAnalyze->GetInt());
+		}
+		if (MPQShadowFusionPath)
+		{
+			TestTrue(TEXT("Prepared MPQ trial output path contains label"), MPQShadowFusionPath->GetString().Contains(TEXT("automation_cvar_test")));
+		}
+	}
+	RestoreConsoleSnapshots();
 
 	IConsoleVariable* ArmTargetHalfLife = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeArmTargetHalfLife"));
 	TestNotNull(TEXT("Arm target half-life CVar is registered"), ArmTargetHalfLife);

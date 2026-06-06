@@ -161,18 +161,38 @@ struct MEDIAPIPEDRIVER_API FEmbodiedFusionBestAvailablePose
 	const FEmbodiedFusionUpperLimbPose& GetUpperLimb(bool bLeft) const;
 };
 
+struct MEDIAPIPEDRIVER_API FEmbodiedFusionMediaPipeCandidate
+{
+	FMediaPipeFusedAvatarPose Pose;
+	FMediaPipeBodyFusionSourceStatus BodyPoseStatus;
+	double TimestampSeconds = -1.0;
+	float Confidence = 0.0f;
+	uint8 bHasBodyPose = 0;
+	uint8 bCalibrationUsable = 0;
+	uint8 bHasCalibratedPose = 0;
+	FString Reason;
+
+	void Reset();
+};
+
 struct MEDIAPIPEDRIVER_API FEmbodiedFusionFrame
 {
 	FMediaPipeTrackingSourceFrame SourceFrame;
 	FMediaPipeBodyFusionFreshnessThresholds FreshnessThresholds;
 	FMediaPipeFusedAvatarPose Pose;
+	FEmbodiedFusionMediaPipeCandidate MediaPipeCandidate;
+	FMediaPipeFusedAvatarPose ShadowCandidatePose;
 	FMediaPipeBodyFusionAuthority Authority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	FMediaPipeEmbodimentCalibration Calibration;
 	EMediaPipeBodyFusionAuthorityState AuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
+	EMediaPipeBodyFusionAuthorityState ShadowCandidateAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
 	FString AuthorityReason;
+	FString ShadowCandidateReason;
 	int32 CalibrationStableFrameCount = 0;
 	float CalibrationStableSeconds = 0.0f;
 	uint8 bMediaPipeAuthorityAllowed = 0;
+	uint8 bShadowCandidateMediaPipeAuthorityAllowed = 0;
+	uint8 bHasShadowCandidatePose = 0;
 	uint8 bRuntimeEnabled = 0;
 	FEmbodiedFusionBestAvailablePose BestAvailablePose;
 
@@ -206,6 +226,10 @@ public:
 	void UpdateMovementReplicaPose_GameThread(const FEmbodiedFusionMovementReplicaPoseInput& Input);
 	const FEmbodiedFusionFrame& GetLatestFusionFrame() const { return LatestFrame; }
 	const FEmbodiedFusionBestAvailablePose& GetBestAvailablePose() const { return LatestFrame.BestAvailablePose; }
+	static bool BuildMediaPipeCandidatePose(
+		const FMediaPipeTrackingSourceFrame& SourceFrame,
+		const FMediaPipeEmbodimentCalibration& Calibration,
+		FEmbodiedFusionMediaPipeCandidate& OutCandidate);
 
 private:
 	static FVector LockVectorToHemisphere(const FVector& Vector, const FVector& Reference);

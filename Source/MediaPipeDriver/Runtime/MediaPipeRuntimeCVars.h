@@ -19,6 +19,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarQuestHandRotationBlend;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionEnable;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionDebug;
+	extern TAutoConsoleVariable<int32> CVarBodyFusionWritePose;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionMediaPipeAuthority;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionCalibrationStableFrames;
 	extern TAutoConsoleVariable<float> CVarBodyFusionCalibrationHoldSeconds;

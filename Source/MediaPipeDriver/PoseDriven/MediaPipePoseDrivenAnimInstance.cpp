@@ -598,6 +598,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	QuestHands.Reset();
 	FullArmChain.Reset();
 	BodyFusionFrame.ResetTransient();
+	bHasQuestOrHmdRuntimeInput = false;
 	TargetMetaHumanProfile.Reset();
 	bHasCachedQuestHmdPose = false;
 	CachedQuestHmdWorld = FVector::ZeroVector;
@@ -711,6 +712,11 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	CachedQuestHmdWorld = QuestRuntimeOutput.HmdPose.LocationWorld;
 	CachedQuestHmdRotWorld = QuestRuntimeOutput.HmdPose.RotationWorld;
 	CachedQuestTrackingUpWorld = QuestRuntimeOutput.HmdPose.TrackingUpWorld;
+	bHasQuestOrHmdRuntimeInput =
+		bHasCachedQuestHmdPose ||
+		IsQuestHandSideTracked(QuestHands, true) ||
+		IsQuestHandSideTracked(QuestHands, false) ||
+		FullArmChain.bActive != 0;
 
 	const FQuestWristRuntimeState& QuestRuntimeWristState = GetQuestWristRuntimeState(RuntimeStateKey);
 	FEmbodiedFusionQuestCalibrationDebugInput QuestCalibrationHudInput;
@@ -736,6 +742,36 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		MediaPipePoseFrameContinuity::ResolveFrameAvailability(bHasLivePoseFrame ? &Frame : nullptr, bHasPoseFrame);
 	if (FrameAvailability != MediaPipePoseFrameContinuity::EFrameAvailability::Live)
 	{
+		if (bBodyFusionRuntimeActive && bHasQuestOrHmdRuntimeInput && EmbodiedFusionComponent)
+		{
+			const double BodyFusionNowSeconds = FPlatformTime::Seconds();
+			FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
+				? TargetEmbodimentProfile
+				: FMediaPipeAvatarEmbodimentProfile();
+			BodyFusionProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
+			BodyFusionProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
+				? TargetEyeLocalOffset
+				: BodyFusionProfile.DefaultEyeLocalOffset;
+			BodyFusionProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
+
+			FEmbodiedFusionUpdateInput FusionInput;
+			FusionInput.TargetActorName = TargetActorName;
+			FusionInput.NowSeconds = BodyFusionNowSeconds;
+			FusionInput.AvatarProfile = BodyFusionProfile;
+			FusionInput.TargetComponentTransform = TargetCompTransform;
+			FusionInput.TargetForwardWorld = GetTargetForwardWorld();
+			FusionInput.RefPelvisTranslationComp = RefPelvisTranslationComp;
+			FusionInput.RefHeadPosComp = RefHeadPosComp;
+			FusionInput.RefChestPosComp = RefSpine05TransformComp.GetTranslation();
+			FusionInput.RefNeckPosComp = RefNeckPosComp;
+			FusionInput.bOverrideArmChainMaxAgeSeconds =
+				TargetMetaHumanProfile.IsValidForPoseDriving();
+			FusionInput.ArmChainMaxAgeSeconds =
+				ResolveMediaPipeMetaHumanFullArmChainMaxAgeSeconds(TargetMetaHumanProfile);
+			FusionInput.bHasRefChestPosComp = !RefSpine05TransformComp.GetTranslation().IsNearlyZero();
+			EmbodiedFusionComponent->UpdateFusion_GameThread(FusionInput);
+			BodyFusionFrame = EmbodiedFusionComponent->GetLatestFusionFrame();
+		}
 		return;
 	}
 
@@ -1533,6 +1569,11 @@ bool FAnimNode_MediaPipePoseDriven::IsMeasured(int32 LmIdx) const
 		return false;
 	}
 
+	if (!bHasPoseFrame)
+	{
+		return false;
+	}
+
 	return PoseFrame.World.IsValidIndex(LmIdx) && PoseFrame.Normalized.IsValidIndex(LmIdx);
 }
 
@@ -1604,7 +1645,9 @@ void FAnimNode_MediaPipePoseDriven::ApplyTranslationDeltaCS(FCSPose<FCompactPose
 
 bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionPoseForEvaluation() const
 {
-	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread() || !BodyFusionFrame.Pose.IsUsable())
+	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread() ||
+		!FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread() ||
+		!BodyFusionFrame.Pose.IsUsable())
 	{
 		return false;
 	}
@@ -2323,46 +2366,56 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	Output.ResetToRefPose();
 
-	if (!bHasReferencePose || !bHasPoseFrame)
+	const bool bHasBodyFusionPoseInput =
+		FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread() &&
+		BodyFusionFrame.Pose.IsUsable();
+	if (!bHasReferencePose || (!bHasPoseFrame && !bHasQuestOrHmdRuntimeInput && !bHasBodyFusionPoseInput))
 	{
 		return;
 	}
 
-	const int64 ActivePoseTimestampUs = PoseFrame.TimestampUs;
-
-	if (bHasLastPoseTimestamp && ActivePoseTimestampUs < LastPoseTimestampUs)
+	if (bHasPoseFrame)
 	{
-		BodyState.bHasReferenceHipHeight = false;
-		BodyState.ReferenceHipHeightCm = 0.0f;
-		BodyState.bHasSmoothedPelvisOffset = false;
-		BodyState.SmoothedPelvisOffsetComp = FVector::ZeroVector;
-		BodyState.bHasSmoothedFkRootGroundOffset = false;
-		BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
-		LeftArmState.bHasSmoothedArmIK = false;
-		RightArmState.bHasSmoothedArmIK = false;
-		LeftLegState.bHasSmoothedLegPlane = false;
-		RightLegState.bHasSmoothedLegPlane = false;
-		ResetFootPlantState();
-		ResetPoseYawAlignRuntimeState(RuntimeStateKey);
-		ResetQuestWristRuntimeState(RuntimeStateKey);
-		ResetDerivedSignalRuntimeState(RuntimeStateKey);
-		ResetRotationSmoothing();
-		BodyState.ResetDerivedSignalReferences();
-		UE_LOG(
-			LogMediaPipePose,
-			Warning,
-			TEXT("MediaPipe pose timestamp rewind: reset solver continuity actor=%s currentUs=%lld previousUs=%lld runtimeKey=%u."),
-			*TargetActorName.ToString(),
-			ActivePoseTimestampUs,
-			LastPoseTimestampUs,
-			RuntimeStateKey);
-		for (uint8& B : EverMeasured)
+		const int64 ActivePoseTimestampUs = PoseFrame.TimestampUs;
+
+		if (bHasLastPoseTimestamp && ActivePoseTimestampUs < LastPoseTimestampUs)
 		{
-			B = 0;
+			BodyState.bHasReferenceHipHeight = false;
+			BodyState.ReferenceHipHeightCm = 0.0f;
+			BodyState.bHasSmoothedPelvisOffset = false;
+			BodyState.SmoothedPelvisOffsetComp = FVector::ZeroVector;
+			BodyState.bHasSmoothedFkRootGroundOffset = false;
+			BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+			LeftArmState.bHasSmoothedArmIK = false;
+			RightArmState.bHasSmoothedArmIK = false;
+			LeftLegState.bHasSmoothedLegPlane = false;
+			RightLegState.bHasSmoothedLegPlane = false;
+			ResetFootPlantState();
+			ResetPoseYawAlignRuntimeState(RuntimeStateKey);
+			ResetQuestWristRuntimeState(RuntimeStateKey);
+			ResetDerivedSignalRuntimeState(RuntimeStateKey);
+			ResetRotationSmoothing();
+			BodyState.ResetDerivedSignalReferences();
+			UE_LOG(
+				LogMediaPipePose,
+				Warning,
+				TEXT("MediaPipe pose timestamp rewind: reset solver continuity actor=%s currentUs=%lld previousUs=%lld runtimeKey=%u."),
+				*TargetActorName.ToString(),
+				ActivePoseTimestampUs,
+				LastPoseTimestampUs,
+				RuntimeStateKey);
+			for (uint8& B : EverMeasured)
+			{
+				B = 0;
+			}
 		}
+		bHasLastPoseTimestamp = true;
+		LastPoseTimestampUs = ActivePoseTimestampUs;
 	}
-	bHasLastPoseTimestamp = true;
-	LastPoseTimestampUs = ActivePoseTimestampUs;
+	else
+	{
+		bHasLastPoseTimestamp = false;
+	}
 
 	FCSPose<FCompactPose> CSPose;
 	CSPose.InitPose(Output.Pose);
@@ -2371,14 +2424,17 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	RightLegState.bCurrentSourceFootGrounded = false;
 
 	const bool bBodyFusionPoseWritten = DriveBodyFusionPoseCS(CSPose, DeltaSeconds);
-	if (!bBodyFusionPoseWritten)
+	if (!bBodyFusionPoseWritten && bHasPoseFrame)
 	{
 		DrivePelvisTranslationCS(CSPose, DeltaSeconds);
 		DriveSpineCS(CSPose, DeltaSeconds);
 	}
-	DriveLegCS(CSPose, true, DeltaSeconds);
-	DriveLegCS(CSPose, false, DeltaSeconds);
-	if (!bBodyFusionPoseWritten)
+	if (bHasPoseFrame)
+	{
+		DriveLegCS(CSPose, true, DeltaSeconds);
+		DriveLegCS(CSPose, false, DeltaSeconds);
+	}
+	if (!bBodyFusionPoseWritten && bHasPoseFrame)
 	{
 		UpdateFkRootGroundingCS(CSPose, DeltaSeconds);
 	}
@@ -2388,7 +2444,7 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPosesSafe(CSPose, Output.Pose);
 
-	if (!bBodyFusionPoseWritten && !BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
+	if (!bBodyFusionPoseWritten && bHasPoseFrame && !BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
 	{
 		FBoneReference RootToTranslate = Root;
 		if (!RootToTranslate.IsValidToEvaluate())

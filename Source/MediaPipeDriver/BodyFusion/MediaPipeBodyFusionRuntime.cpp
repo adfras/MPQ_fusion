@@ -28,6 +28,7 @@ FMediaPipeBodyFusionRuntimePolicySnapshot FMediaPipeBodyFusionRuntimePolicy::Rea
 	FMediaPipeBodyFusionRuntimePolicySnapshot Snapshot;
 	Snapshot.bBodyFusionEnabled = IsBodyFusionEnabledGameThread();
 	Snapshot.bDebugEnabled = IsDebugEnabledGameThread();
+	Snapshot.bPoseWriteEnabled = IsPoseWriteEnabledGameThread();
 	Snapshot.MediaPipeAuthorityMode =
 		MediaPipeRuntimeCVars::CVarBodyFusionMediaPipeAuthority.GetValueOnGameThread();
 	Snapshot.RequiredCalibrationStableFrames = ResolveRequiredStableFrames(
@@ -71,6 +72,16 @@ bool FMediaPipeBodyFusionRuntimePolicy::IsDebugEnabledGameThread()
 bool FMediaPipeBodyFusionRuntimePolicy::IsDebugEnabledAnyThread()
 {
 	return MediaPipeRuntimeCVars::CVarBodyFusionDebug.GetValueOnAnyThread() != 0;
+}
+
+bool FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledGameThread()
+{
+	return MediaPipeRuntimeCVars::CVarBodyFusionWritePose.GetValueOnGameThread() != 0;
+}
+
+bool FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread()
+{
+	return MediaPipeRuntimeCVars::CVarBodyFusionWritePose.GetValueOnAnyThread() != 0;
 }
 
 int32 FMediaPipeEmbodimentDebugCommands::GetQuestWristManualResetSerial()

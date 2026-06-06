@@ -610,14 +610,15 @@ bool FMediaPipeSourceConditioner::ConditionFrame(
 		return false;
 	}
 
+	const double EffectiveQueryTimeSeconds = QueryTimeSeconds >= 0.0
+		? QueryTimeSeconds
+		: FPlatformTime::Seconds();
+	OutFrame.ConditionedQueryWallSeconds = EffectiveQueryTimeSeconds;
+
 	if (!Options.bEnabled)
 	{
 		return OutFrame.bValid;
 	}
-
-	const double EffectiveQueryTimeSeconds = QueryTimeSeconds >= 0.0
-		? QueryTimeSeconds
-		: FPlatformTime::Seconds();
 
 	bool bTimestampDiscontinuity = false;
 	if (bHasLastTimestamp && RawFrame.TimestampUs < LastTimestampUs)
@@ -913,6 +914,7 @@ void FMediaPipeSourceConditioner::BuildRenderTimeFrame(
 	const FPoseHistorySample* Previous = (RecentSampleCount > 1 && RecentSamples[1].bValid) ? &RecentSamples[1] : nullptr;
 	OutFrame = Latest.Frame;
 	OutFrame.bSourceConditioned = true;
+	OutFrame.ConditionedQueryWallSeconds = QueryTimeSeconds;
 
 	const float QualityPredictionScale = FMath::Clamp((Latest.QualityScore - 0.15f) / 0.85f, 0.0f, 1.0f);
 	const double SourceAgeSeconds = FMath::Max(0.0, QueryTimeSeconds - Latest.ArrivalSeconds);

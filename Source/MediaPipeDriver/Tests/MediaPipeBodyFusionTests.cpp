@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "MediaPipeAutoQuestProfilePolicy.h"
+#include "EmbodiedFusionComponent.h"
 #include "MediaPipeBodyFusion.h"
 #include "MediaPipeBodyFusionAuthorityPolicy.h"
 #include "MediaPipeBodyFusionPoseWriteContext.h"
@@ -241,6 +242,55 @@ bool FMediaPipeBodyFusionTraceOnlyAuthorityAutomationTest::RunTest(const FString
 		Pose.LeftHip.bValid && Pose.LeftHip.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestFalse(TEXT("Trace-only mode does not promote MediaPipe arm fallback into fused pose"),
 		Pose.LeftElbow.bValid && Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionMediaPipeCandidateAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.MediaPipeCandidateIgnoresQuestAndHmd",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionMediaPipeCandidateAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrame Frame;
+	Frame.FrameTimeSeconds = 10.0;
+	AddReliableLowerBody(Frame, 120.0f);
+	AddReliableUpperBody(Frame);
+	AddFreshQuestFullArmChain(Frame);
+	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	TestEqual(TEXT("HMD is intentionally absent"),
+		static_cast<uint8>(Frame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Missing));
+	TestEqual(TEXT("Quest arm chain is fresh but must not own the MediaPipe candidate"),
+		static_cast<uint8>(Frame.LeftArmChainStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Fresh));
+
+	FEmbodiedFusionMediaPipeCandidate Candidate;
+	TestTrue(
+		TEXT("MediaPipe-only candidate builds without HMD"),
+		UEmbodiedFusionComponent::BuildMediaPipeCandidatePose(Frame, MakeIdentityCalibration(), Candidate));
+	TestTrue(TEXT("Candidate is marked available"), Candidate.bHasCalibratedPose != 0);
+	TestTrue(TEXT("Candidate body pose status remains fresh"), Candidate.BodyPoseStatus.IsFresh());
+
+	TestTrue(
+		TEXT("Candidate left shoulder uses MediaPipe landmark, not Quest arm chain"),
+		Candidate.Pose.LeftShoulder.LocationWorld.Equals(FVector(40.0f, -25.0f, 132.0f), 0.01f));
+	TestTrue(
+		TEXT("Candidate right shoulder uses MediaPipe landmark, not Quest arm chain"),
+		Candidate.Pose.RightShoulder.LocationWorld.Equals(FVector(40.0f, 25.0f, 132.0f), 0.01f));
+	TestTrue(
+		TEXT("Candidate chest proxy is the MediaPipe shoulder midpoint"),
+		Candidate.Pose.Chest.LocationWorld.Equals(FVector(40.0f, 0.0f, 132.0f), 0.01f));
+	TestTrue(
+		TEXT("Candidate pelvis proxy is the MediaPipe hip midpoint"),
+		Candidate.Pose.Pelvis.LocationWorld.Equals(FVector(0.0f, 0.0f, 120.0f), 0.01f));
+	TestEqual(TEXT("Candidate shoulder owner is MediaPipe"),
+		static_cast<uint8>(Candidate.Pose.LeftShoulder.Owner),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
+	TestEqual(TEXT("Candidate pelvis owner is MediaPipe"),
+		static_cast<uint8>(Candidate.Pose.Pelvis.Owner),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
 	return true;
 }
 

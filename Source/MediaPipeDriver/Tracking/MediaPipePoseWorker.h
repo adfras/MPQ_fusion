@@ -15,6 +15,7 @@ struct FMediaPipePoseInputFrame
 	int32 Height = 0;
 	int64 TimestampUs = 0;
 	int32 SourceEpoch = 0;
+	double SourceCaptureWallSeconds = -1.0;
 	double EnqueuedWallSeconds = 0.0;
 };
 

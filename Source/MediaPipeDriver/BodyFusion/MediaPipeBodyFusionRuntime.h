@@ -6,6 +6,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionRuntimePolicySnapshot
 {
 	bool bBodyFusionEnabled = false;
 	bool bDebugEnabled = false;
+	bool bPoseWriteEnabled = false;
 	int32 MediaPipeAuthorityMode = 0;
 	int32 RequiredCalibrationStableFrames = 0;
 	float RequiredCalibrationStableSeconds = 0.0f;
@@ -21,6 +22,8 @@ public:
 	static bool IsBodyFusionEnabledAnyThread();
 	static bool IsDebugEnabledGameThread();
 	static bool IsDebugEnabledAnyThread();
+	static bool IsPoseWriteEnabledGameThread();
+	static bool IsPoseWriteEnabledAnyThread();
 };
 
 class MEDIAPIPEDRIVER_API FMediaPipeEmbodimentDebugCommands

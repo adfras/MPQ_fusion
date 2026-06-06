@@ -17,6 +17,7 @@ namespace
 		Frame->Height = Height;
 		Frame->TimestampUs = 1;
 		Frame->SourceEpoch = 0;
+		Frame->SourceCaptureWallSeconds = FPlatformTime::Seconds();
 		Frame->EnqueuedWallSeconds = FPlatformTime::Seconds();
 		if (RgbBytes > 0)
 		{
@@ -94,11 +95,11 @@ bool FMediaPipePoseFrameWorkerAutomationTest::RunTest(const FString& Parameters)
 
 	TArray<uint8> ShortRgb;
 	ShortRgb.SetNumZeroed(11);
-	TestFalse(TEXT("Tracker propagates worker rejection"), Tracker.EnqueueFrame(MoveTemp(ShortRgb), 2, 2, 2, 0));
+	TestFalse(TEXT("Tracker propagates worker rejection"), Tracker.EnqueueFrame(MoveTemp(ShortRgb), 2, 2, 2, 0, FPlatformTime::Seconds()));
 
 	TArray<uint8> ValidRgb;
 	ValidRgb.SetNumZeroed(12);
-	TestTrue(TEXT("Tracker accepts valid frame"), Tracker.EnqueueFrame(MoveTemp(ValidRgb), 2, 2, 3, 0));
+	TestTrue(TEXT("Tracker accepts valid frame"), Tracker.EnqueueFrame(MoveTemp(ValidRgb), 2, 2, 3, 0, FPlatformTime::Seconds()));
 
 	FMediaPipePosePipelineStats TrackerStats;
 	Tracker.GetRuntimeStats(TrackerStats);

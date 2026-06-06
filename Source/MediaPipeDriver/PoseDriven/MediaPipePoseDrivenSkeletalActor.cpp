@@ -71,6 +71,30 @@ TAutoConsoleVariable<FString> CVarRecordMannyHeadPythonExe(
 	TEXT("Python executable used to analyze Manny head trace recordings."),
 	ECVF_Default);
 
+TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionOnPlay(
+	TEXT("mp.RecordMPQShadowFusionOnPlay"),
+	0,
+	TEXT("When non-zero, automatically starts a shadow-only MediaPipe/Quest BodyFusion capture for each PIE/VR Preview run."),
+	ECVF_Default);
+
+TAutoConsoleVariable<float> CVarRecordMPQShadowFusionOnPlayDuration(
+	TEXT("mp.RecordMPQShadowFusionOnPlayDuration"),
+	12.0f,
+	TEXT("Seconds of MPQ shadow-fusion signal data to record automatically after Play starts."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordMPQShadowFusionOnPlayPath(
+	TEXT("mp.RecordMPQShadowFusionOnPlayPath"),
+	TEXT("Saved/CodexAgent/Diagnostics/mpq_shadow_fusion_latest.json"),
+	TEXT("Output JSON path for automatic MPQ shadow-fusion recording."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionAnalyzeAfterWrite(
+	TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"),
+	1,
+	TEXT("When non-zero, run Tools/AnalyzeMPQShadowFusionCapture.py after an automatic MPQ shadow-fusion JSON is written."),
+	ECVF_Default);
+
 const AActor* ResolveTrackingSourceActor(const AActor* SourceActor)
 {
 	TSet<const AActor*> VisitedActors;
@@ -174,14 +198,221 @@ struct FMannyBoneTimeseriesRecorder
 	bool bAutoStarted = false;
 	FString OutputPath;
 	double StartSeconds = 0.0;
+	double EndSeconds = 0.0;
 	double DurationSeconds = 0.0;
+	double ActualElapsedSeconds = 0.0;
+	double FirstSampleWallSeconds = 0.0;
+	double LastSampleWallSeconds = 0.0;
+	double SampleTimeSpanSeconds = 0.0;
 	int32 SampleCount = 0;
 	uint32 AutoStartWorldId = 0;
 	uint32 LastAutoStartWorldId = 0;
+	uint32 AutoStartArmSerial = 0;
+	bool bHasSampleWallSeconds = false;
+	FString Mode;
+	FString EndReason;
+	FString AnalyzerPathOverride;
 	TArray<TSharedPtr<FJsonValue>> Samples;
 };
 
 FMannyBoneTimeseriesRecorder GMannyBoneTimeseriesRecorder;
+
+enum class EMPQShadowAutoStartSkipReason : uint8
+{
+	NotArmed,
+	NoActor,
+	NoDrivenMesh,
+	MissingLiveMannyTag,
+	RecorderAlreadyActive,
+	WrongWorldType,
+	DuplicateWorldForSameArm
+};
+
+enum class EMannyBoneTimeseriesEndReason : uint8
+{
+	DurationReached,
+	EndPlay,
+	ManualStop
+};
+
+struct FMPQShadowAutoStartRequest
+{
+	bool bArmed = false;
+	uint32 ArmSerial = 0;
+	double PreparedAtSeconds = 0.0;
+	double StartDeadlineSeconds = 0.0;
+	double DurationSeconds = 0.0;
+	bool bAnalyzeAfterWrite = true;
+	FString OutputPath;
+	FString Label;
+	uint32 StartedWorldId = 0;
+	uint32 StartedArmSerial = 0;
+	EMPQShadowAutoStartSkipReason LastLoggedSkipReason = EMPQShadowAutoStartSkipReason::NotArmed;
+	uint32 LastLoggedSkipWorldId = 0;
+	double LastLoggedSkipSeconds = 0.0;
+};
+
+FMPQShadowAutoStartRequest GMPQShadowAutoStartRequest;
+uint32 GMPQShadowNextArmSerial = 0;
+
+const TCHAR* MPQShadowAutoStartSkipReasonText(const EMPQShadowAutoStartSkipReason Reason)
+{
+	switch (Reason)
+	{
+	case EMPQShadowAutoStartSkipReason::NotArmed:
+		return TEXT("NotArmed");
+	case EMPQShadowAutoStartSkipReason::NoActor:
+		return TEXT("NoActor");
+	case EMPQShadowAutoStartSkipReason::NoDrivenMesh:
+		return TEXT("NoDrivenMesh");
+	case EMPQShadowAutoStartSkipReason::MissingLiveMannyTag:
+		return TEXT("MissingLiveMannyTag");
+	case EMPQShadowAutoStartSkipReason::RecorderAlreadyActive:
+		return TEXT("RecorderAlreadyActive");
+	case EMPQShadowAutoStartSkipReason::WrongWorldType:
+		return TEXT("WrongWorldType");
+	case EMPQShadowAutoStartSkipReason::DuplicateWorldForSameArm:
+		return TEXT("DuplicateWorldForSameArm");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+const TCHAR* MannyBoneTimeseriesEndReasonText(const EMannyBoneTimeseriesEndReason Reason)
+{
+	switch (Reason)
+	{
+	case EMannyBoneTimeseriesEndReason::DurationReached:
+		return TEXT("duration_reached");
+	case EMannyBoneTimeseriesEndReason::EndPlay:
+		return TEXT("end_play");
+	case EMannyBoneTimeseriesEndReason::ManualStop:
+		return TEXT("manual_stop");
+	default:
+		return TEXT("unknown");
+	}
+}
+
+const TCHAR* WorldTypeText(const UWorld* World)
+{
+	if (!World)
+	{
+		return TEXT("<none>");
+	}
+	switch (World->WorldType)
+	{
+	case EWorldType::None:
+		return TEXT("None");
+	case EWorldType::Game:
+		return TEXT("Game");
+	case EWorldType::Editor:
+		return TEXT("Editor");
+	case EWorldType::PIE:
+		return TEXT("PIE");
+	case EWorldType::EditorPreview:
+		return TEXT("EditorPreview");
+	case EWorldType::GamePreview:
+		return TEXT("GamePreview");
+	case EWorldType::GameRPC:
+		return TEXT("GameRPC");
+	case EWorldType::Inactive:
+		return TEXT("Inactive");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+bool IsMPQShadowAutoStartArmed()
+{
+	return GMPQShadowAutoStartRequest.bArmed || CVarRecordMPQShadowFusionOnPlay.GetValueOnAnyThread() != 0;
+}
+
+void ArmMPQShadowAutoStartRequest(
+	const double DurationSeconds,
+	const FString& OutputPath,
+	const bool bAnalyzeAfterWrite,
+	const FString& Label)
+{
+	++GMPQShadowNextArmSerial;
+	GMPQShadowAutoStartRequest = FMPQShadowAutoStartRequest();
+	GMPQShadowAutoStartRequest.bArmed = true;
+	GMPQShadowAutoStartRequest.ArmSerial = GMPQShadowNextArmSerial;
+	GMPQShadowAutoStartRequest.PreparedAtSeconds = FPlatformTime::Seconds();
+	GMPQShadowAutoStartRequest.StartDeadlineSeconds = GMPQShadowAutoStartRequest.PreparedAtSeconds + 10.0;
+	GMPQShadowAutoStartRequest.DurationSeconds = FMath::Clamp(DurationSeconds, 0.1, 120.0);
+	GMPQShadowAutoStartRequest.bAnalyzeAfterWrite = bAnalyzeAfterWrite;
+	GMPQShadowAutoStartRequest.OutputPath = OutputPath;
+	GMPQShadowAutoStartRequest.Label = Label;
+
+	// A new prepared trial is a new one-shot arm, even if Unreal reuses a PIE world id.
+	GMannyBoneTimeseriesRecorder.LastAutoStartWorldId = 0;
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.MPQShadowAutoStart: armed serial=%u duration=%.3fs path=%s label=%s shadowOnly=1 authority=0 writePose=0 armFallbacks=off"),
+		GMPQShadowAutoStartRequest.ArmSerial,
+		GMPQShadowAutoStartRequest.DurationSeconds,
+		*GMPQShadowAutoStartRequest.OutputPath,
+		*GMPQShadowAutoStartRequest.Label);
+}
+
+void EnsureMPQShadowAutoStartRequestFromCVars()
+{
+	if (GMPQShadowAutoStartRequest.bArmed || CVarRecordMPQShadowFusionOnPlay.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	ArmMPQShadowAutoStartRequest(
+		static_cast<double>(CVarRecordMPQShadowFusionOnPlayDuration.GetValueOnAnyThread()),
+		CVarRecordMPQShadowFusionOnPlayPath.GetValueOnAnyThread(),
+		CVarRecordMPQShadowFusionAnalyzeAfterWrite.GetValueOnAnyThread() != 0,
+		TEXT("cvar_on_play"));
+}
+
+void LogMPQShadowAutoStartSkip(
+	const EMPQShadowAutoStartSkipReason Reason,
+	const UWorld* World,
+	const AActor* Actor,
+	const USkeletalMeshComponent* DrivenMesh,
+	const TCHAR* Detail)
+{
+	if (!IsMPQShadowAutoStartArmed())
+	{
+		return;
+	}
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	const uint32 WorldId = World ? World->GetUniqueID() : 0;
+	if (GMPQShadowAutoStartRequest.LastLoggedSkipReason == Reason
+		&& GMPQShadowAutoStartRequest.LastLoggedSkipWorldId == WorldId
+		&& (NowSeconds - GMPQShadowAutoStartRequest.LastLoggedSkipSeconds) < 2.0)
+	{
+		return;
+	}
+
+	GMPQShadowAutoStartRequest.LastLoggedSkipReason = Reason;
+	GMPQShadowAutoStartRequest.LastLoggedSkipWorldId = WorldId;
+	GMPQShadowAutoStartRequest.LastLoggedSkipSeconds = NowSeconds;
+
+	UE_LOG(
+		LogMediaPipePose,
+		Warning,
+		TEXT("mp.MPQShadowAutoStart: skipped serial=%u reason=%s worldId=%u worldType=%s actor=%s hasDrivenMesh=%d hasLiveMannyTag=%d recorderActive=%d recorderMode=%s recorderPath=%s path=%s detail=%s"),
+		GMPQShadowAutoStartRequest.ArmSerial,
+		MPQShadowAutoStartSkipReasonText(Reason),
+		WorldId,
+		WorldTypeText(World),
+		*GetNameSafe(Actor),
+		DrivenMesh ? 1 : 0,
+		Actor && Actor->Tags.Contains(LiveMannyTag) ? 1 : 0,
+		GMannyBoneTimeseriesRecorder.bActive ? 1 : 0,
+		*GMannyBoneTimeseriesRecorder.Mode,
+		*GMannyBoneTimeseriesRecorder.OutputPath,
+		*GMPQShadowAutoStartRequest.OutputPath,
+		Detail ? Detail : TEXT(""));
+}
 
 TArray<TSharedPtr<FJsonValue>> JsonVector(const FVector& Value)
 {
@@ -317,16 +548,311 @@ TSharedRef<FJsonObject> JsonSignalSnapshot(const FMediaPipePoseDrivenSignalSnaps
 	return Result;
 }
 
-void AnalyzeMannyHeadTimeseries(const FString& JsonPath);
+const TCHAR* BodyFusionSourceStateName(const EMediaPipeBodyFusionSourceState State)
+{
+	switch (State)
+	{
+	case EMediaPipeBodyFusionSourceState::Missing:
+		return TEXT("missing");
+	case EMediaPipeBodyFusionSourceState::Stale:
+		return TEXT("stale");
+	case EMediaPipeBodyFusionSourceState::Invalid:
+		return TEXT("invalid");
+	case EMediaPipeBodyFusionSourceState::Fresh:
+		return TEXT("fresh");
+	default:
+		return TEXT("unknown");
+	}
+}
+
+const TCHAR* BodyFusionOwnerName(const EMediaPipeBodyFusionOwner Owner)
+{
+	switch (Owner)
+	{
+	case EMediaPipeBodyFusionOwner::None:
+		return TEXT("none");
+	case EMediaPipeBodyFusionOwner::Hmd:
+		return TEXT("hmd");
+	case EMediaPipeBodyFusionOwner::Quest:
+		return TEXT("quest");
+	case EMediaPipeBodyFusionOwner::MediaPipe:
+		return TEXT("mediapipe");
+	case EMediaPipeBodyFusionOwner::AvatarProfile:
+		return TEXT("avatar_profile");
+	case EMediaPipeBodyFusionOwner::Fused:
+		return TEXT("fused");
+	default:
+		return TEXT("unknown");
+	}
+}
+
+const TCHAR* BodyFusionAuthorityStateName(const EMediaPipeBodyFusionAuthorityState State)
+{
+	switch (State)
+	{
+	case EMediaPipeBodyFusionAuthorityState::NoMediaPipe:
+		return TEXT("no_mediapipe");
+	case EMediaPipeBodyFusionAuthorityState::MediaPipeCalibrating:
+		return TEXT("mediapipe_calibrating");
+	case EMediaPipeBodyFusionAuthorityState::MediaPipeStable:
+		return TEXT("mediapipe_stable");
+	case EMediaPipeBodyFusionAuthorityState::MediaPipeRejected:
+		return TEXT("mediapipe_rejected");
+	default:
+		return TEXT("unknown");
+	}
+}
+
+TSharedRef<FJsonObject> JsonSourceStatus(const FMediaPipeBodyFusionSourceStatus& Status)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("state"), BodyFusionSourceStateName(Status.State));
+	Result->SetNumberField(TEXT("age_seconds"), Status.AgeSeconds);
+	Result->SetNumberField(TEXT("confidence"), Status.Confidence);
+	Result->SetBoolField(TEXT("fresh"), Status.IsFresh());
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonFusedPoint(const FMediaPipeFusedBodyPoint& Point)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("valid"), Point.bValid);
+	Result->SetStringField(TEXT("owner"), BodyFusionOwnerName(Point.Owner));
+	Result->SetStringField(TEXT("source_state"), BodyFusionSourceStateName(Point.SourceState));
+	Result->SetNumberField(TEXT("confidence"), Point.Confidence);
+	Result->SetArrayField(TEXT("loc"), JsonVector(Point.LocationWorld));
+	Result->SetArrayField(TEXT("rot"), JsonRotator(Point.RotationWorld.Rotator()));
+	Result->SetArrayField(TEXT("quat"), JsonQuat(Point.RotationWorld));
+	return Result;
+}
+
+void SetFusedPointField(
+	const TSharedRef<FJsonObject>& Root,
+	const TCHAR* Name,
+	const FMediaPipeFusedBodyPoint& Point)
+{
+	Root->SetObjectField(Name, JsonFusedPoint(Point));
+}
+
+TSharedRef<FJsonObject> JsonFusedPose(const FMediaPipeFusedAvatarPose& Pose)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("usable"), Pose.IsUsable());
+	SetFusedPointField(Result, TEXT("root"), Pose.Root);
+	SetFusedPointField(Result, TEXT("eye"), Pose.Eye);
+	SetFusedPointField(Result, TEXT("head"), Pose.Head);
+	SetFusedPointField(Result, TEXT("neck"), Pose.Neck);
+	SetFusedPointField(Result, TEXT("chest"), Pose.Chest);
+	SetFusedPointField(Result, TEXT("spine"), Pose.Spine);
+	SetFusedPointField(Result, TEXT("pelvis"), Pose.Pelvis);
+	SetFusedPointField(Result, TEXT("left_shoulder"), Pose.LeftShoulder);
+	SetFusedPointField(Result, TEXT("left_elbow"), Pose.LeftElbow);
+	SetFusedPointField(Result, TEXT("left_wrist"), Pose.LeftWrist);
+	SetFusedPointField(Result, TEXT("right_shoulder"), Pose.RightShoulder);
+	SetFusedPointField(Result, TEXT("right_elbow"), Pose.RightElbow);
+	SetFusedPointField(Result, TEXT("right_wrist"), Pose.RightWrist);
+	SetFusedPointField(Result, TEXT("left_hip"), Pose.LeftHip);
+	SetFusedPointField(Result, TEXT("right_hip"), Pose.RightHip);
+
+	TSharedRef<FJsonObject> Debug = MakeShared<FJsonObject>();
+	Debug->SetNumberField(TEXT("camera_to_eye_cm"), Pose.DebugErrors.CameraToEyeCm);
+	Debug->SetNumberField(TEXT("camera_to_chest_cm"), Pose.DebugErrors.CameraToChestCm);
+	Debug->SetNumberField(TEXT("head_to_chest_cm"), Pose.DebugErrors.HeadToChestCm);
+	Debug->SetNumberField(TEXT("chest_to_pelvis_cm"), Pose.DebugErrors.ChestToPelvisCm);
+	Debug->SetNumberField(TEXT("hmd_horizontal_offset_cm"), Pose.DebugErrors.HmdHorizontalOffsetCm);
+	Debug->SetNumberField(TEXT("left_wrist_reach_cm"), Pose.DebugErrors.LeftWristReachCm);
+	Debug->SetNumberField(TEXT("right_wrist_reach_cm"), Pose.DebugErrors.RightWristReachCm);
+	Debug->SetStringField(TEXT("body_authority_state"), BodyFusionAuthorityStateName(Pose.DebugErrors.BodyAuthorityState));
+	Debug->SetBoolField(TEXT("mediapipe_pose_authority_allowed"), Pose.DebugErrors.bMediaPipePoseAuthorityAllowed != 0);
+	Result->SetObjectField(TEXT("debug"), Debug);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonMediaPipeCandidate(const FEmbodiedFusionMediaPipeCandidate& Candidate)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("available"), Candidate.bHasCalibratedPose != 0);
+	Result->SetBoolField(TEXT("has_body_pose"), Candidate.bHasBodyPose != 0);
+	Result->SetBoolField(TEXT("calibration_usable"), Candidate.bCalibrationUsable != 0);
+	Result->SetObjectField(TEXT("body_pose_status"), JsonSourceStatus(Candidate.BodyPoseStatus));
+	Result->SetNumberField(TEXT("timestamp_seconds"), Candidate.TimestampSeconds);
+	Result->SetNumberField(TEXT("confidence"), Candidate.Confidence);
+	Result->SetStringField(TEXT("reason"), Candidate.Reason);
+	Result->SetObjectField(TEXT("pose"), JsonFusedPose(Candidate.Pose));
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonTrackingSourceFrame(const FMediaPipeTrackingSourceFrame& Frame)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("frame_time_seconds"), Frame.FrameTimeSeconds);
+
+	TSharedRef<FJsonObject> Hmd = MakeShared<FJsonObject>();
+	Hmd->SetBoolField(TEXT("has_pose"), Frame.bHasHmdPose);
+	Hmd->SetObjectField(TEXT("status"), JsonSourceStatus(Frame.HmdStatus));
+	Hmd->SetArrayField(TEXT("loc"), JsonVector(Frame.HmdLocationWorld));
+	Hmd->SetArrayField(TEXT("rot"), JsonRotator(Frame.HmdRotationWorld.Rotator()));
+	Hmd->SetArrayField(TEXT("quat"), JsonQuat(Frame.HmdRotationWorld));
+	Hmd->SetArrayField(TEXT("tracking_up"), JsonVector(Frame.TrackingUpWorld));
+	Hmd->SetNumberField(TEXT("timestamp_seconds"), Frame.HmdTimestampSeconds);
+	Hmd->SetNumberField(TEXT("confidence"), Frame.HmdConfidence);
+	Result->SetObjectField(TEXT("hmd"), Hmd);
+
+	auto SetHand = [&](const TCHAR* Name, const bool bHasHand, const FVector& HandWorld, const double TimestampSeconds, const float Confidence, const FMediaPipeBodyFusionSourceStatus& Status)
+	{
+		TSharedRef<FJsonObject> Hand = MakeShared<FJsonObject>();
+		Hand->SetBoolField(TEXT("has_hand"), bHasHand);
+		Hand->SetObjectField(TEXT("status"), JsonSourceStatus(Status));
+		Hand->SetArrayField(TEXT("wrist_world"), JsonVector(HandWorld));
+		Hand->SetNumberField(TEXT("timestamp_seconds"), TimestampSeconds);
+		Hand->SetNumberField(TEXT("confidence"), Confidence);
+		Result->SetObjectField(Name, Hand);
+	};
+	SetHand(TEXT("left_hand"), Frame.bHasLeftHand, Frame.LeftHandWorld, Frame.LeftHandTimestampSeconds, Frame.LeftHandConfidence, Frame.LeftHandStatus);
+	SetHand(TEXT("right_hand"), Frame.bHasRightHand, Frame.RightHandWorld, Frame.RightHandTimestampSeconds, Frame.RightHandConfidence, Frame.RightHandStatus);
+
+	auto SetArmChain = [&](
+		const TCHAR* Name,
+		const bool bHasChain,
+		const FVector& ShoulderWorld,
+		const FVector& ElbowWorld,
+		const FVector& WristWorld,
+		const double TimestampSeconds,
+		const float Confidence,
+		const FMediaPipeBodyFusionSourceStatus& Status)
+	{
+		TSharedRef<FJsonObject> Arm = MakeShared<FJsonObject>();
+		Arm->SetBoolField(TEXT("has_chain"), bHasChain);
+		Arm->SetObjectField(TEXT("status"), JsonSourceStatus(Status));
+		Arm->SetArrayField(TEXT("shoulder_world"), JsonVector(ShoulderWorld));
+		Arm->SetArrayField(TEXT("elbow_world"), JsonVector(ElbowWorld));
+		Arm->SetArrayField(TEXT("wrist_world"), JsonVector(WristWorld));
+		Arm->SetNumberField(TEXT("timestamp_seconds"), TimestampSeconds);
+		Arm->SetNumberField(TEXT("confidence"), Confidence);
+		Result->SetObjectField(Name, Arm);
+	};
+	SetArmChain(TEXT("left_arm_chain"), Frame.bHasLeftArmChain, Frame.LeftArmShoulderWorld, Frame.LeftArmElbowWorld, Frame.LeftArmWristWorld, Frame.LeftArmChainTimestampSeconds, Frame.LeftArmChainConfidence, Frame.LeftArmChainStatus);
+	SetArmChain(TEXT("right_arm_chain"), Frame.bHasRightArmChain, Frame.RightArmShoulderWorld, Frame.RightArmElbowWorld, Frame.RightArmWristWorld, Frame.RightArmChainTimestampSeconds, Frame.RightArmChainConfidence, Frame.RightArmChainStatus);
+
+	TSharedRef<FJsonObject> BodyPose = MakeShared<FJsonObject>();
+	BodyPose->SetBoolField(TEXT("has_body_pose"), Frame.bHasBodyPose);
+	BodyPose->SetObjectField(TEXT("status"), JsonSourceStatus(Frame.BodyPoseStatus));
+	BodyPose->SetNumberField(TEXT("timestamp_seconds"), Frame.BodyPoseTimestampSeconds);
+	BodyPose->SetNumberField(TEXT("confidence"), Frame.BodyPoseConfidence);
+	TSharedRef<FJsonObject> Landmarks = MakeShared<FJsonObject>();
+	for (int32 LandmarkIndex = 0; LandmarkIndex < MediaPipePoseLandmarkCount && LandmarkIndex < UE_ARRAY_COUNT(MediaPipePoseLandmarkNames); ++LandmarkIndex)
+	{
+		TSharedRef<FJsonObject> Landmark = MakeShared<FJsonObject>();
+		Landmark->SetBoolField(TEXT("valid"), Frame.BodyPoseLandmarkValid[LandmarkIndex] != 0);
+		Landmark->SetNumberField(TEXT("reliability"), Frame.BodyPoseLandmarkReliability[LandmarkIndex]);
+		Landmark->SetArrayField(TEXT("pos"), JsonVector(Frame.BodyPoseLandmarksWorld[LandmarkIndex]));
+		Landmarks->SetObjectField(MediaPipePoseLandmarkNames[LandmarkIndex], Landmark);
+	}
+	BodyPose->SetObjectField(TEXT("landmarks"), Landmarks);
+	Result->SetObjectField(TEXT("body_pose"), BodyPose);
+
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonHandJoints(const FEmbodiedFusionHandJointPose& Joints)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("has_joints"), Joints.bHasJoints);
+	Result->SetBoolField(TEXT("tracked"), Joints.bTracked);
+	TArray<TSharedPtr<FJsonValue>> Positions;
+	TArray<TSharedPtr<FJsonValue>> Rotations;
+	Positions.Reserve(MediaPipeTrackingHandKeypointCount);
+	Rotations.Reserve(MediaPipeTrackingHandKeypointCount);
+	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
+	{
+		Positions.Add(MakeShared<FJsonValueArray>(JsonVector(Joints.PositionsWorld[Index])));
+		Rotations.Add(MakeShared<FJsonValueArray>(JsonQuat(Joints.RotationsWorld[Index])));
+	}
+	Result->SetArrayField(TEXT("positions_world"), Positions);
+	Result->SetArrayField(TEXT("rotations_world"), Rotations);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonBestUpperLimb(const FEmbodiedFusionUpperLimbPose& Limb)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("has_joint_chain"), Limb.bHasJointChain);
+	Result->SetBoolField(TEXT("has_hand_target"), Limb.bHasHandTarget);
+	Result->SetBoolField(TEXT("hand_target_tracked"), Limb.bHandTargetTracked);
+	Result->SetStringField(TEXT("source"), Limb.Source.ToString());
+	Result->SetObjectField(TEXT("status"), JsonSourceStatus(Limb.Status));
+	Result->SetArrayField(TEXT("shoulder_world"), JsonVector(Limb.ShoulderWorld));
+	Result->SetArrayField(TEXT("elbow_world"), JsonVector(Limb.ElbowWorld));
+	Result->SetArrayField(TEXT("wrist_world"), JsonVector(Limb.WristWorld));
+	Result->SetArrayField(TEXT("hand_target_world"), JsonVector(Limb.HandTargetWorld.GetLocation()));
+	Result->SetObjectField(TEXT("hand_joints"), JsonHandJoints(Limb.HandJoints));
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonBestAvailablePose(const FEmbodiedFusionBestAvailablePose& Pose)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	TSharedRef<FJsonObject> Head = MakeShared<FJsonObject>();
+	Head->SetBoolField(TEXT("has_head"), Pose.bHasHead);
+	Head->SetStringField(TEXT("source"), Pose.HeadSource.ToString());
+	Head->SetObjectField(TEXT("status"), JsonSourceStatus(Pose.HeadStatus));
+	Head->SetArrayField(TEXT("loc"), JsonVector(Pose.HeadLocationWorld));
+	Head->SetArrayField(TEXT("rot"), JsonRotator(Pose.HeadRotationWorld.Rotator()));
+	Head->SetArrayField(TEXT("quat"), JsonQuat(Pose.HeadRotationWorld));
+	Result->SetObjectField(TEXT("head"), Head);
+	Result->SetObjectField(TEXT("left_upper_limb"), JsonBestUpperLimb(Pose.LeftUpperLimb));
+	Result->SetObjectField(TEXT("right_upper_limb"), JsonBestUpperLimb(Pose.RightUpperLimb));
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonEmbodiedFusionFrame(const FEmbodiedFusionFrame& Frame)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("runtime_enabled"), Frame.bRuntimeEnabled != 0);
+	Result->SetBoolField(TEXT("mediapipe_authority_allowed"), Frame.bMediaPipeAuthorityAllowed != 0);
+	Result->SetStringField(TEXT("authority_state"), BodyFusionAuthorityStateName(Frame.AuthorityState));
+	Result->SetStringField(TEXT("authority_reason"), Frame.AuthorityReason);
+	Result->SetNumberField(TEXT("calibration_stable_frames"), Frame.CalibrationStableFrameCount);
+	Result->SetNumberField(TEXT("calibration_stable_seconds"), Frame.CalibrationStableSeconds);
+	Result->SetBoolField(TEXT("calibration_usable"), Frame.Calibration.IsUsable());
+	Result->SetNumberField(TEXT("calibration_confidence"), Frame.Calibration.Confidence);
+	Result->SetNumberField(TEXT("calibration_scale"), Frame.Calibration.Scale);
+	Result->SetObjectField(TEXT("source"), JsonTrackingSourceFrame(Frame.SourceFrame));
+	Result->SetObjectField(TEXT("pose"), JsonFusedPose(Frame.Pose));
+	Result->SetObjectField(TEXT("mediapipe_candidate"), JsonMediaPipeCandidate(Frame.MediaPipeCandidate));
+	TSharedRef<FJsonObject> ShadowCandidate = MakeShared<FJsonObject>();
+	ShadowCandidate->SetBoolField(TEXT("available"), Frame.bHasShadowCandidatePose != 0);
+	ShadowCandidate->SetBoolField(
+		TEXT("mediapipe_authority_allowed"),
+		Frame.bShadowCandidateMediaPipeAuthorityAllowed != 0);
+	ShadowCandidate->SetStringField(
+		TEXT("authority_state"),
+		BodyFusionAuthorityStateName(Frame.ShadowCandidateAuthorityState));
+	ShadowCandidate->SetStringField(TEXT("authority_reason"), Frame.ShadowCandidateReason);
+	ShadowCandidate->SetObjectField(TEXT("pose"), JsonFusedPose(Frame.ShadowCandidatePose));
+	Result->SetObjectField(TEXT("shadow_candidate"), ShadowCandidate);
+	Result->SetObjectField(TEXT("best_available"), JsonBestAvailablePose(Frame.BestAvailablePose));
+	return Result;
+}
+
+void AnalyzeMannyHeadTimeseries(const FString& JsonPath, const FString& AnalyzerPathOverride = FString());
 
 void WriteMannyBoneTimeseries()
 {
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("schema"), TEXT("manny_visible_bone_timeseries_v2"));
+	Root->SetStringField(TEXT("schema"), TEXT("manny_visible_bone_timeseries_v3"));
 	Root->SetStringField(TEXT("status"), TEXT("complete"));
+	Root->SetStringField(TEXT("mode"), GMannyBoneTimeseriesRecorder.Mode);
 	Root->SetBoolField(TEXT("auto_started"), GMannyBoneTimeseriesRecorder.bAutoStarted);
 	Root->SetNumberField(TEXT("auto_start_world_id"), static_cast<double>(GMannyBoneTimeseriesRecorder.AutoStartWorldId));
+	Root->SetNumberField(TEXT("arm_serial"), static_cast<double>(GMannyBoneTimeseriesRecorder.AutoStartArmSerial));
 	Root->SetNumberField(TEXT("duration"), GMannyBoneTimeseriesRecorder.DurationSeconds);
+	Root->SetNumberField(TEXT("requested_duration_seconds"), GMannyBoneTimeseriesRecorder.DurationSeconds);
+	Root->SetNumberField(TEXT("actual_elapsed_seconds"), GMannyBoneTimeseriesRecorder.ActualElapsedSeconds);
+	Root->SetNumberField(TEXT("sample_time_span_seconds"), GMannyBoneTimeseriesRecorder.SampleTimeSpanSeconds);
+	Root->SetNumberField(TEXT("start_wall_seconds"), GMannyBoneTimeseriesRecorder.StartSeconds);
+	Root->SetNumberField(TEXT("end_wall_seconds"), GMannyBoneTimeseriesRecorder.EndSeconds);
+	Root->SetStringField(TEXT("end_reason"), GMannyBoneTimeseriesRecorder.EndReason);
 	Root->SetNumberField(TEXT("sample_count"), GMannyBoneTimeseriesRecorder.SampleCount);
 	Root->SetArrayField(TEXT("samples"), GMannyBoneTimeseriesRecorder.Samples);
 
@@ -352,21 +878,53 @@ void WriteMannyBoneTimeseries()
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.RecordMannyBoneTimeseries: wrote %d samples duration=%.3fs path=%s"),
+		TEXT("mp.RecordMannyBoneTimeseries: wrote %d samples requested=%.3fs actualElapsed=%.3fs sampleSpan=%.3fs reason=%s path=%s"),
 		GMannyBoneTimeseriesRecorder.SampleCount,
 		GMannyBoneTimeseriesRecorder.DurationSeconds,
+		GMannyBoneTimeseriesRecorder.ActualElapsedSeconds,
+		GMannyBoneTimeseriesRecorder.SampleTimeSpanSeconds,
+		*GMannyBoneTimeseriesRecorder.EndReason,
 		*GMannyBoneTimeseriesRecorder.OutputPath);
 
-	AnalyzeMannyHeadTimeseries(GMannyBoneTimeseriesRecorder.OutputPath);
+	AnalyzeMannyHeadTimeseries(
+		GMannyBoneTimeseriesRecorder.OutputPath,
+		GMannyBoneTimeseriesRecorder.AnalyzerPathOverride);
 }
 
-void StopMannyBoneTimeseries()
+void StopMannyBoneTimeseries(const EMannyBoneTimeseriesEndReason Reason = EMannyBoneTimeseriesEndReason::ManualStop)
 {
 	if (!GMannyBoneTimeseriesRecorder.bActive)
 	{
+		UE_LOG(
+			LogMediaPipePose,
+			Verbose,
+			TEXT("mp.RecordMannyBoneTimeseries: stop ignored inactive reason=%s mode=%s"),
+			MannyBoneTimeseriesEndReasonText(Reason),
+			*GMannyBoneTimeseriesRecorder.Mode);
 		return;
 	}
+
+	GMannyBoneTimeseriesRecorder.EndSeconds = FPlatformTime::Seconds();
+	GMannyBoneTimeseriesRecorder.ActualElapsedSeconds = FMath::Max(
+		0.0,
+		GMannyBoneTimeseriesRecorder.EndSeconds - GMannyBoneTimeseriesRecorder.StartSeconds);
+	GMannyBoneTimeseriesRecorder.SampleTimeSpanSeconds = GMannyBoneTimeseriesRecorder.bHasSampleWallSeconds
+		? FMath::Max(0.0, GMannyBoneTimeseriesRecorder.LastSampleWallSeconds - GMannyBoneTimeseriesRecorder.FirstSampleWallSeconds)
+		: 0.0;
+	GMannyBoneTimeseriesRecorder.EndReason = MannyBoneTimeseriesEndReasonText(Reason);
 	GMannyBoneTimeseriesRecorder.bActive = false;
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordMannyBoneTimeseries: finished mode=%s reason=%s actualElapsed=%.3fs requested=%.3fs sampleSpan=%.3fs samples=%d path=%s"),
+		*GMannyBoneTimeseriesRecorder.Mode,
+		*GMannyBoneTimeseriesRecorder.EndReason,
+		GMannyBoneTimeseriesRecorder.ActualElapsedSeconds,
+		GMannyBoneTimeseriesRecorder.DurationSeconds,
+		GMannyBoneTimeseriesRecorder.SampleTimeSpanSeconds,
+		GMannyBoneTimeseriesRecorder.SampleCount,
+		*GMannyBoneTimeseriesRecorder.OutputPath);
 	WriteMannyBoneTimeseries();
 }
 
@@ -381,7 +939,7 @@ FString ResolveRecorderPath(const FString& Path)
 		FPaths::IsRelative(Path) ? FPaths::Combine(FPaths::ProjectDir(), Path) : Path);
 }
 
-void AnalyzeMannyHeadTimeseries(const FString& JsonPath)
+void AnalyzeMannyHeadTimeseries(const FString& JsonPath, const FString& AnalyzerPathOverride)
 {
 	if (CVarRecordMannyHeadAnalyzeAfterWrite.GetValueOnAnyThread() == 0)
 	{
@@ -389,7 +947,10 @@ void AnalyzeMannyHeadTimeseries(const FString& JsonPath)
 	}
 
 	const FString PythonExe = CVarRecordMannyHeadPythonExe.GetValueOnAnyThread();
-	const FString ScriptPath = ResolveRecorderPath(CVarRecordMannyHeadAnalyzerPath.GetValueOnAnyThread());
+	const FString AnalyzerPath = AnalyzerPathOverride.IsEmpty()
+		? CVarRecordMannyHeadAnalyzerPath.GetValueOnAnyThread()
+		: AnalyzerPathOverride;
+	const FString ScriptPath = ResolveRecorderPath(AnalyzerPath);
 	if (!FPaths::FileExists(ScriptPath))
 	{
 		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordMannyHeadTrace: analyzer script not found: %s"), *ScriptPath);
@@ -426,24 +987,44 @@ void AnalyzeMannyHeadTimeseries(const FString& JsonPath)
 	}
 }
 
-void StartMannyBoneTimeseriesRecording(const double DurationSeconds, const FString& OutputPath, const bool bAutoStarted, const uint32 AutoStartWorldId)
+void StartMannyBoneTimeseriesRecording(
+	const double DurationSeconds,
+	const FString& OutputPath,
+	const bool bAutoStarted,
+	const uint32 AutoStartWorldId,
+	const FString& Mode = TEXT("manual"),
+	const FString& AnalyzerPathOverride = FString(),
+	const uint32 AutoStartArmSerial = 0)
 {
 	GMannyBoneTimeseriesRecorder.bActive = true;
 	GMannyBoneTimeseriesRecorder.bAutoStarted = bAutoStarted;
 	GMannyBoneTimeseriesRecorder.OutputPath = ResolveRecorderPath(OutputPath);
 	GMannyBoneTimeseriesRecorder.StartSeconds = FPlatformTime::Seconds();
+	GMannyBoneTimeseriesRecorder.EndSeconds = 0.0;
 	GMannyBoneTimeseriesRecorder.DurationSeconds = FMath::Clamp(DurationSeconds, 0.1, 120.0);
+	GMannyBoneTimeseriesRecorder.ActualElapsedSeconds = 0.0;
+	GMannyBoneTimeseriesRecorder.FirstSampleWallSeconds = 0.0;
+	GMannyBoneTimeseriesRecorder.LastSampleWallSeconds = 0.0;
+	GMannyBoneTimeseriesRecorder.SampleTimeSpanSeconds = 0.0;
 	GMannyBoneTimeseriesRecorder.SampleCount = 0;
 	GMannyBoneTimeseriesRecorder.AutoStartWorldId = AutoStartWorldId;
+	GMannyBoneTimeseriesRecorder.AutoStartArmSerial = AutoStartArmSerial;
+	GMannyBoneTimeseriesRecorder.bHasSampleWallSeconds = false;
+	GMannyBoneTimeseriesRecorder.Mode = Mode;
+	GMannyBoneTimeseriesRecorder.EndReason.Reset();
+	GMannyBoneTimeseriesRecorder.AnalyzerPathOverride = AnalyzerPathOverride;
 	GMannyBoneTimeseriesRecorder.Samples.Reset();
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s auto=%d worldId=%u"),
+		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s auto=%d worldId=%u armSerial=%u mode=%s analyzerOverride=%s"),
 		GMannyBoneTimeseriesRecorder.DurationSeconds,
 		*GMannyBoneTimeseriesRecorder.OutputPath,
 		bAutoStarted ? 1 : 0,
-		AutoStartWorldId);
+		AutoStartWorldId,
+		AutoStartArmSerial,
+		*GMannyBoneTimeseriesRecorder.Mode,
+		*GMannyBoneTimeseriesRecorder.AnalyzerPathOverride);
 }
 
 void StartMannyBoneTimeseries(const TArray<FString>& Args)
@@ -469,6 +1050,262 @@ void StartMannyBoneTimeseries(const TArray<FString>& Args)
 	}
 
 	StartMannyBoneTimeseriesRecording(DurationSeconds, OutputPath, false, 0);
+}
+
+void SetConsoleVariableIntForShadowCapture(const TCHAR* Name, const int32 Value)
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+	if (!Variable)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.StartMPQShadowFusionCapture: missing CVar %s"), Name);
+		return;
+	}
+	Variable->Set(Value, ECVF_SetByConsole);
+}
+
+void SetConsoleVariableFloatForShadowCapture(const TCHAR* Name, const float Value)
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+	if (!Variable)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.StartMPQShadowFusionCapture: missing CVar %s"), Name);
+		return;
+	}
+	Variable->Set(Value, ECVF_SetByConsole);
+}
+
+void SetConsoleVariableStringForShadowCapture(const TCHAR* Name, const FString& Value)
+{
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+	if (!Variable)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.StartMPQShadowFusionCapture: missing CVar %s"), Name);
+		return;
+	}
+	Variable->Set(*Value, ECVF_SetByConsole);
+}
+
+void ApplyMPQShadowFusionCaptureCVars()
+{
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Enable"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Debug"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.WritePose"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.MediaPipeAuthority"), 0);
+
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestHandTracking"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestHandDriveFingerBones"), 1);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.QuestHandRotationBlend"), 1.0f);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestHandDebug"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestWristTrace"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MetaHumanArmSanity"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MetaHumanFullArmChainTrace"), 1);
+
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestArmDropoutDownFallback"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestConstrainedArmBodyFallback"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"), 0);
+}
+
+void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
+{
+	int32 InputMaxDimension = 384;
+	double DurationSeconds = 45.0;
+	float MaxPredictionMs = 50.0f;
+	bool bPredictionEnabled = true;
+	FString Label;
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+		if (Key.Equals(TEXT("maxdim"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("input"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("size"), ESearchCase::IgnoreCase))
+		{
+			InputMaxDimension = FMath::Clamp(FCString::Atoi(*Value), 256, 1024);
+		}
+		else if (Key.Equals(TEXT("duration"), ESearchCase::IgnoreCase))
+		{
+			DurationSeconds = FMath::Clamp(FCString::Atod(*Value), 0.1, 120.0);
+		}
+		else if (Key.Equals(TEXT("prediction"), ESearchCase::IgnoreCase))
+		{
+			bPredictionEnabled = FCString::Atoi(*Value) != 0;
+		}
+		else if (Key.Equals(TEXT("maxPredictionMs"), ESearchCase::IgnoreCase))
+		{
+			MaxPredictionMs = FMath::Clamp(FCString::Atof(*Value), 0.0f, 250.0f);
+		}
+		else if (Key.Equals(TEXT("label"), ESearchCase::IgnoreCase))
+		{
+			Label = Value;
+		}
+	}
+
+	ApplyMPQShadowFusionCaptureCVars();
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamHandsCameraIndex"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamDirectWmfCapture"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamPreview"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamHandsInputMaxDimension"), InputMaxDimension);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeInputMaxDimension"), InputMaxDimension);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeAdaptivePosePrediction"), bPredictionEnabled ? 1 : 0);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"), MaxPredictionMs);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeAdaptivePoseQualityDebug"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeAdaptivePoseLog"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlay"), 1);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlayDuration"), static_cast<float>(DurationSeconds));
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"), 1);
+
+	const FString Stamp = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
+	if (Label.IsEmpty())
+	{
+		Label = FString::Printf(
+			TEXT("camo_%d_pred%d_%03dms"),
+			InputMaxDimension,
+			bPredictionEnabled ? 1 : 0,
+			FMath::RoundToInt(MaxPredictionMs));
+	}
+	const FString OutputPath = FString::Printf(
+		TEXT("Saved/CodexAgent/Diagnostics/mpq_shadow_latency_%s_%s.json"),
+		*Label,
+		*Stamp);
+	SetConsoleVariableStringForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlayPath"), OutputPath);
+	ArmMPQShadowAutoStartRequest(DurationSeconds, OutputPath, true, Label);
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=%d duration=%.3fs prediction=%d maxPredictionMs=%.1f path=%s BodyFusion shadow-only armFallbacks=off"),
+		InputMaxDimension,
+		DurationSeconds,
+		bPredictionEnabled ? 1 : 0,
+		MaxPredictionMs,
+		*OutputPath);
+}
+
+void StartMPQShadowFusionCapture(const TArray<FString>& Args)
+{
+	FString OutputPath(TEXT("Saved/CodexAgent/Diagnostics/mpq_shadow_fusion_latest.json"));
+	double DurationSeconds = 12.0;
+	bool bAnalyzeAfterWrite = true;
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+		if (Key.Equals(TEXT("path"), ESearchCase::IgnoreCase))
+		{
+			OutputPath = Value;
+		}
+		else if (Key.Equals(TEXT("duration"), ESearchCase::IgnoreCase))
+		{
+			DurationSeconds = FMath::Clamp(FCString::Atod(*Value), 0.1, 120.0);
+		}
+		else if (Key.Equals(TEXT("analyze"), ESearchCase::IgnoreCase))
+		{
+			bAnalyzeAfterWrite = FCString::Atoi(*Value) != 0;
+		}
+	}
+
+	ApplyMPQShadowFusionCaptureCVars();
+	StartMannyBoneTimeseriesRecording(
+		DurationSeconds,
+		OutputPath,
+		false,
+		0,
+		TEXT("mpq_shadow_fusion"),
+		bAnalyzeAfterWrite ? FString(TEXT("Tools/AnalyzeMPQShadowFusionCapture.py")) : FString());
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.StartMPQShadowFusionCapture: duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0) armFallbacks=off"),
+		DurationSeconds,
+		*OutputPath,
+		bAnalyzeAfterWrite ? 1 : 0);
+}
+
+void TryAutoStartMPQShadowFusionTimeseries(const AMediaPipePoseDrivenSkeletalActor* Actor, const USkeletalMeshComponent* DrivenMesh)
+{
+	if (!IsMPQShadowAutoStartArmed())
+	{
+		return;
+	}
+
+	EnsureMPQShadowAutoStartRequestFromCVars();
+	if (!Actor)
+	{
+		LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::NoActor, nullptr, nullptr, DrivenMesh, TEXT("auto-start helper"));
+		return;
+	}
+
+	const UWorld* World = Actor->GetWorld();
+	if (!DrivenMesh)
+	{
+		LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::NoDrivenMesh, World, Actor, nullptr, TEXT("DrivenMesh missing in auto-start helper"));
+		return;
+	}
+
+	if (GMannyBoneTimeseriesRecorder.bActive)
+	{
+		LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::RecorderAlreadyActive, World, Actor, DrivenMesh, TEXT("shared recorder already active"));
+		return;
+	}
+
+	if (!World || (World->WorldType != EWorldType::PIE && World->WorldType != EWorldType::Game))
+	{
+		LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::WrongWorldType, World, Actor, DrivenMesh, TEXT("expected PIE or Game world"));
+		return;
+	}
+
+	const uint32 WorldId = World->GetUniqueID();
+	if (WorldId != 0
+		&& GMPQShadowAutoStartRequest.StartedWorldId == WorldId
+		&& GMPQShadowAutoStartRequest.StartedArmSerial == GMPQShadowAutoStartRequest.ArmSerial)
+	{
+		LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::DuplicateWorldForSameArm, World, Actor, DrivenMesh, TEXT("same arm serial already started in this world"));
+		return;
+	}
+
+	ApplyMPQShadowFusionCaptureCVars();
+	const double DurationSeconds = FMath::Clamp(GMPQShadowAutoStartRequest.DurationSeconds, 0.1, 120.0);
+	const bool bAnalyzeAfterWrite = GMPQShadowAutoStartRequest.bAnalyzeAfterWrite;
+	const FString OutputPath = GMPQShadowAutoStartRequest.OutputPath.IsEmpty()
+		? CVarRecordMPQShadowFusionOnPlayPath.GetValueOnAnyThread()
+		: GMPQShadowAutoStartRequest.OutputPath;
+	const uint32 ArmSerial = GMPQShadowAutoStartRequest.ArmSerial;
+	StartMannyBoneTimeseriesRecording(
+		DurationSeconds,
+		OutputPath,
+		true,
+		WorldId,
+		TEXT("auto_mpq_shadow_fusion"),
+		bAnalyzeAfterWrite ? FString(TEXT("Tools/AnalyzeMPQShadowFusionCapture.py")) : FString(),
+		ArmSerial);
+	GMannyBoneTimeseriesRecorder.LastAutoStartWorldId = WorldId;
+	GMPQShadowAutoStartRequest.StartedWorldId = WorldId;
+	GMPQShadowAutoStartRequest.StartedArmSerial = ArmSerial;
+	GMPQShadowAutoStartRequest.bArmed = false;
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlay"), 0);
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.MPQShadowAutoStart: started serial=%u worldId=%u duration=%.3fs path=%s analyze=%d"),
+		ArmSerial,
+		WorldId,
+		DurationSeconds,
+		*OutputPath,
+		bAnalyzeAfterWrite ? 1 : 0);
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.StartMPQShadowFusionCapture: autoOnPlay=1 duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0) armFallbacks=off"),
+		DurationSeconds,
+		*OutputPath,
+		bAnalyzeAfterWrite ? 1 : 0);
 }
 
 void TryAutoStartMannyHeadTimeseries(const AMediaPipePoseDrivenSkeletalActor* Actor)
@@ -512,17 +1349,43 @@ void TryAutoStartMannyHeadTimeseries(const AMediaPipePoseDrivenSkeletalActor* Ac
 		DurationSeconds,
 		CVarRecordMannyHeadOnPlayPath.GetValueOnAnyThread(),
 		true,
-		WorldId);
+		WorldId,
+		TEXT("auto_head_trace"));
 	GMannyBoneTimeseriesRecorder.LastAutoStartWorldId = WorldId;
 }
 
 void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Actor, USkeletalMeshComponent* DrivenMesh, const float DeltaSeconds)
 {
-	if (!Actor || !DrivenMesh || !Actor->Tags.Contains(LiveMannyTag))
+	const bool bMPQArmed = IsMPQShadowAutoStartArmed();
+	if (!Actor)
 	{
+		if (bMPQArmed)
+		{
+			LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::NoActor, nullptr, nullptr, DrivenMesh, TEXT("RecordMannyBoneTimeseriesSample"));
+		}
 		return;
 	}
 
+	const UWorld* World = Actor->GetWorld();
+	if (!DrivenMesh)
+	{
+		if (bMPQArmed)
+		{
+			LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::NoDrivenMesh, World, Actor, nullptr, TEXT("DrivenMesh missing before auto-start"));
+		}
+		return;
+	}
+
+	if (!Actor->Tags.Contains(LiveMannyTag))
+	{
+		if (bMPQArmed)
+		{
+			LogMPQShadowAutoStartSkip(EMPQShadowAutoStartSkipReason::MissingLiveMannyTag, World, Actor, DrivenMesh, TEXT("Actor did not contain LiveMannyTag"));
+		}
+		return;
+	}
+
+	TryAutoStartMPQShadowFusionTimeseries(Actor, DrivenMesh);
 	TryAutoStartMannyHeadTimeseries(Actor);
 	if (!GMannyBoneTimeseriesRecorder.bActive)
 	{
@@ -533,7 +1396,7 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 	const double ElapsedSeconds = FMath::Max(0.0, NowSeconds - GMannyBoneTimeseriesRecorder.StartSeconds);
 	if (ElapsedSeconds > GMannyBoneTimeseriesRecorder.DurationSeconds)
 	{
-		StopMannyBoneTimeseries();
+		StopMannyBoneTimeseries(EMannyBoneTimeseriesEndReason::DurationReached);
 		return;
 	}
 
@@ -568,6 +1431,7 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 	TSharedRef<FJsonObject> Sample = MakeShared<FJsonObject>();
 	Sample->SetNumberField(TEXT("t"), SampleSeconds);
 	Sample->SetNumberField(TEXT("wall_t"), ElapsedSeconds);
+	Sample->SetNumberField(TEXT("sample_wall_seconds"), NowSeconds);
 	Sample->SetNumberField(TEXT("delta"), DeltaSeconds);
 	Sample->SetNumberField(TEXT("media_t"), MediaSeconds);
 	Sample->SetBoolField(TEXT("pose_available"), bHasLatestPoseFrame);
@@ -585,6 +1449,12 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		PipelineObject->SetNumberField(TEXT("component_enqueue_success_count"), static_cast<double>(PosePipelineStats.ComponentEnqueueSuccessCount));
 		PipelineObject->SetNumberField(TEXT("component_enqueue_fail_count"), static_cast<double>(PosePipelineStats.ComponentEnqueueFailCount));
 		PipelineObject->SetNumberField(TEXT("component_read_fail_count"), static_cast<double>(PosePipelineStats.ComponentReadFailCount));
+		PipelineObject->SetNumberField(TEXT("component_conversion_count"), static_cast<double>(PosePipelineStats.ComponentConversionCount));
+		PipelineObject->SetNumberField(TEXT("component_conversion_total_ms"), PosePipelineStats.ComponentConversionTotalMs);
+		PipelineObject->SetNumberField(TEXT("component_conversion_max_ms"), PosePipelineStats.ComponentConversionMaxMs);
+		PipelineObject->SetNumberField(TEXT("component_readback_latency_sample_count"), static_cast<double>(PosePipelineStats.ComponentReadbackLatencySampleCount));
+		PipelineObject->SetNumberField(TEXT("component_readback_latency_total_ms"), PosePipelineStats.ComponentReadbackLatencyTotalMs);
+		PipelineObject->SetNumberField(TEXT("component_readback_latency_max_ms"), PosePipelineStats.ComponentReadbackLatencyMaxMs);
 		PipelineObject->SetNumberField(TEXT("tracker_enqueue_count"), static_cast<double>(PosePipelineStats.TrackerEnqueueCount));
 		PipelineObject->SetNumberField(TEXT("tracker_clear_count"), static_cast<double>(PosePipelineStats.TrackerClearCount));
 		PipelineObject->SetNumberField(TEXT("tracker_publish_count"), static_cast<double>(PosePipelineStats.TrackerPublishCount));
@@ -594,6 +1464,15 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		PipelineObject->SetNumberField(TEXT("worker_process_count"), static_cast<double>(PosePipelineStats.WorkerProcessCount));
 		PipelineObject->SetNumberField(TEXT("worker_process_fail_count"), static_cast<double>(PosePipelineStats.WorkerProcessFailCount));
 		PipelineObject->SetNumberField(TEXT("worker_landmark_fail_count"), static_cast<double>(PosePipelineStats.WorkerLandmarkFailCount));
+		PipelineObject->SetNumberField(TEXT("worker_queue_latency_sample_count"), static_cast<double>(PosePipelineStats.WorkerQueueLatencySampleCount));
+		PipelineObject->SetNumberField(TEXT("worker_queue_latency_total_ms"), PosePipelineStats.WorkerQueueLatencyTotalMs);
+		PipelineObject->SetNumberField(TEXT("worker_queue_latency_max_ms"), PosePipelineStats.WorkerQueueLatencyMaxMs);
+		PipelineObject->SetNumberField(TEXT("worker_native_process_sample_count"), static_cast<double>(PosePipelineStats.WorkerNativeProcessSampleCount));
+		PipelineObject->SetNumberField(TEXT("worker_native_process_total_ms"), PosePipelineStats.WorkerNativeProcessTotalMs);
+		PipelineObject->SetNumberField(TEXT("worker_native_process_max_ms"), PosePipelineStats.WorkerNativeProcessMaxMs);
+		PipelineObject->SetNumberField(TEXT("worker_get_landmarks_sample_count"), static_cast<double>(PosePipelineStats.WorkerGetLandmarksSampleCount));
+		PipelineObject->SetNumberField(TEXT("worker_get_landmarks_total_ms"), PosePipelineStats.WorkerGetLandmarksTotalMs);
+		PipelineObject->SetNumberField(TEXT("worker_get_landmarks_max_ms"), PosePipelineStats.WorkerGetLandmarksMaxMs);
 		PipelineObject->SetNumberField(TEXT("last_media_time_seconds"), PosePipelineStats.LastMediaTimeSeconds);
 		PipelineObject->SetNumberField(TEXT("last_media_frame_rate"), PosePipelineStats.LastMediaFrameRate);
 		PipelineObject->SetNumberField(TEXT("last_media_step_seconds"), PosePipelineStats.LastMediaStepSeconds);
@@ -609,6 +1488,45 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		Sample->SetNumberField(TEXT("pose_t"), PoseSeconds);
 		Sample->SetNumberField(TEXT("pose_timestamp_us"), static_cast<double>(LatestPoseFrame.TimestampUs));
 		Sample->SetNumberField(TEXT("media_minus_pose_t"), MediaSeconds - PoseSeconds);
+		TSharedRef<FJsonObject> TimingObject = MakeShared<FJsonObject>();
+		TimingObject->SetNumberField(TEXT("sample_wall_seconds"), NowSeconds);
+		TimingObject->SetNumberField(TEXT("source_capture_wall_seconds"), LatestPoseFrame.SourceCaptureWallSeconds);
+		TimingObject->SetNumberField(TEXT("enqueue_wall_seconds"), LatestPoseFrame.EnqueueWallSeconds);
+		TimingObject->SetNumberField(TEXT("worker_start_wall_seconds"), LatestPoseFrame.WorkerStartWallSeconds);
+		TimingObject->SetNumberField(TEXT("native_process_end_wall_seconds"), LatestPoseFrame.NativeProcessEndWallSeconds);
+		TimingObject->SetNumberField(TEXT("landmark_end_wall_seconds"), LatestPoseFrame.LandmarkEndWallSeconds);
+		TimingObject->SetNumberField(TEXT("publish_wall_seconds"), LatestPoseFrame.PublishWallSeconds);
+		TimingObject->SetNumberField(TEXT("conditioned_query_wall_seconds"), LatestPoseFrame.ConditionedQueryWallSeconds);
+		TimingObject->SetNumberField(TEXT("native_pose_timestamp_seconds"), PoseSeconds);
+		if (LatestPoseFrame.SourceCaptureWallSeconds >= 0.0 && LatestPoseFrame.EnqueueWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("capture_to_enqueue_ms"), (LatestPoseFrame.EnqueueWallSeconds - LatestPoseFrame.SourceCaptureWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.EnqueueWallSeconds >= 0.0 && LatestPoseFrame.WorkerStartWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("enqueue_to_worker_start_ms"), (LatestPoseFrame.WorkerStartWallSeconds - LatestPoseFrame.EnqueueWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.WorkerStartWallSeconds >= 0.0 && LatestPoseFrame.NativeProcessEndWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("native_process_ms"), (LatestPoseFrame.NativeProcessEndWallSeconds - LatestPoseFrame.WorkerStartWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.NativeProcessEndWallSeconds >= 0.0 && LatestPoseFrame.LandmarkEndWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("get_landmarks_ms"), (LatestPoseFrame.LandmarkEndWallSeconds - LatestPoseFrame.NativeProcessEndWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.SourceCaptureWallSeconds >= 0.0 && LatestPoseFrame.PublishWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("capture_to_publish_ms"), (LatestPoseFrame.PublishWallSeconds - LatestPoseFrame.SourceCaptureWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.PublishWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("publish_to_sample_ms"), (NowSeconds - LatestPoseFrame.PublishWallSeconds) * 1000.0);
+		}
+		if (LatestPoseFrame.SourceCaptureWallSeconds >= 0.0)
+		{
+			TimingObject->SetNumberField(TEXT("capture_to_sample_ms"), (NowSeconds - LatestPoseFrame.SourceCaptureWallSeconds) * 1000.0);
+		}
+		Sample->SetObjectField(TEXT("timing"), TimingObject);
 
 		const FMediaPipePoseFrame::FConditioningDiagnostics& Conditioning = LatestPoseFrame.ConditioningDiagnostics;
 		TSharedRef<FJsonObject> ConditioningObject = MakeShared<FJsonObject>();
@@ -692,6 +1610,11 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		}
 	}
 
+	if (const UEmbodiedFusionComponent* FusionComponent = Actor->GetActiveEmbodiedFusionComponent())
+	{
+		Sample->SetObjectField(TEXT("fusion"), JsonEmbodiedFusionFrame(FusionComponent->GetLatestFusionFrame()));
+	}
+
 	TSharedRef<FJsonObject> ActorObject = MakeShared<FJsonObject>();
 	ActorObject->SetStringField(TEXT("label"), Actor->GetActorLabel());
 	ActorObject->SetArrayField(TEXT("loc"), JsonVector(Actor->GetActorLocation()));
@@ -721,6 +1644,12 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 	Sample->SetObjectField(TEXT("live"), Live);
 	GMannyBoneTimeseriesRecorder.Samples.Add(MakeShared<FJsonValueObject>(Sample));
 	++GMannyBoneTimeseriesRecorder.SampleCount;
+	if (!GMannyBoneTimeseriesRecorder.bHasSampleWallSeconds)
+	{
+		GMannyBoneTimeseriesRecorder.FirstSampleWallSeconds = NowSeconds;
+		GMannyBoneTimeseriesRecorder.bHasSampleWallSeconds = true;
+	}
+	GMannyBoneTimeseriesRecorder.LastSampleWallSeconds = NowSeconds;
 }
 
 FAutoConsoleCommand GMannyBoneTimeseriesCommand(
@@ -732,6 +1661,16 @@ FAutoConsoleCommand GMannyHeadTimeseriesCommand(
 	TEXT("mp.RecordMannyHeadTimeseries"),
 	TEXT("Record source-head, solver-head, and Manny-head traces to JSON and analyze them. Usage: mp.RecordMannyHeadTimeseries duration=12 path=Saved/CodexAgent/Diagnostics/head.json"),
 	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMannyBoneTimeseries));
+
+FAutoConsoleCommand GMPQShadowFusionCaptureCommand(
+	TEXT("mp.StartMPQShadowFusionCapture"),
+	TEXT("Start a shadow-only MediaPipe/Quest/BodyFusion diagnostic capture. Usage: mp.StartMPQShadowFusionCapture duration=12 path=Saved/CodexAgent/Diagnostics/mpq_shadow_fusion.json analyze=1"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMPQShadowFusionCapture));
+
+FAutoConsoleCommand GMPQShadowLatencyTrialCommand(
+	TEXT("mp.PrepareMPQShadowLatencyTrial"),
+	TEXT("Prepare the next VR Preview for a shadow-only MediaPipe/Quest latency trial. Usage: mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=camo384"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&PrepareMPQShadowLatencyTrial));
 
 int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeletalMeshComponent* PresentationMesh)
 {
@@ -973,7 +1912,7 @@ void AMediaPipePoseDrivenSkeletalActor::EndPlay(const EEndPlayReason::Type EndPl
 {
 	if (Tags.Contains(LiveMannyTag))
 	{
-		StopMannyBoneTimeseries();
+		StopMannyBoneTimeseries(EMannyBoneTimeseriesEndReason::EndPlay);
 	}
 
 	Super::EndPlay(EndPlayReason);

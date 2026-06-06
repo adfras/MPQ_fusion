@@ -196,6 +196,90 @@ void SetUpperLimbFromFusionPointChain(
 	OutLimb.Source = Source;
 	OutLimb.Status = Status;
 }
+
+static constexpr float MediaPipeCandidateMinReliability = 0.45f;
+
+void SetMediaPipeCandidatePoint(
+	FMediaPipeFusedAvatarPose& Pose,
+	const EMediaPipeBodyFusionRegion Region,
+	const FVector& LocationWorld,
+	const EMediaPipeBodyFusionSourceState SourceState,
+	const float Confidence)
+{
+	FMediaPipeFusedBodyPoint Point;
+	Point.LocationWorld = LocationWorld;
+	Point.RotationWorld = FQuat::Identity;
+	Point.Owner = EMediaPipeBodyFusionOwner::MediaPipe;
+	Point.SourceState = SourceState;
+	Point.Confidence = FMath::Clamp(Confidence, 0.0f, 1.0f);
+	Point.bValid = !LocationWorld.ContainsNaN();
+	Pose.SetPoint(Region, Point);
+}
+
+bool TryGetReliableMediaPipeCandidateLandmark(
+	const FMediaPipeTrackingSourceFrame& SourceFrame,
+	const EMediaPipePoseLandmark Landmark,
+	FVector& OutLocationWorld,
+	float& OutReliability)
+{
+	OutReliability = 0.0f;
+	if (!SourceFrame.TryGetBodyLandmark(Landmark, OutLocationWorld, &OutReliability) ||
+		OutReliability < MediaPipeCandidateMinReliability)
+	{
+		return false;
+	}
+	return true;
+}
+
+bool TrySetMediaPipeCandidateLandmark(
+	const FMediaPipeTrackingSourceFrame& SourceFrame,
+	const FMediaPipeEmbodimentCalibration& Calibration,
+	FMediaPipeFusedAvatarPose& Pose,
+	const EMediaPipePoseLandmark Landmark,
+	const EMediaPipeBodyFusionRegion Region)
+{
+	FVector LandmarkWorld = FVector::ZeroVector;
+	float Reliability = 0.0f;
+	if (!TryGetReliableMediaPipeCandidateLandmark(SourceFrame, Landmark, LandmarkWorld, Reliability))
+	{
+		return false;
+	}
+
+	SetMediaPipeCandidatePoint(
+		Pose,
+		Region,
+		Calibration.TransformMediaPipePoint(LandmarkWorld),
+		SourceFrame.BodyPoseStatus.State,
+		Reliability);
+	return true;
+}
+
+bool TrySetMediaPipeCandidateMidpoint(
+	const FMediaPipeTrackingSourceFrame& SourceFrame,
+	const FMediaPipeEmbodimentCalibration& Calibration,
+	FMediaPipeFusedAvatarPose& Pose,
+	const EMediaPipePoseLandmark LeftLandmark,
+	const EMediaPipePoseLandmark RightLandmark,
+	const EMediaPipeBodyFusionRegion Region)
+{
+	FVector LeftWorld = FVector::ZeroVector;
+	FVector RightWorld = FVector::ZeroVector;
+	float LeftReliability = 0.0f;
+	float RightReliability = 0.0f;
+	if (!TryGetReliableMediaPipeCandidateLandmark(SourceFrame, LeftLandmark, LeftWorld, LeftReliability) ||
+		!TryGetReliableMediaPipeCandidateLandmark(SourceFrame, RightLandmark, RightWorld, RightReliability))
+	{
+		return false;
+	}
+
+	SetMediaPipeCandidatePoint(
+		Pose,
+		Region,
+		Calibration.TransformMediaPipePoint((LeftWorld + RightWorld) * 0.5f),
+		SourceFrame.BodyPoseStatus.State,
+		(LeftReliability + RightReliability) * 0.5f);
+	return true;
+}
 }
 
 void FEmbodiedFusionHandJointPose::Reset()
@@ -244,18 +328,36 @@ const FEmbodiedFusionUpperLimbPose& FEmbodiedFusionBestAvailablePose::GetUpperLi
 	return bLeft ? LeftUpperLimb : RightUpperLimb;
 }
 
+void FEmbodiedFusionMediaPipeCandidate::Reset()
+{
+	Pose.Reset();
+	BodyPoseStatus = FMediaPipeBodyFusionSourceStatus();
+	TimestampSeconds = -1.0;
+	Confidence = 0.0f;
+	bHasBodyPose = 0;
+	bCalibrationUsable = 0;
+	bHasCalibratedPose = 0;
+	Reason.Reset();
+}
+
 void FEmbodiedFusionFrame::ResetTransient()
 {
 	SourceFrame.Reset();
 	FreshnessThresholds = FMediaPipeBodyFusionFreshnessThresholds();
 	Pose.Reset();
+	MediaPipeCandidate.Reset();
+	ShadowCandidatePose.Reset();
 	Authority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	AuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
+	ShadowCandidateAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
 	AuthorityReason.Reset();
+	ShadowCandidateReason.Reset();
 	Calibration = FMediaPipeEmbodimentCalibration();
 	CalibrationStableFrameCount = 0;
 	CalibrationStableSeconds = 0.0f;
 	bMediaPipeAuthorityAllowed = 0;
+	bShadowCandidateMediaPipeAuthorityAllowed = 0;
+	bHasShadowCandidatePose = 0;
 	bRuntimeEnabled = 0;
 	BestAvailablePose.Reset();
 }
@@ -281,6 +383,96 @@ void UEmbodiedFusionComponent::ResetFusionState()
 	LastAcceptedHmdPose = FMediaPipeQuestHmdPoseSnapshot();
 	LastAcceptedHmdPoseTimeSeconds = -1.0;
 	HmdPoseConditionedFrameCount = 0;
+}
+
+bool UEmbodiedFusionComponent::BuildMediaPipeCandidatePose(
+	const FMediaPipeTrackingSourceFrame& SourceFrame,
+	const FMediaPipeEmbodimentCalibration& Calibration,
+	FEmbodiedFusionMediaPipeCandidate& OutCandidate)
+{
+	OutCandidate.Reset();
+	OutCandidate.BodyPoseStatus = SourceFrame.BodyPoseStatus;
+	OutCandidate.TimestampSeconds = SourceFrame.BodyPoseTimestampSeconds;
+	OutCandidate.Confidence = SourceFrame.BodyPoseConfidence;
+	OutCandidate.bHasBodyPose = SourceFrame.bHasBodyPose ? 1 : 0;
+	OutCandidate.bCalibrationUsable = Calibration.IsUsable() ? 1 : 0;
+
+	if (!SourceFrame.bHasBodyPose)
+	{
+		OutCandidate.Reason = TEXT("no_body_pose");
+		return false;
+	}
+	if (!SourceFrame.BodyPoseStatus.IsFresh())
+	{
+		OutCandidate.Reason = FString::Printf(
+			TEXT("body_pose_not_fresh:%s"),
+			*FMediaPipeBodyFusionDebugFormatter::StatusString(SourceFrame.BodyPoseStatus));
+		return false;
+	}
+	if (!Calibration.IsUsable())
+	{
+		OutCandidate.Reason = Calibration.LastRejectReason.IsEmpty()
+			? TEXT("calibration_not_usable")
+			: FString::Printf(TEXT("calibration_not_usable:%s"), *Calibration.LastRejectReason);
+		return false;
+	}
+
+	FMediaPipeFusedAvatarPose& Pose = OutCandidate.Pose;
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftShoulder, EMediaPipeBodyFusionRegion::LeftShoulder);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightShoulder, EMediaPipeBodyFusionRegion::RightShoulder);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftElbow, EMediaPipeBodyFusionRegion::LeftElbow);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightElbow, EMediaPipeBodyFusionRegion::RightElbow);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftWrist, EMediaPipeBodyFusionRegion::LeftWrist);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightWrist, EMediaPipeBodyFusionRegion::RightWrist);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftHip, EMediaPipeBodyFusionRegion::LeftHip);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightHip, EMediaPipeBodyFusionRegion::RightHip);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftKnee, EMediaPipeBodyFusionRegion::LeftKnee);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightKnee, EMediaPipeBodyFusionRegion::RightKnee);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftAnkle, EMediaPipeBodyFusionRegion::LeftAnkle);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightAnkle, EMediaPipeBodyFusionRegion::RightAnkle);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftFootIndex, EMediaPipeBodyFusionRegion::LeftFoot);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightFootIndex, EMediaPipeBodyFusionRegion::RightFoot);
+
+	const bool bHasPelvis =
+		TrySetMediaPipeCandidateMidpoint(
+			SourceFrame,
+			Calibration,
+			Pose,
+			EMediaPipePoseLandmark::LeftHip,
+			EMediaPipePoseLandmark::RightHip,
+			EMediaPipeBodyFusionRegion::Pelvis);
+	const bool bHasChest =
+		TrySetMediaPipeCandidateMidpoint(
+			SourceFrame,
+			Calibration,
+			Pose,
+			EMediaPipePoseLandmark::LeftShoulder,
+			EMediaPipePoseLandmark::RightShoulder,
+			EMediaPipeBodyFusionRegion::Chest);
+	if (bHasPelvis)
+	{
+		SetMediaPipeCandidatePoint(
+			Pose,
+			EMediaPipeBodyFusionRegion::Root,
+			Pose.Pelvis.LocationWorld,
+			SourceFrame.BodyPoseStatus.State,
+			Pose.Pelvis.Confidence);
+	}
+	if (bHasPelvis && bHasChest)
+	{
+		SetMediaPipeCandidatePoint(
+			Pose,
+			EMediaPipeBodyFusionRegion::Spine,
+			(Pose.Pelvis.LocationWorld + Pose.Chest.LocationWorld) * 0.5f,
+			SourceFrame.BodyPoseStatus.State,
+			(Pose.Pelvis.Confidence + Pose.Chest.Confidence) * 0.5f);
+	}
+
+	OutCandidate.bHasCalibratedPose = (bHasPelvis || bHasChest || Pose.LeftShoulder.bValid || Pose.RightShoulder.bValid) ? 1 : 0;
+	OutCandidate.Reason = OutCandidate.bHasCalibratedPose != 0
+		? TEXT("mediapipe_body_pose_calibrated")
+		: TEXT("no_reliable_candidate_landmarks");
+	return OutCandidate.bHasCalibratedPose != 0;
 }
 
 FMediaPipeQuestHmdPoseSnapshot UEmbodiedFusionComponent::ConditionHmdPose_GameThread(
@@ -484,7 +676,11 @@ void UEmbodiedFusionComponent::UpdateBodyPoseObservation_GameThread(
 {
 	SourceObservations.NowSeconds = TimestampSeconds;
 	SourceObservations.BodyPose.Reset();
-	SourceObservations.BodyPose.TimestampSeconds = TimestampSeconds;
+	SourceObservations.BodyPose.TimestampSeconds = Frame.PublishWallSeconds >= 0.0
+		? Frame.PublishWallSeconds
+		: (Frame.LandmarkEndWallSeconds >= 0.0
+			? Frame.LandmarkEndWallSeconds
+			: TimestampSeconds);
 	for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
 	{
 		if (LandmarkValid[Index] == 0)
@@ -553,6 +749,7 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 	LatestFrame.Calibration = Calibration;
 	LatestFrame.CalibrationStableFrameCount = CalibrationStableFrameCount;
 	LatestFrame.CalibrationStableSeconds = CalibrationStableSeconds;
+	BuildMediaPipeCandidatePose(LatestFrame.SourceFrame, Calibration, LatestFrame.MediaPipeCandidate);
 
 	FMediaPipeBodyFusionSolveInput SolveInput;
 	SolveInput.SourceFrame = LatestFrame.SourceFrame;
@@ -566,6 +763,26 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 
 	LatestFrame.Pose.Reset();
 	FMediaPipeBodyFusionSolver::Solve(SolveInput, LatestFrame.Pose);
+
+	FMediaPipeBodyFusionAuthorityGateInput ShadowCandidateGateInput = AuthorityGateInput;
+	ShadowCandidateGateInput.MediaPipeAuthorityMode = FMath::Max(RuntimePolicy.MediaPipeAuthorityMode, 1);
+	const FMediaPipeBodyFusionAuthorityGateDecision ShadowCandidateDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(ShadowCandidateGateInput);
+	LatestFrame.ShadowCandidateAuthorityState = ShadowCandidateDecision.AuthorityState;
+	LatestFrame.ShadowCandidateReason = ShadowCandidateDecision.Reason;
+	LatestFrame.bShadowCandidateMediaPipeAuthorityAllowed =
+		ShadowCandidateDecision.bAllowMediaPipePoseAuthority ? 1 : 0;
+	if (ShadowCandidateDecision.bAllowMediaPipePoseAuthority != 0)
+	{
+		FMediaPipeBodyFusionSolveInput ShadowCandidateInput = SolveInput;
+		ShadowCandidateInput.Authority = ShadowCandidateDecision.Authority;
+		ShadowCandidateInput.bAllowMediaPipePoseAuthority = true;
+		ShadowCandidateInput.BodyAuthorityState = ShadowCandidateDecision.AuthorityState;
+		LatestFrame.ShadowCandidatePose.Reset();
+		LatestFrame.bHasShadowCandidatePose =
+			FMediaPipeBodyFusionSolver::Solve(ShadowCandidateInput, LatestFrame.ShadowCandidatePose) ? 1 : 0;
+	}
+
 	RefreshBestAvailablePose_GameThread();
 
 	if (RuntimePolicy.bDebugEnabled)
@@ -610,8 +827,11 @@ void UEmbodiedFusionComponent::RefreshBestAvailablePose_GameThread(
 {
 	LatestFrame.BestAvailablePose.Reset();
 	FEmbodiedFusionBestAvailablePose& BestPose = LatestFrame.BestAvailablePose;
+	const bool bUseFusedPoseForOutput =
+		FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledGameThread();
 
-	if (LatestFrame.Pose.IsUsable() &&
+	if (bUseFusedPoseForOutput &&
+		LatestFrame.Pose.IsUsable() &&
 		LatestFrame.Pose.Head.bValid &&
 		!LatestFrame.Pose.Head.RotationWorld.ContainsNaN())
 	{
@@ -651,7 +871,8 @@ void UEmbodiedFusionComponent::RefreshBestAvailablePose_GameThread(
 		CopyHandJointsToBestPose(SourceObservations.Hands, bLeft, OutLimb.HandJoints);
 
 		FMediaPipeFusedUpperLimbSide FusedSide;
-		if (LatestFrame.Pose.IsUsable() &&
+		if (bUseFusedPoseForOutput &&
+			LatestFrame.Pose.IsUsable() &&
 			FMediaPipeAvatarPoseWriter::TryGetUpperLimbSide(LatestFrame.Pose, bLeft, FusedSide))
 		{
 			FMediaPipeBodyFusionSourceStatus Status;

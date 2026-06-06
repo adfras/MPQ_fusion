@@ -1,6 +1,6 @@
 # TestingKit5 Codex Agent Instructions
 
-You are controlling an Unreal Engine 5.7 editor project through local tools.
+You are controlling an Unreal Engine 5.8 editor project through local tools.
 
 ## Project
 
@@ -9,6 +9,11 @@ You are controlling an Unreal Engine 5.7 editor project through local tools.
 - Primary comparison maps:
   - `/Game/MCPBench/Maps/L_MCP_Test_Flopperam`
   - `/Game/MCPBench/Maps/L_MCP_Test_ChiR24`
+- Primary MediaPipe embodied avatar map:
+  - `/Game/MCPBench/Maps/L_MCP_MediaPipeMannyRoom`
+- Editor build command:
+  - `D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat TestingKit5Editor Win64 Development -Project="D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -WaitMutex`
+- Build rule: never use Live Coding or `LiveCoding.Compile` for Codex-driven builds. Before running the editor build command, close the Unreal editor completely and verify no `UnrealEditor.exe` or `LiveCodingConsole.exe` process remains. If UnrealBuildTool reports that Live Coding is active, stop, close the editor, terminate any leftover Live Coding process, and rerun the normal build command.
 
 ## MCP Preference
 
@@ -24,6 +29,24 @@ You are controlling an Unreal Engine 5.7 editor project through local tools.
 - Run PIE tests after gameplay changes.
 - Capture screenshots when visual layout, level placement, collision, or movement behaviour matters.
 - Report exact asset paths, map paths, compile errors, warnings, and playtest results.
+- For compact current project context, start at `Docs/README.md`; old date-stamped docs are historical unless that index marks them active.
+
+## MediaPipe Embodied Avatar Architecture
+
+- Preserve the current live Manny head-tracking behavior unless the task explicitly asks to retune it. Recent work fixed head pitch direction, video overlay diagnostics, readable Manny materials, and short dropout/occlusion rejection for face-derived head targets.
+- Desired ownership shape:
+  - `AMediaPipeEmbodiedAvatarPawn`: owns avatar lifecycle, selected profile, mesh/writer target, and tracking source components.
+  - Fusion component/service: owns source freshness, authority, calibration, source-frame assembly, and the fused avatar pose.
+  - Quest/OpenXR source component or adapter: produces HMD, controller, hand, and arm observations only.
+  - MediaPipe source component or adapter: produces MediaPipe body, hand, and face observations only.
+  - AnimInstance or pose writer: consumes only the fused pose plus avatar profile and writes bones.
+- Keep dependencies one-way: sources must not know Manny or MetaHuman bone mappings; fusion must not know Manny or MetaHuman implementation details; pose writers must not poll raw Quest/OpenXR/MediaPipe data directly.
+- When cleaning architecture, prefer small behavior-preserving slices. First move coordination responsibilities out of `FAnimNode_MediaPipePoseDriven` and into an owned fusion component/service, then update the anim node to consume the fused pose.
+- Current coupling hotspots to inspect before architectural changes:
+  - `Source/MediaPipeDriver/PoseDriven/MediaPipePoseDrivenAnimInstance.cpp`: currently polls Quest/runtime state, finds MediaPipe sources, assembles tracking source frames, runs BodyFusion, and writes pose.
+  - `Source/MediaPipeDriver/Tracking/MediaPipeTrackingSourceTypes.h`: `FMediaPipeTrackingSourceFrame` currently contains concrete HMD, Quest hand/full-arm, and MediaPipe pose fields.
+  - `Source/MediaPipeDriver/Embodiment/MediaPipeEmbodiedAvatarPawn.cpp`: currently spawns/configures concrete tracking actors and has movement-replica writer paths that bypass fusion.
+  - `Source/MediaPipeDriver/BodyFusion/MediaPipeBodyFusionRuntime.cpp`: currently contains Quest/debug runtime concerns that should not live in core fusion.
 
 ## Local Bridge Routes
 

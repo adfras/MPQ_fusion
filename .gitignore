@@ -59,6 +59,10 @@ Test*.txt
 ThirdParty/mediapipe_wrapper/_mediapipe/
 ThirdParty/mediapipe_wrapper/tools/bazelisk.exe
 
+# Local review/export bundles
+ReviewDeliverables/
+MPQ_shadow_fusion_review_deliverables_*.md
+
 # Python caches
 __pycache__/
 *.pyc

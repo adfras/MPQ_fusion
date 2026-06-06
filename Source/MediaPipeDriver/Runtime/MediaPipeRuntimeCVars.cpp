@@ -72,6 +72,11 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, logs developer-only BodyFusion source freshness, ownership, and head/chest/pelvis error diagnostics."));
 
+	TAutoConsoleVariable<int32> CVarBodyFusionWritePose(
+		TEXT("mp.BodyFusion.WritePose"),
+		0,
+		TEXT("When non-zero, BodyFusion may drive avatar pose writes after mp.BodyFusion.Enable is active. Default off so Stage 0 shadow diagnostics build and log fused poses without changing visible authority."));
+
 	TAutoConsoleVariable<int32> CVarBodyFusionMediaPipeAuthority(
 		TEXT("mp.BodyFusion.MediaPipeAuthority"),
 		0,

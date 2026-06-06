@@ -564,6 +564,7 @@ private:
 	FQuestHandTrackingSnapshot QuestHands{};
 	FMediaPipeFullArmChainSnapshot FullArmChain{};
 	FEmbodiedFusionFrame BodyFusionFrame;
+	bool bHasQuestOrHmdRuntimeInput = false;
 	FMediaPipeResolvedMetaHumanTarget TargetMetaHumanProfile;
 	FMediaPipeAvatarProfileResolverLogState TargetProfileLogState;
 	bool bHasCachedQuestHmdPose = false;

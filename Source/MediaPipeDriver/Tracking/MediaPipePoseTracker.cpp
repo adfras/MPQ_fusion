@@ -88,20 +88,28 @@ void FMediaPipePoseTracker::Shutdown()
 	Wrapper.Unload();
 }
 
-bool FMediaPipePoseTracker::EnqueueFrame(TArray<uint8>&& Rgb, int32 Width, int32 Height, int64 TimestampUs, int32 SourceEpoch)
+bool FMediaPipePoseTracker::EnqueueFrame(
+	TArray<uint8>&& Rgb,
+	int32 Width,
+	int32 Height,
+	int64 TimestampUs,
+	int32 SourceEpoch,
+	double SourceCaptureWallSeconds)
 {
 	if (!IsInitialized() || !Worker)
 	{
 		return false;
 	}
 
+	const double EnqueueWallSeconds = FPlatformTime::Seconds();
 	TSharedPtr<FMediaPipePoseInputFrame> Frame = MakeShared<FMediaPipePoseInputFrame>();
 	Frame->Rgb = MoveTemp(Rgb);
 	Frame->Width = Width;
 	Frame->Height = Height;
 	Frame->TimestampUs = TimestampUs;
 	Frame->SourceEpoch = SourceEpoch;
-	Frame->EnqueuedWallSeconds = FPlatformTime::Seconds();
+	Frame->SourceCaptureWallSeconds = SourceCaptureWallSeconds >= 0.0 ? SourceCaptureWallSeconds : EnqueueWallSeconds;
+	Frame->EnqueuedWallSeconds = EnqueueWallSeconds;
 
 	{
 		FScopeLock StatsLock(&StatsMutex);
@@ -149,6 +157,7 @@ void FMediaPipePoseTracker::HandleWorkerFrame(const FMediaPipePoseFrame& Frame, 
 	}
 
 	LatestFrame = Frame;
+	LatestFrame.PublishWallSeconds = FPlatformTime::Seconds();
 	bHasFrame = Frame.bValid;
 
 	if (Frame.bValid)
