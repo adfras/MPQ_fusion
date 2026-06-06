@@ -55,6 +55,19 @@ POSE_NAMES = [
 AXES = {"x": 0, "y": 1, "z": 2}
 ROT_AXES = {"pitch": 0, "yaw": 1, "roll": 2}
 MIN_SIGNAL_SAMPLES = 5
+MP_WORLD_MIN_PLANAR_MOTION = 0.005
+CM_MIN_POSITION_MOTION = 2.0
+
+MEASURE_ONLY_PAIR_KINDS = {
+    "arm_conflict_measure_only",
+    "arm_conflict_raw_measure_only",
+    "arm_conflict_world_unreal_measure_only",
+    "mediapipe_candidate_vs_fused_shadow_measure",
+    "quest_arm_output_measure",
+    "quest_shoulder_output_measure",
+    "shoulder_conflict_measure",
+    "stage2_output_shoulder_compare",
+}
 
 LANDMARK_SPACES = {
     "mp_world": ["pose_world_landmarks"],
@@ -252,6 +265,10 @@ def step95(values):
     if diff.size == 0:
         return math.nan
     return float(np.nanpercentile(diff, 95))
+
+
+def join_flags(flags):
+    return ";".join(dict.fromkeys(flag for flag in flags if flag))
 
 
 def is_mediapipe_signal(name):
@@ -662,9 +679,11 @@ def expected_pairs():
         ("hmd.loc.y", "fused.head.loc.y", "head", "hmd_to_fused_head"),
         ("hmd.loc.z", "fused.head.loc.z", "head", "hmd_to_fused_head"),
         ("hmd.loc.z", "manny.head.loc.z", "head", "hmd_to_output_head"),
-        ("mp_body.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
-        ("mp_world.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
-        ("mp_body.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
+        ("mp_body.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_landmark_raw_not_pose"),
+        ("mp_world.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_landmark_raw_not_pose"),
+        ("mp_world_unreal.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_landmark_raw_not_pose"),
+        ("mp_body.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_landmark_raw_not_pose"),
+        ("mp_world_unreal.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_landmark_raw_not_pose"),
         ("mp_world_unreal.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso", "stage1_mediapipe_candidate_torso"),
         ("mp_world_unreal.torso_height", "mp_candidate.torso_height", "torso", "stage1_mediapipe_candidate_torso"),
         ("mp_world_unreal.torso_side_proxy", "mp_candidate.torso_side_proxy", "torso", "stage1_mediapipe_candidate_torso"),
@@ -720,6 +739,18 @@ def expected_pairs():
                     (f"quest.{side}.elbow.{axis}", f"mp_world.{side}_elbow.{axis}", "arms_measure_only", "arm_conflict_raw_measure_only"),
                     (
                         f"quest.{side}.wrist.{axis}",
+                        f"mp_world_unreal.{side}_wrist.{axis}",
+                        "arms_measure_only",
+                        "arm_conflict_world_unreal_measure_only",
+                    ),
+                    (
+                        f"quest.{side}.elbow.{axis}",
+                        f"mp_world_unreal.{side}_elbow.{axis}",
+                        "arms_measure_only",
+                        "arm_conflict_world_unreal_measure_only",
+                    ),
+                    (
+                        f"quest.{side}.wrist.{axis}",
                         f"manny.hand_{'l' if side == 'left' else 'r'}.loc.{axis}",
                         "arms_measure_only",
                         "quest_arm_output_measure",
@@ -727,6 +758,74 @@ def expected_pairs():
                 ]
             )
     return pairs
+
+
+def comparison_metadata(group, pair_kind, source_name, target_name):
+    if pair_kind == "stage3_head_landmark_raw_not_pose":
+        return {
+            "comparison_role": "landmark_only_raw_space_diagnostic",
+            "authority_policy": "hmd_head_authoritative_mediapipe_head_diagnostic_only",
+            "interpretation": "MediaPipe face/head transform is absent in this capture; raw nose/ear landmark axes are not a proven HMD head pose.",
+        }
+    if pair_kind == "mediapipe_candidate_vs_fused_shadow_measure" and group == "shoulders":
+        return {
+            "comparison_role": "ownership_conflict_comparison",
+            "authority_policy": "quest_shoulders_authoritative_candidate_diagnostic_only",
+            "interpretation": "The fused shadow shoulder is Quest/mixed-owned, so MP-candidate-vs-shadow shoulder rows are ownership-conflict checks, not MediaPipe shoulder tracking failures.",
+        }
+    if pair_kind in {"shoulder_conflict_measure", "stage2_output_shoulder_compare"}:
+        return {
+            "comparison_role": "ownership_conflict_comparison",
+            "authority_policy": "quest_shoulders_authoritative_no_mediapipe_shoulder_authority",
+            "interpretation": "Shoulder output remains Quest/mixed-owned; use MP-candidate-to-MP-world rows for MediaPipe shoulder quality.",
+        }
+    if pair_kind == "quest_shoulder_output_measure":
+        return {
+            "comparison_role": "quest_shoulder_output_verification",
+            "authority_policy": "quest_shoulders_authoritative_no_mediapipe_shoulder_authority",
+            "interpretation": "Quest shoulder to fused shoulder rows verify the expected owner path; they are not MediaPipe shoulder quality rows.",
+        }
+    if group == "arms_measure_only" or pair_kind.startswith("arm_conflict_") or pair_kind == "quest_arm_output_measure":
+        return {
+            "comparison_role": "measure_only_no_authority",
+            "authority_policy": "quest_hands_wrists_arms_fingers_authoritative_no_mediapipe_arm_fallback",
+            "interpretation": "Arm rows quantify disagreement and lag only; they do not enable MediaPipe arm fallback.",
+        }
+    if pair_kind.startswith("stage1_mediapipe_candidate_pelvis") and target_name.endswith((".x", ".y")):
+        return {
+            "comparison_role": "planar_pelvis_diagnostic_disabled",
+            "authority_policy": "vertical_pelvis_hint_only_no_planar_chasing",
+            "interpretation": "Planar pelvis remains disabled; this row is an axis/calibration diagnostic only.",
+        }
+    if pair_kind.startswith("stage1_mediapipe_candidate_pelvis") and target_name.endswith(".z"):
+        return {
+            "comparison_role": "stage1_vertical_pelvis_candidate",
+            "authority_policy": "vertical_pelvis_hint_only_no_planar_chasing",
+            "interpretation": "Vertical pelvis/torso hint eligibility only; no planar pelvis movement is enabled.",
+        }
+    if pair_kind.startswith("stage1_mediapipe_candidate_torso"):
+        return {
+            "comparison_role": "stage1_torso_candidate",
+            "authority_policy": "stage1_vertical_torso_pelvis_hint_only",
+            "interpretation": "Stage 1 torso diagnostic row; visible head, hands, arms, wrists, and fingers remain Quest/HMD-owned.",
+        }
+    if pair_kind.startswith("stage2_mediapipe_candidate_shoulder"):
+        return {
+            "comparison_role": "mp_only_shoulder_candidate_quality",
+            "authority_policy": "shoulder_candidate_diagnostic_only",
+            "interpretation": "This compares MP-only candidate shoulders against MP/world references and is the preferred shoulder tracking-quality row.",
+        }
+    if pair_kind == "hmd_to_fused_head":
+        return {
+            "comparison_role": "hmd_to_fused_head_output",
+            "authority_policy": "hmd_head_authoritative",
+            "interpretation": "Fused head location is derived from the HMD/eye pose plus avatar head offset; small lateral ranges can make X lag estimates noisy.",
+        }
+    return {
+        "comparison_role": "diagnostic",
+        "authority_policy": "",
+        "interpretation": "",
+    }
 
 
 def pair_metrics(times, sample_total, signals, source_name, target_name, group, pair_kind, mediapipe_advance_seconds=0.0):
@@ -743,7 +842,13 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
     step_ratio = target_step / source_step if np.isfinite(source_step) and abs(source_step) > 1.0e-9 else math.nan
     corr_zero = safe_corr(source, target)
     valid_fraction = valid_count / sample_total if sample_total > 0 else 0.0
-    measurement_only = group in {"arms_measure_only", "lower_body_measure_only"} or "measure_only" in pair_kind
+    metadata = comparison_metadata(group, pair_kind, source_name, target_name)
+    measurement_only = (
+        group in {"arms_measure_only", "lower_body_measure_only"}
+        or "measure_only" in pair_kind
+        or pair_kind in MEASURE_ONLY_PAIR_KINDS
+        or metadata["comparison_role"] in {"ownership_conflict_comparison", "measure_only_no_authority", "landmark_only_raw_space_diagnostic"}
+    )
     raw_world_to_candidate_pair = (
         pair_kind.startswith(("stage1_mediapipe_candidate_", "stage2_mediapipe_candidate_"))
         and source_name.startswith("mp_world_unreal.")
@@ -768,6 +873,9 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
         flags.append("jitter_or_step_mismatch")
     if valid_fraction < 0.85:
         flags.append("dropout_or_stale_overlap")
+    if target_name.endswith((".x", ".y")) and pair_kind.startswith("stage1_mediapipe_candidate_pelvis"):
+        if np.isfinite(source_range) and source_range < MP_WORLD_MIN_PLANAR_MOTION:
+            flags.append("insufficient_planar_source_motion")
     if np.isfinite(abs_lag_corr) and abs_lag_corr < -0.60 and (not np.isfinite(lag_corr) or abs(abs_lag_corr) > abs(lag_corr) + 0.05):
         flags.append("possible_sign_or_axis_inversion")
 
@@ -784,6 +892,7 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
             "jitter_or_step_mismatch",
             "dropout_or_stale_overlap",
             "possible_sign_or_axis_inversion",
+            "insufficient_planar_source_motion",
         }
     ]
     standardized_ready = (
@@ -832,22 +941,29 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
         "target_step95_standardized": target_step,
         "step95_ratio_target_over_source": float(step_ratio) if np.isfinite(step_ratio) else math.nan,
         "measurement_only": measurement_only,
+        "comparison_role": metadata["comparison_role"],
+        "authority_policy": metadata["authority_policy"],
+        "interpretation": metadata["interpretation"],
         "standardized_gate": standardized_gate,
-        "standardized_flags": ";".join(dict.fromkeys(standardized_flags)),
+        "standardized_flags": join_flags(standardized_flags),
         "stage_gate": stage_gate,
         "mediapipe_advance_ms": mediapipe_advance_seconds * 1000.0,
-        "flags": ";".join(flags),
+        "flags": join_flags(flags),
     }
 
 
 def fit_signal_pairs():
     pairs = [
-        ("stage3_head_compare_only", "mp_body.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic"),
-        ("stage3_head_compare_only", "mp_body.nose.z", "hmd.loc.z", "head_mp_diagnostic"),
+        ("stage3_head_landmark_raw_not_pose", "mp_body.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic"),
+        ("stage3_head_landmark_raw_not_pose", "mp_body.nose.z", "hmd.loc.z", "head_mp_diagnostic"),
+        ("stage3_head_landmark_raw_not_pose", "mp_world_unreal.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic"),
+        ("stage3_head_landmark_raw_not_pose", "mp_world_unreal.nose.z", "hmd.loc.z", "head_mp_diagnostic"),
         ("stage1_mediapipe_candidate_torso", "mp_world_unreal.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso"),
         ("stage1_mediapipe_candidate_torso", "mp_world_unreal.torso_height", "mp_candidate.torso_height", "torso"),
         ("stage1_mediapipe_candidate_torso", "mp_world_unreal.torso_forward_proxy", "mp_candidate.torso_forward_proxy", "torso"),
         ("stage1_mediapipe_candidate_torso", "mp_world_unreal.torso_side_proxy", "mp_candidate.torso_side_proxy", "torso"),
+        ("stage1_mediapipe_candidate_pelvis_planar_disabled", "mp_world_unreal.hip_mid.x", "mp_candidate.pelvis.loc.x", "pelvis"),
+        ("stage1_mediapipe_candidate_pelvis_planar_disabled", "mp_world_unreal.hip_mid.y", "mp_candidate.pelvis.loc.y", "pelvis"),
         ("stage1_mediapipe_candidate_pelvis", "mp_world_unreal.hip_mid.z", "mp_candidate.pelvis.loc.z", "pelvis"),
         ("stage2_mediapipe_candidate_shoulder", "mp_world_unreal.left_shoulder.z", "mp_candidate.left.shoulder.z", "shoulders"),
         ("stage2_mediapipe_candidate_shoulder", "mp_world_unreal.right_shoulder.z", "mp_candidate.right.shoulder.z", "shoulders"),
@@ -862,11 +978,18 @@ def fit_signal_pairs():
 def fit_vector_specs():
     return [
         {
-            "fit_kind": "stage3_head_compare_only",
+            "fit_kind": "stage3_head_landmark_raw_not_pose",
             "group": "head_mp_diagnostic",
             "source_prefix": "mp_body.ear_mid",
             "target_prefix": "hmd.loc",
             "label": "mp_body.ear_mid_xyz_to_hmd_loc_xyz",
+        },
+        {
+            "fit_kind": "stage3_head_landmark_raw_not_pose",
+            "group": "head_mp_diagnostic",
+            "source_prefix": "mp_world_unreal.ear_mid",
+            "target_prefix": "hmd.loc",
+            "label": "mp_world_unreal.ear_mid_xyz_to_hmd_loc_xyz",
         },
         {
             "fit_kind": "stage1_mediapipe_candidate_torso",
@@ -876,7 +999,7 @@ def fit_vector_specs():
             "label": "mp_world_unreal.shoulder_mid_xyz_to_mediapipe_candidate_chest_xyz",
         },
         {
-            "fit_kind": "stage1_mediapipe_candidate_pelvis",
+            "fit_kind": "stage1_mediapipe_candidate_pelvis_planar_disabled",
             "group": "pelvis",
             "source_prefix": "mp_world_unreal.hip_mid",
             "target_prefix": "mp_candidate.pelvis.loc",
@@ -925,6 +1048,7 @@ def fitted_gate(valid_fraction, fit_corr, fit_lag_seconds, normalized_rmse, flag
         and normalized_rmse <= 0.35
         and "flat_source" not in flags
         and "flat_target" not in flags
+        and "insufficient_planar_source_motion" not in flags
     )
 
 
@@ -943,6 +1067,9 @@ def fit_univariate_alignment(times, sample_total, signals, fit_kind, source_name
         flags.append("flat_source")
     if not np.isfinite(target_range) or abs(target_range) < 1.0e-6:
         flags.append("flat_target")
+    if fit_kind == "stage1_mediapipe_candidate_pelvis_planar_disabled":
+        if not np.isfinite(source_range) or source_range < MP_WORLD_MIN_PLANAR_MOTION:
+            flags.append("insufficient_planar_source_motion")
 
     scale = math.nan
     offset = math.nan
@@ -1021,8 +1148,15 @@ def fit_univariate_alignment(times, sample_total, signals, fit_kind, source_name
         "axis_nrmse_x": math.nan,
         "axis_nrmse_y": math.nan,
         "axis_nrmse_z": math.nan,
+        "source_axis_range_x": math.nan,
+        "source_axis_range_y": math.nan,
+        "source_axis_range_z": math.nan,
+        "target_axis_range_x": math.nan,
+        "target_axis_range_y": math.nan,
+        "target_axis_range_z": math.nan,
+        "source_condition_number": math.nan,
         "gate": gate,
-        "flags": ";".join(dict.fromkeys(flags)),
+        "flags": join_flags(flags),
     }
 
 
@@ -1062,15 +1196,25 @@ def fit_vector_alignment(times, sample_total, signals, spec, mediapipe_advance_s
     axis_nrmse = [math.nan, math.nan, math.nan]
     source_axis_ranges = [percentile_range(source[:, i]) for i in range(3)]
     target_axis_ranges = [percentile_range(target[:, i]) for i in range(3)]
+    source_condition_number = math.nan
     if any(not np.isfinite(value) or abs(value) < 1.0e-6 for value in source_axis_ranges):
         flags.append("flat_source_axis")
     if any(not np.isfinite(value) or abs(value) < 1.0e-6 for value in target_axis_ranges):
         flags.append("flat_target_axis")
+    if spec["fit_kind"] == "stage1_mediapipe_candidate_pelvis_planar_disabled":
+        if any(not np.isfinite(source_axis_ranges[i]) or source_axis_ranges[i] < MP_WORLD_MIN_PLANAR_MOTION for i in (0, 1)):
+            flags.append("insufficient_planar_source_motion")
 
     if "insufficient_overlap" not in flags and "flat_source_axis" not in flags:
         x = source[mask]
         y = target[mask]
         design = np.column_stack([x, np.ones(x.shape[0])])
+        try:
+            source_condition_number = float(np.linalg.cond(design))
+        except np.linalg.LinAlgError:
+            source_condition_number = math.nan
+        if np.isfinite(source_condition_number) and source_condition_number > 1000.0:
+            flags.append("ill_conditioned_source_axes")
         coeff, _, _, _ = np.linalg.lstsq(design, y, rcond=None)
         matrix = coeff[:3, :].T
         offset = coeff[3, :]
@@ -1110,6 +1254,8 @@ def fit_vector_alignment(times, sample_total, signals, spec, mediapipe_advance_s
         and "flat_source_axis" not in flags
         and "flat_target_axis" not in flags
         and "low_axis_correlation" not in flags
+        and "insufficient_planar_source_motion" not in flags
+        and "ill_conditioned_source_axes" not in flags
         else "fail"
     )
 
@@ -1142,8 +1288,15 @@ def fit_vector_alignment(times, sample_total, signals, spec, mediapipe_advance_s
         "axis_nrmse_x": axis_nrmse[0],
         "axis_nrmse_y": axis_nrmse[1],
         "axis_nrmse_z": axis_nrmse[2],
+        "source_axis_range_x": source_axis_ranges[0],
+        "source_axis_range_y": source_axis_ranges[1],
+        "source_axis_range_z": source_axis_ranges[2],
+        "target_axis_range_x": target_axis_ranges[0],
+        "target_axis_range_y": target_axis_ranges[1],
+        "target_axis_range_z": target_axis_ranges[2],
+        "source_condition_number": source_condition_number,
         "gate": gate,
-        "flags": ";".join(dict.fromkeys(flags)),
+        "flags": join_flags(flags),
     }
 
 
@@ -1159,6 +1312,134 @@ def fitted_alignment_analysis(times, sample_total, signals, mediapipe_advance_se
     return rows
 
 
+def axis_search_specs():
+    specs = []
+    for axis in ("x", "y"):
+        specs.append(
+            {
+                "diagnostic_area": "planar_pelvis_disabled",
+                "group": "pelvis",
+                "target": f"mp_candidate.pelvis.loc.{axis}",
+                "source_candidates": [f"mp_world_unreal.hip_mid.{candidate_axis}" for candidate_axis in ("x", "y", "z")],
+                "policy": "vertical_pelvis_hint_only_no_planar_chasing",
+                "source_motion_threshold": MP_WORLD_MIN_PLANAR_MOTION,
+                "note": "Searches same-space MP hip axes for a better planar source; planar pelvis remains disabled.",
+            }
+        )
+    for target_axis in ("x", "y", "z"):
+        specs.append(
+            {
+                "diagnostic_area": "mediapipe_head_landmark_only",
+                "group": "head_mp_diagnostic",
+                "target": f"hmd.loc.{target_axis}",
+                "source_candidates": [
+                    f"mp_world_unreal.ear_mid.{axis}" for axis in ("x", "y", "z")
+                ]
+                + [f"mp_world_unreal.nose.{axis}" for axis in ("x", "y", "z")],
+                "policy": "hmd_head_authoritative_mediapipe_head_diagnostic_only",
+                "source_motion_threshold": MP_WORLD_MIN_PLANAR_MOTION,
+                "note": "Face/head transform is absent; this searches landmark-only proxies and cannot prove head authority.",
+            }
+        )
+    for side in ("left", "right"):
+        for joint in ("elbow", "wrist"):
+            for target_axis in ("x", "y", "z"):
+                specs.append(
+                    {
+                        "diagnostic_area": f"arm_{side}_{joint}_measure_only",
+                        "group": "arms_measure_only",
+                        "target": f"quest.{side}.{joint}.{target_axis}",
+                        "source_candidates": [f"mp_world_unreal.{side}_{joint}.{axis}" for axis in ("x", "y", "z")],
+                        "policy": "quest_arms_hands_authoritative_no_mediapipe_arm_fallback",
+                        "source_motion_threshold": MP_WORLD_MIN_PLANAR_MOTION,
+                        "note": "World-to-Unreal MediaPipe arm landmark search for measurement only; no fallback is enabled.",
+                    }
+                )
+    for target_axis in ("x", "y", "z"):
+        specs.append(
+            {
+                "diagnostic_area": "hmd_to_fused_head_same_tick",
+                "group": "head",
+                "target": f"fused.head.loc.{target_axis}",
+                "source_candidates": [f"hmd.loc.{target_axis}"],
+                "policy": "hmd_head_authoritative",
+                "source_motion_threshold": CM_MIN_POSITION_MOTION,
+                "note": "Same-axis HMD camera point to fused avatar head-center output; offsets can be rotation-derived.",
+            }
+        )
+    for side in ("left", "right"):
+        hand_bone = "hand_l" if side == "left" else "hand_r"
+        for target_axis in ("x", "y", "z"):
+            specs.append(
+                {
+                    "diagnostic_area": f"quest_to_manny_{side}_hand_output",
+                    "group": "arms_measure_only",
+                    "target": f"manny.{hand_bone}.loc.{target_axis}",
+                    "source_candidates": [f"quest.{side}.wrist.{target_axis}"],
+                    "policy": "quest_hands_authoritative_output_measurement",
+                    "source_motion_threshold": CM_MIN_POSITION_MOTION,
+                    "note": "Quest wrist to Manny hand output check; lag here is output/writer diagnostic only.",
+                }
+            )
+    return specs
+
+
+def axis_search_analysis(times, sample_total, signals, mediapipe_advance_seconds):
+    rows = []
+    for spec in axis_search_specs():
+        target_name = spec["target"]
+        if target_name not in signals:
+            continue
+        target = adjusted_signal(times, signals, target_name, mediapipe_advance_seconds)
+        target_range = percentile_range(target)
+        best = None
+        for source_name in spec["source_candidates"]:
+            if source_name not in signals:
+                continue
+            source = adjusted_signal(times, signals, source_name, mediapipe_advance_seconds)
+            valid_count = int(np.count_nonzero(np.isfinite(source) & np.isfinite(target)))
+            valid_fraction = valid_count / sample_total if sample_total > 0 else 0.0
+            corr_zero = safe_corr(source, target)
+            lag, lag_corr = best_lag(times, source, target)
+            abs_lag, abs_lag_corr = best_lag(times, source, target, maximize_abs=True)
+            source_range = percentile_range(source)
+            score = abs(abs_lag_corr) if np.isfinite(abs_lag_corr) else -1.0
+            candidate = {
+                "diagnostic_area": spec["diagnostic_area"],
+                "group": spec["group"],
+                "target": target_name,
+                "source": source_name,
+                "sample_count": valid_count,
+                "valid_fraction": valid_fraction,
+                "source_range_p95_p05": source_range,
+                "target_range_p95_p05": target_range,
+                "corr_zero_lag": corr_zero,
+                "best_lag_seconds": lag,
+                "corr_best_lag": lag_corr,
+                "best_abs_lag_seconds": abs_lag,
+                "corr_best_abs_lag": abs_lag_corr,
+                "suggested_sign": -1 if np.isfinite(abs_lag_corr) and abs_lag_corr < 0.0 else 1,
+                "policy": spec["policy"],
+                "note": spec["note"],
+                "flags": [],
+            }
+            if valid_fraction < 0.85:
+                candidate["flags"].append("dropout_or_stale_overlap")
+            if not np.isfinite(source_range) or source_range < spec["source_motion_threshold"]:
+                candidate["flags"].append("insufficient_source_motion")
+            if np.isfinite(abs_lag) and abs(abs_lag) > 0.10:
+                candidate["flags"].append("lag_over_100ms")
+            if not np.isfinite(abs_lag_corr) or abs(abs_lag_corr) < 0.70:
+                candidate["flags"].append("low_axis_correlation")
+            if best is None or score > best[0]:
+                best = (score, candidate)
+        if best:
+            row = best[1]
+            row["flags"] = join_flags(row["flags"])
+            rows.append(row)
+    return rows
+
+
 def summarize_fitted_alignment(rows):
     pass_rows = [row for row in rows if row["gate"] == "pass"]
     stage1_pass = [row for row in pass_rows if row["fit_kind"].startswith("stage1_")]
@@ -1166,7 +1447,7 @@ def summarize_fitted_alignment(rows):
     head_pass = [row for row in pass_rows if row["fit_kind"].startswith("stage3_")]
     blocked = sorted({flag for row in rows if row["gate"] == "fail" for flag in row["flags"].split(";") if flag})
     if any(row["group"] == "torso" for row in stage1_pass) and any(row["group"] == "pelvis" for row in stage1_pass):
-        recommendation = "Fitted Stage 1 torso/pelvis looks calibratable offline; consider a shadow-only runtime calibration knob next."
+        recommendation = "Fitted Stage 1 vertical torso/pelvis looks calibratable offline; keep planar pelvis disabled until isolated planar motion passes."
     elif any(row["group"] == "torso" for row in stage1_pass):
         recommendation = "Fitted torso has at least one calibratable signal, but pelvis remains blocked; do not enable full Stage 1 yet."
     elif stage2_pass:
@@ -1208,6 +1489,9 @@ def standardized_alignment_rows(rows):
                 "target_step95_standardized": row["target_step95_standardized"],
                 "step95_ratio_target_over_source": row["step95_ratio_target_over_source"],
                 "measurement_only": row["measurement_only"],
+                "comparison_role": row["comparison_role"],
+                "authority_policy": row["authority_policy"],
+                "interpretation": row["interpretation"],
                 "standardized_gate": row["standardized_gate"],
                 "standardized_flags": row["standardized_flags"],
                 "raw_pair_gate": row["stage_gate"],
@@ -1262,6 +1546,85 @@ def summarize_standardized_alignment(rows):
         "blocked_reasons": blocked,
         "recommendation": recommendation,
         "interpretation": "This gate compares standardized waveform shape, lag, sign, and freshness only. It intentionally ignores raw amplitude and centimeter-space fit.",
+    }
+
+
+def row_by_pair(rows, source, target):
+    for row in rows:
+        if row["source"] == source and row["target"] == target:
+            return row
+    return None
+
+
+def summarize_reclassifications(pair_rows, fitted_rows, axis_rows, face_info):
+    pelvis_axis = [row for row in axis_rows if row["diagnostic_area"] == "planar_pelvis_disabled"]
+    pelvis_fit = [row for row in fitted_rows if row["fit_kind"] == "stage1_mediapipe_candidate_pelvis_planar_disabled"]
+    head_axis = [row for row in axis_rows if row["diagnostic_area"] == "mediapipe_head_landmark_only"]
+    shoulder_mp = [
+        row
+        for row in pair_rows
+        if row["pair_kind"] == "stage2_mediapipe_candidate_shoulder" and row["standardized_gate"] == "pass"
+    ]
+    shoulder_conflicts = [
+        row
+        for row in pair_rows
+        if row["group"] == "shoulders" and row["comparison_role"] == "ownership_conflict_comparison"
+    ]
+    hmd_x = row_by_pair(pair_rows, "hmd.loc.x", "fused.head.loc.x")
+    left_hand_xy = [
+        row_by_pair(pair_rows, "quest.left.wrist.x", "manny.hand_l.loc.x"),
+        row_by_pair(pair_rows, "quest.left.wrist.y", "manny.hand_l.loc.y"),
+    ]
+    left_hand_xy = [row for row in left_hand_xy if row]
+
+    pelvis_planar_flags = sorted({flag for row in pelvis_axis + pelvis_fit for flag in str(row.get("flags", "")).split(";") if flag})
+    head_flags = sorted({flag for row in head_axis for flag in str(row.get("flags", "")).split(";") if flag})
+    face_transform_samples = face_info.get("has_transform_samples", 0)
+    hmd_x_lag_ms = hmd_x["best_lag_seconds"] * 1000.0 if hmd_x and np.isfinite(hmd_x["best_lag_seconds"]) else math.nan
+    hmd_x_range = hmd_x["source_range_p95_p05"] if hmd_x else math.nan
+
+    return {
+        "planar_pelvis_xy": {
+            "status": "disabled_reclassified_as_insufficient_planar_motion",
+            "rows_considered": len(pelvis_axis) + len(pelvis_fit),
+            "flags": pelvis_planar_flags,
+            "conclusion": "Existing capture does not provide enough MediaPipe hip planar motion for a stable yaw/offset/sign fit; keep planar pelvis chasing disabled.",
+        },
+        "mediapipe_head": {
+            "status": "landmark_only_not_head_pose",
+            "face_transform_samples": int(face_transform_samples),
+            "axis_search_flags": head_flags,
+            "conclusion": "No usable face/head transform was recorded, so raw nose/ear axes are diagnostic landmarks only. HMD remains authoritative for head and camera.",
+        },
+        "shoulders": {
+            "mp_only_candidate_pass_count": len(shoulder_mp),
+            "ownership_conflict_row_count": len(shoulder_conflicts),
+            "conclusion": "Use MP-world-to-MP-candidate shoulder rows for MediaPipe shoulder quality; candidate-vs-fused/Quest-owned rows are ownership-conflict checks.",
+        },
+        "arms": {
+            "status": "measure_only_no_fallback",
+            "world_unreal_axis_search_rows": len([row for row in axis_rows if row["group"] == "arms_measure_only"]),
+            "conclusion": "Arm diagnostics include per-axis world-to-Unreal landmark searches and lag flags only; Quest remains authoritative and no MediaPipe arm fallback is enabled.",
+        },
+        "hmd_head_x": {
+            "best_lag_ms": hmd_x_lag_ms,
+            "source_range_cm_p95_p05": hmd_x_range,
+            "conclusion": "HMD X has weak lateral motion and fused head is an HMD-derived head-center output, not the raw eye point; collect isolated lateral head motion before treating the X lag as real latency.",
+        },
+        "quest_left_hand_output": {
+            "best_lag_ms_by_axis": {
+                row["source"].split(".")[-1]: row["best_lag_seconds"] * 1000.0 if np.isfinite(row["best_lag_seconds"]) else math.nan
+                for row in left_hand_xy
+            },
+            "conclusion": "Left hand X/Y lag remains a measurement-only output issue; use an isolated left-hand side/forward/back capture to separate writer smoothing from timestamp or coordinate artifacts.",
+        },
+        "needs_user_vr_preview": True,
+        "recommended_isolated_capture_sequence": [
+            "Keep torso mostly still; move pelvis side-to-side only for 10 seconds, then forward/back only for 10 seconds.",
+            "Keep body and hands still; move head laterally left/right for 10 seconds without nodding.",
+            "Keep head/torso still; move left hand side-to-side, forward/back, then up/down for 10 seconds each.",
+            "Repeat right hand as a control if left-hand output lag remains asymmetric.",
+        ],
     }
 
 
@@ -1454,6 +1817,48 @@ def plot_groups(out_dir, times, signals, rows, mediapipe_advance_seconds=0.0):
     return charts
 
 
+def plot_lag_compensated_groups(out_dir, times, signals, rows, mediapipe_advance_seconds=0.0):
+    charts = {}
+    wanted_groups = {"arms_measure_only", "head", "head_mp_diagnostic", "pelvis", "shoulders"}
+    wanted_rows = [
+        row
+        for row in rows
+        if row["group"] in wanted_groups
+        and row["flags"]
+        and np.isfinite(row["best_lag_seconds"])
+        and abs(row["best_lag_seconds"]) > 0.050
+    ]
+    for group in sorted({row["group"] for row in wanted_rows}):
+        group_rows = [row for row in wanted_rows if row["group"] == group]
+        for chunk_start in range(0, len(group_rows), 10):
+            chunk = group_rows[chunk_start : chunk_start + 10]
+            fig, axes = plt.subplots(len(chunk), 1, figsize=(15, max(3.0, 2.2 * len(chunk))), sharex=False)
+            if len(chunk) == 1:
+                axes = [axes]
+            for ax, row in zip(axes, chunk):
+                source = standardize(adjusted_signal(times, signals, row["source"], mediapipe_advance_seconds))
+                target = standardize(adjusted_signal(times, signals, row["target"], mediapipe_advance_seconds))
+                shifted_source_times = times + row["best_lag_seconds"]
+                ax.plot(shifted_source_times, source, label=f"{row['source']} shifted by best lag", linewidth=1.2)
+                ax.plot(times, target, label=row["target"], linewidth=1.1)
+                ax.grid(True, alpha=0.25)
+                ax.legend(fontsize=8, loc="upper right")
+                ax.set_title(
+                    f"{row['pair_kind']} lag={row['best_lag_seconds'] * 1000.0:.1f}ms "
+                    f"corr={row['corr_best_lag']:.3f} role={row['comparison_role']} flags={row['flags'] or 'none'}",
+                    fontsize=9,
+                )
+            axes[-1].set_xlabel("capture seconds")
+            fig.suptitle(f"{group}: lag-compensated diagnostic signals")
+            fig.tight_layout(rect=[0, 0, 1, 0.97])
+            suffix = "" if chunk_start == 0 else f"_{chunk_start // 10 + 1:02d}"
+            chart_path = out_dir / f"{group}_lag_compensated{suffix}.png"
+            fig.savefig(chart_path, dpi=150)
+            plt.close(fig)
+            charts[f"{group}_lag_compensated{suffix}"] = str(chart_path)
+    return charts
+
+
 def plot_timing(out_dir, times, samples):
     available = []
     for field in TIMING_MS_FIELDS:
@@ -1531,7 +1936,11 @@ def stage_recommendations(rows, timing_rows, inventory_rows):
     stage1_rows = [row for row in rows if row["pair_kind"].startswith("stage1_") and not row["measurement_only"]]
     stage1_pass = [row for row in stage1_rows if row["stage_gate"] == "pass"]
     torso_pass = any(row["group"] == "torso" for row in stage1_pass)
-    pelvis_pass = any(row["group"] == "pelvis" for row in stage1_pass)
+    pelvis_vertical_pass = any(row["group"] == "pelvis" and row["target"].endswith(".z") for row in stage1_pass)
+    pelvis_planar_pass = all(
+        any(row["target"].endswith(f".{axis}") and row["stage_gate"] == "pass" for row in stage1_rows)
+        for axis in ("x", "y")
+    )
     stage2_rows = [row for row in rows if row["pair_kind"].startswith("stage2_") and not row["measurement_only"]]
     stage2_pass = [row for row in stage2_rows if row["stage_gate"] == "pass"]
     lag = estimate_mediapipe_lag_ms(rows)
@@ -1544,7 +1953,7 @@ def stage_recommendations(rows, timing_rows, inventory_rows):
     timing_counts = {row["name"]: row["count"] for row in timing_rows if row["kind"] == "sample_timing_ms"}
     has_new_timing = any(count and count > 0 for count in timing_counts.values())
 
-    if torso_pass and pelvis_pass:
+    if torso_pass and pelvis_vertical_pass:
         first_active = "Stage 1 vertical pelvis/torso hint is eligible for a guarded trial."
     elif torso_pass:
         first_active = "Only torso hinting has enough evidence; keep pelvis shadow-only until pelvis variation passes."
@@ -1556,7 +1965,10 @@ def stage_recommendations(rows, timing_rows, inventory_rows):
         "estimated_mediapipe_lag_ms": lag,
         "new_runtime_timing_present": has_new_timing,
         "landmark_coverage": landmark_coverage,
-        "stage1_torso_pelvis_ready": bool(torso_pass and pelvis_pass),
+        "stage1_torso_pelvis_ready": bool(torso_pass and pelvis_vertical_pass),
+        "stage1_vertical_torso_pelvis_ready": bool(torso_pass and pelvis_vertical_pass),
+        "stage1_planar_pelvis_ready": bool(pelvis_planar_pass),
+        "stage1_planar_policy": "planar_pelvis_disabled_no_chasing",
         "stage1_pass_pairs": stage1_pass,
         "stage2_shoulder_hint_ready": bool(stage2_pass),
         "stage2_pass_pairs": stage2_pass,
@@ -1626,6 +2038,9 @@ def main():
         "target_step95_standardized",
         "step95_ratio_target_over_source",
         "measurement_only",
+        "comparison_role",
+        "authority_policy",
+        "interpretation",
         "standardized_gate",
         "standardized_flags",
         "stage_gate",
@@ -1656,6 +2071,9 @@ def main():
         "target_step95_standardized",
         "step95_ratio_target_over_source",
         "measurement_only",
+        "comparison_role",
+        "authority_policy",
+        "interpretation",
         "standardized_gate",
         "standardized_flags",
         "raw_pair_gate",
@@ -1728,12 +2146,43 @@ def main():
         "axis_nrmse_x",
         "axis_nrmse_y",
         "axis_nrmse_z",
+        "source_axis_range_x",
+        "source_axis_range_y",
+        "source_axis_range_z",
+        "target_axis_range_x",
+        "target_axis_range_y",
+        "target_axis_range_z",
+        "source_condition_number",
         "gate",
         "flags",
     ]
     write_csv(fitted_csv, fitted_rows, fitted_fields)
 
+    axis_rows = axis_search_analysis(times, len(samples), signals, mediapipe_advance_seconds)
+    axis_csv = out_dir / "mpq_shadow_axis_search_diagnostics.csv"
+    axis_fields = [
+        "diagnostic_area",
+        "group",
+        "target",
+        "source",
+        "sample_count",
+        "valid_fraction",
+        "source_range_p95_p05",
+        "target_range_p95_p05",
+        "corr_zero_lag",
+        "best_lag_seconds",
+        "corr_best_lag",
+        "best_abs_lag_seconds",
+        "corr_best_abs_lag",
+        "suggested_sign",
+        "policy",
+        "note",
+        "flags",
+    ]
+    write_csv(axis_csv, axis_rows, axis_fields)
+
     charts = plot_groups(out_dir, times, signals, rows, mediapipe_advance_seconds)
+    charts.update(plot_lag_compensated_groups(out_dir, times, signals, rows, mediapipe_advance_seconds))
     timing_chart = plot_timing(out_dir, times, samples)
     if timing_chart:
         charts["timing_ms"] = timing_chart
@@ -1741,6 +2190,7 @@ def main():
     if landmark_chart:
         charts["landmark_availability"] = landmark_chart
 
+    face_info = face_summary(samples)
     report = {
         "input": str(args.input),
         "schema": data.get("schema"),
@@ -1753,7 +2203,7 @@ def main():
         "analysis_mediapipe_advance_note": "Positive values advance MediaPipe landmark signals offline before metrics and plots are scored.",
         "arm_policy": "arms_measurement_only_no_mediapipe_arm_fallback_decision",
         "capture_states": summarize_capture(samples),
-        "face_summary": face_summary(samples),
+        "face_summary": face_info,
         "last_pipeline": last_pipeline,
         "metrics_csv": str(metrics_csv),
         "standardized_alignment_csv": str(standardized_csv),
@@ -1761,6 +2211,7 @@ def main():
         "landmark_inventory_csv": str(landmark_csv),
         "timing_summary_csv": str(timing_csv),
         "fitted_alignment_csv": str(fitted_csv),
+        "axis_search_diagnostics_csv": str(axis_csv),
         "charts": charts,
         "outputs": {
             "metrics_csv": str(metrics_csv),
@@ -1769,12 +2220,14 @@ def main():
             "landmark_inventory_csv": str(landmark_csv),
             "timing_summary_csv": str(timing_csv),
             "fitted_alignment_csv": str(fitted_csv),
+            "axis_search_diagnostics_csv": str(axis_csv),
             "charts": charts,
         },
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
         "standardized_alignment_summary": summarize_standardized_alignment(rows),
         "fitted_alignment_summary": summarize_fitted_alignment(fitted_rows),
         "physical_fit_summary": summarize_fitted_alignment(fitted_rows),
+        "diagnostic_reclassification_summary": summarize_reclassifications(rows, fitted_rows, axis_rows, face_info),
         "flagged_pairs": [row for row in rows if row["flags"]],
     }
     report_path = out_dir / "mpq_shadow_report.json"
@@ -1789,6 +2242,7 @@ def main():
                 "landmark_inventory_csv": str(landmark_csv),
                 "timing_summary_csv": str(timing_csv),
                 "fitted_alignment_csv": str(fitted_csv),
+                "axis_search_diagnostics_csv": str(axis_csv),
                 "charts": charts,
             },
             indent=2,
