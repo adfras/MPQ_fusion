@@ -27,6 +27,8 @@ You are controlling an Unreal Engine 5.8 editor project through local tools.
 - Compile Blueprints after graph changes.
 - Save assets only after compile succeeds.
 - Run PIE tests after gameplay changes.
+- Before asking the user to run an MPQ Stage 0 VR Preview, explicitly arm `mp.PrepareMPQShadowLatencyTrial` or `mp.RecordMPQShadowFusionOnPlay=1`, disable `mp.RecordMannyHeadOnPlay`, and verify the log contains `mp.MPQShadowAutoStart: armed` with `shadowOnly=1 authority=0 armFallbacks=off`.
+- After an MPQ Stage 0 VR Preview, first check for a new `Saved/CodexAgent/Diagnostics/mpq_shadow_latency_*.json`; do not mistake `manny_head_trace_latest.json` for an MPQ shadow-fusion capture.
 - Capture screenshots when visual layout, level placement, collision, or movement behaviour matters.
 - Report exact asset paths, map paths, compile errors, warnings, and playtest results.
 - For compact current project context, start at `Docs/README.md`; old date-stamped docs are historical unless that index marks them active.
