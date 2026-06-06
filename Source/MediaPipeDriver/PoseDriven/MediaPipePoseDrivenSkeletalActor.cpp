@@ -1632,10 +1632,14 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 
 		const FTransform ComponentTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_Component);
 		const FTransform ParentTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_ParentBoneSpace);
+		const FTransform WorldTransform = ComponentTransform * DrivenMesh->GetComponentTransform();
 		TSharedRef<FJsonObject> Bone = MakeShared<FJsonObject>();
 		Bone->SetArrayField(TEXT("loc"), JsonVector(ComponentTransform.GetLocation()));
 		Bone->SetArrayField(TEXT("rot"), JsonRotator(ComponentTransform.GetRotation().Rotator()));
 		Bone->SetArrayField(TEXT("quat"), JsonQuat(ComponentTransform.GetRotation()));
+		Bone->SetArrayField(TEXT("world_loc"), JsonVector(WorldTransform.GetLocation()));
+		Bone->SetArrayField(TEXT("world_rot"), JsonRotator(WorldTransform.GetRotation().Rotator()));
+		Bone->SetArrayField(TEXT("world_quat"), JsonQuat(WorldTransform.GetRotation()));
 		Bone->SetArrayField(TEXT("local_rot"), JsonRotator(ParentTransform.GetRotation().Rotator()));
 		Bone->SetArrayField(TEXT("local_quat"), JsonQuat(ParentTransform.GetRotation()));
 		Live->SetObjectField(BoneNameText, Bone);

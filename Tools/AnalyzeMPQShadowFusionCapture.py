@@ -328,7 +328,7 @@ def add_signal(signals, name, group, values, source_kind=""):
         signals[name] = {"group": group, "values": values, "source_kind": source_kind}
 
 
-def empty_metric_row(source_name, target_name, group, pair_kind, status, reason, mediapipe_advance_seconds=0.0):
+def empty_metric_row(source_name, target_name, group, pair_kind, status, reason, mediapipe_advance_seconds=0.0, true_cause=""):
     stage_gate = status
     standardized_gate = status
     row = {
@@ -357,6 +357,8 @@ def empty_metric_row(source_name, target_name, group, pair_kind, status, reason,
         "flags": status,
         "diagnostic_status": status,
         "not_valid_reason": reason,
+        "true_cause": true_cause or status,
+        "fix_action": "",
         "source_recorded": False,
         "target_recorded": False,
     }
@@ -373,34 +375,57 @@ def flat_expected_stage0_pair(pair_kind):
 
 
 def coordinate_space_not_comparable_pair(source_name, target_name, pair_kind):
-    if pair_kind in {"mediapipe_raw_axis_diagnostic", "arm_conflict_measure_only", "arm_conflict_raw_measure_only", "shoulder_conflict_measure"}:
+    if source_name.startswith(("mp_world.", "mp_norm.")) or target_name.startswith(("mp_world.", "mp_norm.")):
         return True
-    mediapipe_source = source_name.startswith(("mp_body.", "mp_world.", "mp_norm."))
-    non_mediapipe_target = target_name.startswith(("hmd.", "quest.", "fused.", "manny."))
-    return mediapipe_source and non_mediapipe_target
+    return False
 
 
 def classify_pair_status(row, source_recorded=True, target_recorded=True):
+    missing_world_output = (
+        (row["source"].startswith("manny.") and ".world_" in row["source"])
+        or (row["target"].startswith("manny.") and ".world_" in row["target"])
+        or row["source"].startswith("manny.world_")
+        or row["target"].startswith("manny.world_")
+    )
     if not source_recorded and not target_recorded:
-        return "not_recorded", "source and target signals were not recorded in this capture"
+        if missing_world_output:
+            return (
+                "not_recorded",
+                "world-space Manny output bone fields are not present in this capture; the recorder now writes them for future captures",
+                "missing_runtime_recorder_field",
+                "new_vr_preview_capture_required",
+            )
+        return "not_recorded", "source and target signals were not recorded in this capture", "missing_expected_signal", "inspect_capture_schema"
     if not source_recorded:
-        return "not_recorded", "source signal was not recorded in this capture"
+        return "not_recorded", "source signal was not recorded in this capture", "missing_expected_signal", "inspect_capture_schema"
     if not target_recorded:
-        return "not_recorded", "target signal was not recorded in this capture"
+        if missing_world_output:
+            return (
+                "not_recorded",
+                "world-space Manny output bone fields are not present in this capture; the recorder now writes them for future captures",
+                "missing_runtime_recorder_field",
+                "new_vr_preview_capture_required",
+            )
+        return "not_recorded", "target signal was not recorded in this capture", "missing_expected_signal", "inspect_capture_schema"
     if row["sample_count"] < 8 or row["valid_fraction"] < 0.25:
-        return "source_unavailable", "source/target overlap is too sparse for a defensible diagnostic"
+        return "source_unavailable", "source/target overlap is too sparse for a defensible diagnostic", "genuine_source_unavailable", "collect_cleaner_capture"
     flags = set(flag for flag in row["flags"].split(";") if flag)
     if ("flat_source" in flags or "flat_target" in flags) and flat_expected_stage0_pair(row["pair_kind"]):
-        return "flat_expected_stage0", "flat visible-output row is expected while Stage 0 keeps MediaPipe authority disabled"
+        return "flat_expected_stage0", "flat visible-output row is expected while Stage 0 keeps MediaPipe authority disabled", "genuine_stage0_policy", "none"
     if coordinate_space_not_comparable_pair(row["source"], row["target"], row["pair_kind"]):
-        return "not_comparable_coordinate_space", "signals are intentionally diagnostic only and are not in a directly comparable coordinate space"
+        return (
+            "not_comparable_coordinate_space",
+            "signals are intentionally diagnostic only and are not in a directly comparable coordinate space",
+            "genuine_coordinate_space_policy",
+            "none",
+        )
     if "flat_source" in flags or "flat_target" in flags:
-        return "flat_unexpected", "source or target is flat and no Stage 0 lock explains it"
+        return "flat_unexpected", "source or target is flat and no Stage 0 lock explains it", "analyzer_or_capture_bug", "inspect_signal_routing"
     if row["measurement_only"] or row["stage_gate"] in {"pass", "measure_only_no_authority"} or row["standardized_gate"] == "pass":
-        return "valid", ""
+        return "valid", "", "valid", ""
     if row["flags"]:
-        return "valid", "recorded and numerically valid, but gate did not pass"
-    return "valid", ""
+        return "valid", "recorded and numerically valid, but gate did not pass", "valid_numeric_gate_failed", "inspect_metrics"
+    return "valid", "", "valid", ""
 
 
 def add_path_signal(signals, samples, name, group, path, source_kind=""):
@@ -557,6 +582,7 @@ def extract_signals(samples):
         add_path_signal(signals, samples, f"hmd.loc.{axis}", "head", ["fusion", "source", "hmd", "loc", index], "hmd")
         add_path_signal(signals, samples, f"fused.head.loc.{axis}", "head", ["fusion", "pose", "head", "loc", index], "fused")
         add_path_signal(signals, samples, f"manny.head.loc.{axis}", "head", ["live", "head", "loc", index], "manny")
+        add_path_signal(signals, samples, f"manny.head.world_loc.{axis}", "head", ["live", "head", "world_loc", index], "manny")
         add_path_signal(signals, samples, f"fused.chest.loc.{axis}", "torso", ["fusion", "pose", "chest", "loc", index], "fused")
         add_path_signal(signals, samples, f"fused.pelvis.loc.{axis}", "pelvis", ["fusion", "pose", "pelvis", "loc", index], "fused")
         add_path_signal(
@@ -594,7 +620,9 @@ def extract_signals(samples):
             "mediapipe_candidate",
         )
         add_path_signal(signals, samples, f"manny.pelvis.loc.{axis}", "pelvis", ["live", "pelvis", "loc", index], "manny")
+        add_path_signal(signals, samples, f"manny.pelvis.world_loc.{axis}", "pelvis", ["live", "pelvis", "world_loc", index], "manny")
         add_path_signal(signals, samples, f"manny.spine_03.loc.{axis}", "torso", ["live", "spine_03", "loc", index], "manny")
+        add_path_signal(signals, samples, f"manny.spine_03.world_loc.{axis}", "torso", ["live", "spine_03", "world_loc", index], "manny")
         for side in ("left", "right"):
             hand_bone = "hand_l" if side == "left" else "hand_r"
             clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
@@ -656,7 +684,9 @@ def extract_signals(samples):
                 "fused",
             )
             add_path_signal(signals, samples, f"manny.{hand_bone}.loc.{axis}", "arms_measure_only", ["live", hand_bone, "loc", index], "manny")
+            add_path_signal(signals, samples, f"manny.{hand_bone}.world_loc.{axis}", "arms_measure_only", ["live", hand_bone, "world_loc", index], "manny")
             add_path_signal(signals, samples, f"manny.{clavicle_bone}.loc.{axis}", "shoulders", ["live", clavicle_bone, "loc", index], "manny")
+            add_path_signal(signals, samples, f"manny.{clavicle_bone}.world_loc.{axis}", "shoulders", ["live", clavicle_bone, "world_loc", index], "manny")
 
     for rot_axis, index in ROT_AXES.items():
         add_path_signal(signals, samples, f"hmd.rot.{rot_axis}", "head", ["fusion", "source", "hmd", "rot", index], "hmd")
@@ -692,6 +722,7 @@ def extract_signals(samples):
         "mediapipe_candidate",
     )
     add_difference_signal(signals, "manny.torso_height", "torso", "manny.spine_03.loc.z", "manny.pelvis.loc.z", "manny")
+    add_difference_signal(signals, "manny.world_torso_height", "torso", "manny.spine_03.world_loc.z", "manny.pelvis.world_loc.z", "manny")
     for side in ("left", "right"):
         clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
         add_difference_signal(
@@ -726,6 +757,14 @@ def extract_signals(samples):
             "manny.pelvis.loc.z",
             "manny",
         )
+        add_difference_signal(
+            signals,
+            f"manny.{clavicle_bone}_world_lift_from_pelvis",
+            "shoulders",
+            f"manny.{clavicle_bone}.world_loc.z",
+            "manny.pelvis.world_loc.z",
+            "manny",
+        )
 
     add_path_signal(signals, samples, "face.score", "head_mp_diagnostic", ["face", "score"], "face")
     add_path_signal(signals, samples, "face.count", "head_mp_diagnostic", ["face", "count"], "face")
@@ -738,33 +777,30 @@ def extract_signals(samples):
 
 def expected_pairs():
     pairs = [
-        ("hmd.rot.pitch", "solver.head.pitch", "head", "hmd_to_solver_head"),
-        ("hmd.rot.yaw", "solver.head.yaw", "head", "hmd_to_solver_head"),
-        ("hmd.rot.roll", "solver.head.roll", "head", "hmd_to_solver_head"),
+        ("hmd.rot.pitch", "fused.head.rot.pitch", "head", "hmd_to_fused_head_rotation"),
+        ("hmd.rot.yaw", "fused.head.rot.yaw", "head", "hmd_to_fused_head_rotation"),
+        ("hmd.rot.roll", "fused.head.rot.roll", "head", "hmd_to_fused_head_rotation"),
         ("hmd.loc.x", "fused.head.loc.x", "head", "hmd_to_fused_head"),
         ("hmd.loc.y", "fused.head.loc.y", "head", "hmd_to_fused_head"),
         ("hmd.loc.z", "fused.head.loc.z", "head", "hmd_to_fused_head"),
-        ("hmd.loc.z", "manny.head.loc.z", "head", "hmd_to_output_head"),
+        ("hmd.loc.z", "manny.head.world_loc.z", "head", "hmd_to_output_head"),
         ("mp_body.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
-        ("mp_world.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
+        ("mp_world_unreal.nose.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
         ("mp_body.ear_mid.z", "hmd.loc.z", "head_mp_diagnostic", "stage3_head_compare_only"),
         ("mp_world_unreal.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso", "stage1_mediapipe_candidate_torso"),
         ("mp_world_unreal.torso_height", "mp_candidate.torso_height", "torso", "stage1_mediapipe_candidate_torso"),
         ("mp_world_unreal.torso_side_proxy", "mp_candidate.torso_side_proxy", "torso", "stage1_mediapipe_candidate_torso"),
         ("mp_world_unreal.torso_forward_proxy", "mp_candidate.torso_forward_proxy", "torso", "stage1_mediapipe_candidate_torso"),
-        ("mp_body.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso", "mediapipe_raw_axis_diagnostic"),
-        ("mp_world.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso", "mediapipe_raw_axis_diagnostic"),
-        ("mp_body.torso_height", "mp_candidate.torso_height", "torso", "mediapipe_raw_axis_diagnostic"),
-        ("mp_world.torso_height", "mp_candidate.torso_height", "torso", "mediapipe_raw_axis_diagnostic"),
-        ("fused.torso_height", "manny.torso_height", "torso", "output_verification"),
+        ("mp_body.shoulder_mid.z", "mp_candidate.chest.loc.z", "torso", "mediapipe_source_to_candidate_diagnostic"),
+        ("mp_body.torso_height", "mp_candidate.torso_height", "torso", "mediapipe_source_to_candidate_diagnostic"),
+        ("fused.torso_height", "manny.world_torso_height", "torso", "output_verification"),
         ("mp_world_unreal.hip_mid.z", "mp_candidate.pelvis.loc.z", "pelvis", "stage1_mediapipe_candidate_pelvis"),
         ("mp_world_unreal.hip_mid.x", "mp_candidate.pelvis.loc.x", "pelvis", "stage1_mediapipe_candidate_pelvis"),
         ("mp_world_unreal.hip_mid.y", "mp_candidate.pelvis.loc.y", "pelvis", "stage1_mediapipe_candidate_pelvis"),
-        ("mp_body.hip_mid.z", "mp_candidate.pelvis.loc.z", "pelvis", "mediapipe_raw_axis_diagnostic"),
-        ("mp_world.hip_mid.z", "mp_candidate.pelvis.loc.z", "pelvis", "mediapipe_raw_axis_diagnostic"),
+        ("mp_body.hip_mid.z", "mp_candidate.pelvis.loc.z", "pelvis", "mediapipe_source_to_candidate_diagnostic"),
         ("mp_candidate.pelvis.loc.z", "shadow.pelvis.loc.z", "pelvis", "mediapipe_candidate_vs_fused_shadow_measure"),
         ("shadow.pelvis.loc.z", "fused.pelvis.loc.z", "pelvis", "shadow_vs_visible_pelvis_lock"),
-        ("fused.pelvis.loc.z", "manny.pelvis.loc.z", "pelvis", "output_verification"),
+        ("fused.pelvis.loc.z", "manny.pelvis.world_loc.z", "pelvis", "output_verification"),
     ]
     for side in ("left", "right"):
         clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
@@ -778,7 +814,7 @@ def expected_pairs():
                 ),
                 (
                     f"mp_body.{side}_shoulder_lift_from_hips",
-                    f"manny.{clavicle_bone}_lift_from_pelvis",
+                    f"manny.{clavicle_bone}_world_lift_from_pelvis",
                     "shoulders",
                     "stage2_output_shoulder_compare",
                 ),
@@ -788,7 +824,7 @@ def expected_pairs():
                     "shoulders",
                     "stage2_mediapipe_candidate_shoulder",
                 ),
-                (f"mp_body.{side}_shoulder.z", f"mp_candidate.{side}.shoulder.z", "shoulders", "mediapipe_raw_axis_diagnostic"),
+                (f"mp_body.{side}_shoulder.z", f"mp_candidate.{side}.shoulder.z", "shoulders", "mediapipe_source_to_candidate_diagnostic"),
                 (f"mp_candidate.{side}.shoulder.z", f"shadow.{side}.shoulder.z", "shoulders", "mediapipe_candidate_vs_fused_shadow_measure"),
                 (f"quest.{side}.shoulder.z", f"mp_body.{side}_shoulder.z", "shoulders", "shoulder_conflict_measure"),
                 (f"quest.{side}.shoulder.z", f"fused.{side}.shoulder.z", "shoulders", "quest_shoulder_output_measure"),
@@ -799,11 +835,11 @@ def expected_pairs():
                 [
                     (f"quest.{side}.wrist.{axis}", f"mp_body.{side}_wrist.{axis}", "arms_measure_only", "arm_conflict_measure_only"),
                     (f"quest.{side}.elbow.{axis}", f"mp_body.{side}_elbow.{axis}", "arms_measure_only", "arm_conflict_measure_only"),
-                    (f"quest.{side}.wrist.{axis}", f"mp_world.{side}_wrist.{axis}", "arms_measure_only", "arm_conflict_raw_measure_only"),
-                    (f"quest.{side}.elbow.{axis}", f"mp_world.{side}_elbow.{axis}", "arms_measure_only", "arm_conflict_raw_measure_only"),
+                    (f"quest.{side}.wrist.{axis}", f"mp_world_unreal.{side}_wrist.{axis}", "arms_measure_only", "arm_conflict_unreal_axis_measure_only"),
+                    (f"quest.{side}.elbow.{axis}", f"mp_world_unreal.{side}_elbow.{axis}", "arms_measure_only", "arm_conflict_unreal_axis_measure_only"),
                     (
                         f"quest.{side}.wrist.{axis}",
-                        f"manny.hand_{'l' if side == 'left' else 'r'}.loc.{axis}",
+                        f"manny.hand_{'l' if side == 'left' else 'r'}.world_loc.{axis}",
                         "arms_measure_only",
                         "quest_arm_output_measure",
                     ),
@@ -925,9 +961,11 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
         "source_recorded": True,
         "target_recorded": True,
     }
-    status, reason = classify_pair_status(row)
+    status, reason, true_cause, fix_action = classify_pair_status(row)
     row["diagnostic_status"] = status
     row["not_valid_reason"] = reason
+    row["true_cause"] = true_cause
+    row["fix_action"] = fix_action
     if status in NOT_VALID_STATUSES:
         row["stage_gate"] = status
         row["standardized_gate"] = status
@@ -1310,6 +1348,8 @@ def standardized_alignment_rows(rows):
                 "mediapipe_advance_ms": row["mediapipe_advance_ms"],
                 "diagnostic_status": row.get("diagnostic_status", "valid"),
                 "not_valid_reason": row.get("not_valid_reason", ""),
+                "true_cause": row.get("true_cause", ""),
+                "fix_action": row.get("fix_action", ""),
                 "source_recorded": row.get("source_recorded", True),
                 "target_recorded": row.get("target_recorded", True),
             }
@@ -1474,6 +1514,59 @@ def max_axis_range(values):
     return max((value for value in ranges if np.isfinite(value)), default=math.nan)
 
 
+def normalize_rows(values):
+    arr = np.asarray(values, dtype=float)
+    out = np.full_like(arr, math.nan)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        return out
+    lengths = np.linalg.norm(arr, axis=1)
+    mask = np.isfinite(lengths) & (lengths > 1.0e-6)
+    out[mask] = arr[mask] / lengths[mask, None]
+    return out
+
+
+def derived_basis_angles(points, left_name, right_name, lower_mid):
+    left = points[left_name]
+    right = points[right_name]
+    mid = midpoint(left, right)
+    right_axis = normalize_rows(right - left)
+    up_axis = normalize_rows(mid - lower_mid)
+    forward_axis = normalize_rows(np.cross(right_axis, up_axis))
+    angles = np.full((mid.shape[0], 3), math.nan, dtype=float)
+    mask = np.all(np.isfinite(right_axis), axis=1) & np.all(np.isfinite(up_axis), axis=1) & np.all(np.isfinite(forward_axis), axis=1)
+    if np.any(mask):
+        angles[mask, ROT_AXES["pitch"]] = np.degrees(np.arctan2(up_axis[mask, AXES["y"]], up_axis[mask, AXES["z"]]))
+        angles[mask, ROT_AXES["yaw"]] = np.degrees(np.arctan2(forward_axis[mask, AXES["y"]], forward_axis[mask, AXES["x"]]))
+        angles[mask, ROT_AXES["roll"]] = np.degrees(np.arctan2(right_axis[mask, AXES["z"]], np.linalg.norm(right_axis[mask][:, [AXES["x"], AXES["y"]]], axis=1)))
+    return angles
+
+
+def derived_limb_direction_angles(points, proximal_name, distal_name):
+    direction = normalize_rows(points[distal_name] - points[proximal_name])
+    angles = np.full((direction.shape[0], 3), math.nan, dtype=float)
+    mask = np.all(np.isfinite(direction), axis=1)
+    if np.any(mask):
+        angles[mask, ROT_AXES["pitch"]] = np.degrees(np.arctan2(direction[mask, AXES["z"]], np.linalg.norm(direction[mask][:, [AXES["x"], AXES["y"]]], axis=1)))
+        angles[mask, ROT_AXES["yaw"]] = np.degrees(np.arctan2(direction[mask, AXES["y"]], direction[mask, AXES["x"]]))
+        angles[mask, ROT_AXES["roll"]] = math.nan
+    return angles
+
+
+def quat_angular_range_degrees(quats):
+    arr = np.asarray(quats, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 4:
+        return math.nan
+    mask = np.all(np.isfinite(arr), axis=1)
+    if np.count_nonzero(mask) < MIN_SIGNAL_SAMPLES:
+        return math.nan
+    clean = arr[mask]
+    clean = clean / np.linalg.norm(clean, axis=1)[:, None]
+    reference = clean[0]
+    dots = np.clip(np.abs(clean @ reference), 0.0, 1.0)
+    angles = np.degrees(2.0 * np.arccos(dots))
+    return percentile_range(angles)
+
+
 def pose_node_availability_row(samples, region, lane, path, rotation_source, owner_default="not_recorded"):
     sample_count = len(samples)
     valid_values = []
@@ -1628,6 +1721,8 @@ def not_valid_reason_rows(rows, fitted_rows, rotation_rows):
                     "target": row["target"],
                     "diagnostic_status": status,
                     "not_valid_reason": row.get("not_valid_reason", ""),
+                    "true_cause": row.get("true_cause", status),
+                    "fix_action": row.get("fix_action", ""),
                     "stage_gate": row["stage_gate"],
                     "standardized_gate": row["standardized_gate"],
                     "flags": row["flags"],
@@ -1647,6 +1742,8 @@ def not_valid_reason_rows(rows, fitted_rows, rotation_rows):
                     "target": row["target"],
                     "diagnostic_status": "flat_unexpected",
                     "not_valid_reason": "fitted alignment source or target axis is flat and no Stage 0 lock explains it",
+                    "true_cause": "analyzer_or_capture_bug",
+                    "fix_action": "inspect_fitted_signal_routing",
                     "stage_gate": row["gate"],
                     "standardized_gate": "",
                     "flags": row["flags"],
@@ -1666,6 +1763,8 @@ def not_valid_reason_rows(rows, fitted_rows, rotation_rows):
                     "target": row.get("target", ""),
                     "diagnostic_status": status,
                     "not_valid_reason": row.get("not_valid_reason", ""),
+                    "true_cause": row.get("true_cause", status),
+                    "fix_action": row.get("fix_action", ""),
                     "stage_gate": status,
                     "standardized_gate": "",
                     "flags": "",
@@ -1705,6 +1804,8 @@ def main_bone_movement_summary_rows(rows):
                 "valid_fraction": row["valid_fraction"],
                 "diagnostic_status": row.get("diagnostic_status", "valid"),
                 "not_valid_reason": row.get("not_valid_reason", ""),
+                "true_cause": row.get("true_cause", ""),
+                "fix_action": row.get("fix_action", ""),
                 "note": row.get("not_valid_reason", "") or "Recorded numeric movement diagnostic.",
             }
         )
@@ -1733,6 +1834,8 @@ def rotation_diagnostic_rows(samples, signals, times, sample_total, mediapipe_ad
                     "valid_fraction": metric["valid_fraction"],
                     "diagnostic_status": "valid",
                     "not_valid_reason": "",
+                    "true_cause": "valid",
+                    "fix_action": "",
                     "note": "HMD to fused head rotation is the comparable authoritative rotation source in this capture.",
                 }
             )
@@ -1752,13 +1855,14 @@ def rotation_diagnostic_rows(samples, signals, times, sample_total, mediapipe_ad
                     "valid_fraction": 0.0,
                     "diagnostic_status": "not_recorded",
                     "not_valid_reason": "HMD or fused head rotation field was not recorded.",
+                    "true_cause": "missing_expected_signal",
+                    "fix_action": "inspect_capture_schema",
                     "note": "HMD/fused head rotation was expected but unavailable.",
                 }
             )
 
     for source_prefix, label, reason in (
-        ("solver.head", "head_rotation_hmd_to_solver", "solver head rotation diagnostics were not recorded in this capture"),
-        ("manny.head.local_rot", "manny_head_local_rotation", "Manny head local rotation recorder lane is flat/unsuitable in Stage 0; HMD to fused head rotation is authoritative"),
+        ("manny.head.local_rot", "manny_head_local_rotation", "Manny head local rotation recorder lane is component/local-space and not the authoritative head rotation; HMD to fused head rotation is authoritative"),
     ):
         for axis in ROT_AXES:
             source = f"hmd.rot.{axis}" if source_prefix == "solver.head" else f"{source_prefix}.{axis}"
@@ -1781,13 +1885,15 @@ def rotation_diagnostic_rows(samples, signals, times, sample_total, mediapipe_ad
                         "valid_fraction": metric["valid_fraction"],
                         "diagnostic_status": status,
                         "not_valid_reason": metric.get("not_valid_reason", ""),
+                        "true_cause": metric.get("true_cause", ""),
+                        "fix_action": metric.get("fix_action", ""),
                         "note": metric.get("not_valid_reason", "") or "Solver head rotation was recorded.",
                     }
                 )
             else:
                 values = signals.get(source, {}).get("values", np.asarray([], dtype=float))
                 value_range = percentile_range(values) if values.size else math.nan
-                status = "flat_expected_stage0" if source_prefix == "manny.head.local_rot" and np.isfinite(value_range) and value_range <= 1.0e-6 else "not_recorded"
+                status = "not_comparable_coordinate_space" if source_prefix == "manny.head.local_rot" and np.isfinite(value_range) and value_range <= 1.0e-6 else "not_recorded"
                 rows.append(
                     {
                         "bone_or_region": label,
@@ -1803,49 +1909,69 @@ def rotation_diagnostic_rows(samples, signals, times, sample_total, mediapipe_ad
                         "valid_fraction": float(np.count_nonzero(np.isfinite(values)) / sample_total) if values.size and sample_total else 0.0,
                         "diagnostic_status": status,
                         "not_valid_reason": reason,
+                        "true_cause": "genuine_coordinate_space_policy" if status == "not_comparable_coordinate_space" else "missing_expected_signal",
+                        "fix_action": "none",
                         "note": reason,
                     }
                 )
 
-    for region in ("chest", "pelvis", "left_shoulder", "right_shoulder"):
-        rot_values = array_series(samples, ["fusion", "mediapipe_candidate", "pose", region, "rot"], 3)
-        rot_count = int(np.count_nonzero(np.all(np.isfinite(rot_values), axis=1)))
+    mp_points = {landmark: landmark_points(samples, LANDMARK_SPACES["mp_body"], landmark) for landmark in POSE_NAMES}
+    shoulder_mid = midpoint(mp_points["left_shoulder"], mp_points["right_shoulder"])
+    hip_mid = midpoint(mp_points["left_hip"], mp_points["right_hip"])
+    derived_specs = [
+        ("mediapipe_derived_torso_rotation", "mp_body shoulders/hips", derived_basis_angles(mp_points, "left_shoulder", "right_shoulder", hip_mid)),
+        ("mediapipe_derived_pelvis_rotation", "mp_body hips/shoulders", derived_basis_angles(mp_points, "left_hip", "right_hip", shoulder_mid)),
+        ("mediapipe_derived_left_shoulder_direction", "mp_body left shoulder/elbow", derived_limb_direction_angles(mp_points, "left_shoulder", "left_elbow")),
+        ("mediapipe_derived_right_shoulder_direction", "mp_body right shoulder/elbow", derived_limb_direction_angles(mp_points, "right_shoulder", "right_elbow")),
+    ]
+    for label, source, values in derived_specs:
+        valid_count = int(np.count_nonzero(np.any(np.isfinite(values), axis=1)))
+        range_degrees = max_axis_range(values)
+        has_rotation = valid_count >= MIN_SIGNAL_SAMPLES and np.isfinite(range_degrees) and range_degrees > 1.0e-6
         rows.append(
             {
-                "bone_or_region": f"mediapipe_candidate_{region}_rotation",
-                "axis": "pitch/yaw/roll",
-                "source": f"fusion.mediapipe_candidate.pose.{region}.rot",
+                "bone_or_region": label,
+                "axis": "pitch/yaw/roll_proxy",
+                "source": source,
                 "target": "",
-                "has_rotation": False,
-                "rotation_source": "derived_unavailable",
+                "has_rotation": bool(has_rotation),
+                "rotation_source": "derived_landmark_basis" if has_rotation else "none",
                 "zero_lag_corr": math.nan,
                 "best_lag_ms": math.nan,
                 "best_lag_corr": math.nan,
-                "sample_count": rot_count,
-                "valid_fraction": float(rot_count / sample_total) if sample_total else 0.0,
-                "diagnostic_status": "derived_unavailable",
-                "not_valid_reason": "MediaPipe candidate body lane records landmark-derived positions; robust torso/pelvis/shoulder rotations are not recorded or derived here.",
-                "note": "Position diagnostics are valid; body rotation diagnostics are explicitly unavailable.",
+                "sample_count": valid_count,
+                "valid_fraction": float(valid_count / sample_total) if sample_total else 0.0,
+                "diagnostic_status": "valid" if has_rotation else "derived_unavailable",
+                "not_valid_reason": "" if has_rotation else "MediaPipe landmarks were not sufficient to derive this rotation proxy.",
+                "true_cause": "valid" if has_rotation else "genuine_source_unavailable",
+                "fix_action": "" if has_rotation else "collect_cleaner_capture",
+                "note": "Derived from landmark planes/vectors for diagnostics only; not used for visible authority.",
             }
         )
 
     for side in ("left", "right"):
+        quats = array_series(samples, ["fusion", "best_available", f"{side}_upper_limb", "hand_joints", "rotations_world", 1], 4)
+        quat_count = int(np.count_nonzero(np.all(np.isfinite(quats), axis=1)))
+        angle_range = quat_angular_range_degrees(quats)
+        has_rotation = quat_count >= MIN_SIGNAL_SAMPLES and np.isfinite(angle_range) and angle_range > 1.0e-6
         rows.append(
             {
-                "bone_or_region": f"quest_{side}_arm_chain_rotation",
+                "bone_or_region": f"quest_{side}_hand_wrist_rotation",
                 "axis": "pitch/yaw/roll",
-                "source": f"fusion.source.{side}_arm_chain",
+                "source": f"fusion.best_available.{side}_upper_limb.hand_joints.rotations_world[1]",
                 "target": "",
-                "has_rotation": False,
-                "rotation_source": "none",
+                "has_rotation": bool(has_rotation),
+                "rotation_source": "quest_hand_joint_rotation" if has_rotation else "none",
                 "zero_lag_corr": math.nan,
                 "best_lag_ms": math.nan,
                 "best_lag_corr": math.nan,
-                "sample_count": 0,
-                "valid_fraction": 0.0,
-                "diagnostic_status": "not_recorded",
-                "not_valid_reason": "Quest arm chain capture records shoulder/elbow/wrist positions but no chain rotation field.",
-                "note": "Do not infer Quest arm rotations from chain positions in this report.",
+                "sample_count": quat_count,
+                "valid_fraction": float(quat_count / sample_total) if sample_total else 0.0,
+                "diagnostic_status": "valid" if has_rotation else "not_recorded",
+                "not_valid_reason": "" if has_rotation else "Quest hand joint wrist rotation was not recorded in this capture.",
+                "true_cause": "valid" if has_rotation else "missing_runtime_recorder_field",
+                "fix_action": "" if has_rotation else "new_vr_preview_capture_required",
+                "note": "Quest hand joint rotation is recorded separately from the position-only arm chain.",
             }
         )
     return rows
@@ -2125,9 +2251,13 @@ def main():
                 if source in signals and target not in signals
                 else "source and target signals were not recorded in this capture",
                 mediapipe_advance_seconds,
+                "missing_runtime_recorder_field" if "manny." in source or "manny." in target else "missing_expected_signal",
             )
             missing["source_recorded"] = source in signals
             missing["target_recorded"] = target in signals
+            if missing["true_cause"] == "missing_runtime_recorder_field":
+                missing["not_valid_reason"] = "world-space Manny output bone fields are not present in this capture; the recorder now writes them for future captures"
+                missing["fix_action"] = "new_vr_preview_capture_required"
             rows.append(missing)
     rows.sort(key=lambda row: (row["measurement_only"], row["group"], row["pair_kind"], row["source"], row["target"]))
 
@@ -2157,6 +2287,8 @@ def main():
         "flags",
         "diagnostic_status",
         "not_valid_reason",
+        "true_cause",
+        "fix_action",
         "source_recorded",
         "target_recorded",
     ]
@@ -2192,6 +2324,8 @@ def main():
         "mediapipe_advance_ms",
         "diagnostic_status",
         "not_valid_reason",
+        "true_cause",
+        "fix_action",
         "source_recorded",
         "target_recorded",
     ]
@@ -2302,6 +2436,8 @@ def main():
         "valid_fraction",
         "diagnostic_status",
         "not_valid_reason",
+        "true_cause",
+        "fix_action",
         "note",
     ]
     write_csv(rotation_csv, rotation_rows, rotation_fields)
@@ -2319,6 +2455,8 @@ def main():
         "valid_fraction",
         "diagnostic_status",
         "not_valid_reason",
+        "true_cause",
+        "fix_action",
         "note",
     ]
     write_csv(movement_csv, movement_rows, movement_fields)
@@ -2333,6 +2471,8 @@ def main():
         "target",
         "diagnostic_status",
         "not_valid_reason",
+        "true_cause",
+        "fix_action",
         "stage_gate",
         "standardized_gate",
         "flags",
@@ -2393,6 +2533,8 @@ def main():
             "csv": str(reason_csv),
             "count": len(reason_rows),
             "status_counts": {status: sum(1 for row in reason_rows if row["diagnostic_status"] == status) for status in sorted({row["diagnostic_status"] for row in reason_rows})},
+            "true_cause_counts": {cause: sum(1 for row in reason_rows if row["true_cause"] == cause) for cause in sorted({row["true_cause"] for row in reason_rows})},
+            "fix_action_counts": {action: sum(1 for row in reason_rows if row["fix_action"] == action) for action in sorted({row["fix_action"] for row in reason_rows})},
             "rows": reason_rows,
         },
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
