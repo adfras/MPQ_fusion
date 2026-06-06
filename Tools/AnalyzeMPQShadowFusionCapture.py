@@ -55,6 +55,14 @@ POSE_NAMES = [
 AXES = {"x": 0, "y": 1, "z": 2}
 ROT_AXES = {"pitch": 0, "yaw": 1, "roll": 2}
 MIN_SIGNAL_SAMPLES = 5
+NOT_VALID_STATUSES = {
+    "not_recorded",
+    "source_unavailable",
+    "flat_expected_stage0",
+    "flat_unexpected",
+    "not_comparable_coordinate_space",
+    "derived_unavailable",
+}
 
 LANDMARK_SPACES = {
     "mp_world": ["pose_world_landmarks"],
@@ -318,6 +326,81 @@ def add_signal(signals, name, group, values, source_kind=""):
     values = np.asarray(values, dtype=float)
     if np.count_nonzero(np.isfinite(values)) >= MIN_SIGNAL_SAMPLES:
         signals[name] = {"group": group, "values": values, "source_kind": source_kind}
+
+
+def empty_metric_row(source_name, target_name, group, pair_kind, status, reason, mediapipe_advance_seconds=0.0):
+    stage_gate = status
+    standardized_gate = status
+    row = {
+        "group": group,
+        "pair_kind": pair_kind,
+        "source": source_name,
+        "target": target_name,
+        "sample_count": 0,
+        "valid_fraction": 0.0,
+        "source_range_p95_p05": math.nan,
+        "target_range_p95_p05": math.nan,
+        "amplitude_ratio_target_over_source": math.nan,
+        "corr_zero_lag": math.nan,
+        "best_lag_seconds": math.nan,
+        "corr_best_lag": math.nan,
+        "best_abs_lag_seconds": math.nan,
+        "corr_best_abs_lag": math.nan,
+        "source_step95_standardized": math.nan,
+        "target_step95_standardized": math.nan,
+        "step95_ratio_target_over_source": math.nan,
+        "measurement_only": group in {"arms_measure_only", "lower_body_measure_only"} or "measure_only" in pair_kind,
+        "standardized_gate": standardized_gate,
+        "standardized_flags": status,
+        "stage_gate": stage_gate,
+        "mediapipe_advance_ms": mediapipe_advance_seconds * 1000.0,
+        "flags": status,
+        "diagnostic_status": status,
+        "not_valid_reason": reason,
+        "source_recorded": False,
+        "target_recorded": False,
+    }
+    return row
+
+
+def flat_expected_stage0_pair(pair_kind):
+    return pair_kind in {
+        "hmd_to_output_head",
+        "output_verification",
+        "stage2_output_shoulder_compare",
+        "shadow_vs_visible_pelvis_lock",
+    }
+
+
+def coordinate_space_not_comparable_pair(source_name, target_name, pair_kind):
+    if pair_kind in {"mediapipe_raw_axis_diagnostic", "arm_conflict_measure_only", "arm_conflict_raw_measure_only", "shoulder_conflict_measure"}:
+        return True
+    mediapipe_source = source_name.startswith(("mp_body.", "mp_world.", "mp_norm."))
+    non_mediapipe_target = target_name.startswith(("hmd.", "quest.", "fused.", "manny."))
+    return mediapipe_source and non_mediapipe_target
+
+
+def classify_pair_status(row, source_recorded=True, target_recorded=True):
+    if not source_recorded and not target_recorded:
+        return "not_recorded", "source and target signals were not recorded in this capture"
+    if not source_recorded:
+        return "not_recorded", "source signal was not recorded in this capture"
+    if not target_recorded:
+        return "not_recorded", "target signal was not recorded in this capture"
+    if row["sample_count"] < 8 or row["valid_fraction"] < 0.25:
+        return "source_unavailable", "source/target overlap is too sparse for a defensible diagnostic"
+    flags = set(flag for flag in row["flags"].split(";") if flag)
+    if ("flat_source" in flags or "flat_target" in flags) and flat_expected_stage0_pair(row["pair_kind"]):
+        return "flat_expected_stage0", "flat visible-output row is expected while Stage 0 keeps MediaPipe authority disabled"
+    if coordinate_space_not_comparable_pair(row["source"], row["target"], row["pair_kind"]):
+        return "not_comparable_coordinate_space", "signals are intentionally diagnostic only and are not in a directly comparable coordinate space"
+    if "flat_source" in flags or "flat_target" in flags:
+        return "flat_unexpected", "source or target is flat and no Stage 0 lock explains it"
+    if row["measurement_only"] or row["stage_gate"] in {"pass", "measure_only_no_authority"} or row["standardized_gate"] == "pass":
+        return "valid", ""
+    if row["flags"]:
+        return "valid", "recorded and numerically valid, but gate did not pass"
+    return "valid", ""
 
 
 def add_path_signal(signals, samples, name, group, path, source_kind=""):
@@ -813,7 +896,7 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
     )
     stage_gate = "pass" if stage_ready else ("measure_only_no_authority" if measurement_only else "fail")
 
-    return {
+    row = {
         "group": group,
         "pair_kind": pair_kind,
         "source": source_name,
@@ -837,7 +920,18 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
         "stage_gate": stage_gate,
         "mediapipe_advance_ms": mediapipe_advance_seconds * 1000.0,
         "flags": ";".join(flags),
+        "diagnostic_status": "",
+        "not_valid_reason": "",
+        "source_recorded": True,
+        "target_recorded": True,
     }
+    status, reason = classify_pair_status(row)
+    row["diagnostic_status"] = status
+    row["not_valid_reason"] = reason
+    if status in NOT_VALID_STATUSES:
+        row["stage_gate"] = status
+        row["standardized_gate"] = status
+    return row
 
 
 def fit_signal_pairs():
@@ -1214,6 +1308,10 @@ def standardized_alignment_rows(rows):
                 "raw_pair_flags": row["flags"],
                 "raw_amplitude_ratio_target_over_source": row["amplitude_ratio_target_over_source"],
                 "mediapipe_advance_ms": row["mediapipe_advance_ms"],
+                "diagnostic_status": row.get("diagnostic_status", "valid"),
+                "not_valid_reason": row.get("not_valid_reason", ""),
+                "source_recorded": row.get("source_recorded", True),
+                "target_recorded": row.get("target_recorded", True),
             }
         )
     return result
@@ -1344,6 +1442,415 @@ def summarize_capture(samples):
     return states
 
 
+def counts_for_path(samples, path, default="missing"):
+    counts = {}
+    for sample in samples:
+        raw_value = nested_obj(sample, path, default)
+        value = str(raw_value).lower() if isinstance(raw_value, bool) else (raw_value if isinstance(raw_value, str) else default)
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def array_series(samples, path, width):
+    values = np.full((len(samples), width), math.nan, dtype=float)
+    for sample_index, sample in enumerate(samples):
+        raw = nested_obj(sample, path)
+        if not isinstance(raw, list) or len(raw) < width:
+            continue
+        for value_index in range(width):
+            values[sample_index, value_index] = to_float(raw[value_index])
+    return values
+
+
+def array_valid_count(samples, path, width):
+    values = array_series(samples, path, width)
+    return int(np.count_nonzero(np.all(np.isfinite(values), axis=1)))
+
+
+def max_axis_range(values):
+    if values.ndim != 2 or values.shape[1] == 0:
+        return math.nan
+    ranges = [percentile_range(values[:, index]) for index in range(values.shape[1])]
+    return max((value for value in ranges if np.isfinite(value)), default=math.nan)
+
+
+def pose_node_availability_row(samples, region, lane, path, rotation_source, owner_default="not_recorded"):
+    sample_count = len(samples)
+    valid_values = []
+    owner_counts = {}
+    source_state_counts = {}
+    confidence_values = []
+    for sample in samples:
+        node = nested_obj(sample, path)
+        if not isinstance(node, dict):
+            valid_values.append(False)
+            owner_counts[owner_default] = owner_counts.get(owner_default, 0) + 1
+            source_state_counts["missing"] = source_state_counts.get("missing", 0) + 1
+            continue
+        valid_values.append(bool(node.get("valid", False)))
+        owner = str(node.get("owner", owner_default))
+        owner_counts[owner] = owner_counts.get(owner, 0) + 1
+        source_state = str(node.get("source_state", "missing"))
+        source_state_counts[source_state] = source_state_counts.get(source_state, 0) + 1
+        confidence_values.append(to_float(node.get("confidence")))
+    loc_values = array_series(samples, path + ["loc"], 3)
+    rot_values = array_series(samples, path + ["rot"], 3)
+    quat_values = array_series(samples, path + ["quat"], 4)
+    loc_valid = int(np.count_nonzero(np.all(np.isfinite(loc_values), axis=1)))
+    rot_valid = int(np.count_nonzero(np.all(np.isfinite(rot_values), axis=1)))
+    quat_valid = int(np.count_nonzero(np.all(np.isfinite(quat_values), axis=1)))
+    rot_range = max_axis_range(rot_values)
+    has_rotation = rot_valid >= MIN_SIGNAL_SAMPLES and np.isfinite(rot_range) and rot_range > 1.0e-6
+    return {
+        "region": region,
+        "lane": lane,
+        "path": ".".join(str(part) for part in path),
+        "valid_samples": int(sum(1 for value in valid_values if value)),
+        "valid_fraction": float(sum(1 for value in valid_values if value) / sample_count) if sample_count else 0.0,
+        "loc_samples": loc_valid,
+        "loc_fraction": float(loc_valid / sample_count) if sample_count else 0.0,
+        "rot_samples": rot_valid,
+        "quat_samples": quat_valid,
+        "has_rotation": bool(has_rotation),
+        "rotation_range_max_p95_p05": rot_range,
+        "rotation_source": rotation_source if has_rotation else "none",
+        "owner_counts_json": json.dumps(owner_counts, sort_keys=True),
+        "source_state_counts_json": json.dumps(source_state_counts, sort_keys=True),
+        "confidence_p50": stats(confidence_values)["p50"],
+    }
+
+
+def live_bone_availability_row(samples, region, bone_name, rotation_field="rot"):
+    sample_count = len(samples)
+    path = ["live", bone_name]
+    loc_values = array_series(samples, path + ["loc"], 3)
+    rot_values = array_series(samples, path + [rotation_field], 3)
+    loc_valid = int(np.count_nonzero(np.all(np.isfinite(loc_values), axis=1)))
+    rot_valid = int(np.count_nonzero(np.all(np.isfinite(rot_values), axis=1)))
+    rot_range = max_axis_range(rot_values)
+    has_rotation = rot_valid >= MIN_SIGNAL_SAMPLES and np.isfinite(rot_range) and rot_range > 1.0e-6
+    return {
+        "region": region,
+        "lane": f"output_{bone_name}",
+        "path": ".".join(path),
+        "valid_samples": loc_valid,
+        "valid_fraction": float(loc_valid / sample_count) if sample_count else 0.0,
+        "loc_samples": loc_valid,
+        "loc_fraction": float(loc_valid / sample_count) if sample_count else 0.0,
+        "rot_samples": rot_valid,
+        "quat_samples": array_valid_count(samples, path + ["quat"], 4),
+        "has_rotation": bool(has_rotation),
+        "rotation_range_max_p95_p05": rot_range,
+        "rotation_source": "output_bone" if has_rotation else "none",
+        "owner_counts_json": json.dumps({"manny_output_recorder": loc_valid, "missing": max(0, sample_count - loc_valid)}, sort_keys=True),
+        "source_state_counts_json": json.dumps({"recorded": loc_valid, "missing": max(0, sample_count - loc_valid)}, sort_keys=True),
+        "confidence_p50": math.nan,
+    }
+
+
+def source_availability_row(samples, region, lane, path, source_owner, rotation_path=None):
+    sample_count = len(samples)
+    state_counts = counts_for_path(samples, path + ["status", "state"])
+    fresh_count = int(state_counts.get("fresh", 0))
+    loc_valid = array_valid_count(samples, path + ["loc"], 3)
+    rot_valid = array_valid_count(samples, rotation_path or path + ["rot"], 3)
+    rot_values = array_series(samples, rotation_path or path + ["rot"], 3)
+    rot_range = max_axis_range(rot_values)
+    has_rotation = rot_valid >= MIN_SIGNAL_SAMPLES and np.isfinite(rot_range) and rot_range > 1.0e-6
+    return {
+        "region": region,
+        "lane": lane,
+        "path": ".".join(path),
+        "valid_samples": fresh_count,
+        "valid_fraction": float(fresh_count / sample_count) if sample_count else 0.0,
+        "loc_samples": loc_valid,
+        "loc_fraction": float(loc_valid / sample_count) if sample_count else 0.0,
+        "rot_samples": rot_valid,
+        "quat_samples": array_valid_count(samples, path + ["quat"], 4),
+        "has_rotation": bool(has_rotation),
+        "rotation_range_max_p95_p05": rot_range,
+        "rotation_source": source_owner if has_rotation else "none",
+        "owner_counts_json": json.dumps({source_owner: fresh_count, "missing_or_not_fresh": max(0, sample_count - fresh_count)}, sort_keys=True),
+        "source_state_counts_json": json.dumps(state_counts, sort_keys=True),
+        "confidence_p50": stats(series_from_path(samples, path + ["status", "confidence"]))["p50"],
+    }
+
+
+def region_ownership_availability(samples):
+    rows = [
+        source_availability_row(samples, "head", "source_hmd", ["fusion", "source", "hmd"], "hmd"),
+        source_availability_row(samples, "chest", "source_mediapipe_body", ["fusion", "source", "body_pose"], "mediapipe", ["fusion", "source", "body_pose", "rot"]),
+        source_availability_row(samples, "left_arm", "source_quest_left_arm_chain", ["fusion", "source", "left_arm_chain"], "quest"),
+        source_availability_row(samples, "right_arm", "source_quest_right_arm_chain", ["fusion", "source", "right_arm_chain"], "quest"),
+    ]
+    for lane, base_path, rotation_source in (
+        ("fused", ["fusion", "pose"], "fusion_pose"),
+        ("shadow_candidate", ["fusion", "shadow_candidate", "pose"], "shadow_candidate"),
+        ("mediapipe_candidate", ["fusion", "mediapipe_candidate", "pose"], "derived_unavailable"),
+    ):
+        for region, bone in (
+            ("head", "head"),
+            ("chest", "chest"),
+            ("pelvis", "pelvis"),
+            ("left_shoulder", "left_shoulder"),
+            ("left_elbow", "left_elbow"),
+            ("left_wrist", "left_wrist"),
+            ("right_shoulder", "right_shoulder"),
+            ("right_elbow", "right_elbow"),
+            ("right_wrist", "right_wrist"),
+        ):
+            rows.append(pose_node_availability_row(samples, region, lane, base_path + [bone], rotation_source))
+    for region, bone, rotation_field in (
+        ("head", "head", "local_rot"),
+        ("pelvis", "pelvis", "rot"),
+        ("chest", "spine_03", "rot"),
+        ("left_shoulder", "clavicle_l", "rot"),
+        ("right_shoulder", "clavicle_r", "rot"),
+        ("left_hand", "hand_l", "rot"),
+        ("right_hand", "hand_r", "rot"),
+    ):
+        rows.append(live_bone_availability_row(samples, region, bone, rotation_field))
+    return rows
+
+
+def not_valid_reason_rows(rows, fitted_rows, rotation_rows):
+    result = []
+    for row in rows:
+        status = row.get("diagnostic_status", "valid")
+        flat_flag = any(flag in row.get("flags", "") for flag in ("flat_source", "flat_target"))
+        if status in NOT_VALID_STATUSES or flat_flag:
+            result.append(
+                {
+                    "table": "pair_metrics",
+                    "group": row["group"],
+                    "kind": row["pair_kind"],
+                    "source": row["source"],
+                    "target": row["target"],
+                    "diagnostic_status": status,
+                    "not_valid_reason": row.get("not_valid_reason", ""),
+                    "stage_gate": row["stage_gate"],
+                    "standardized_gate": row["standardized_gate"],
+                    "flags": row["flags"],
+                    "sample_count": row["sample_count"],
+                    "valid_fraction": row["valid_fraction"],
+                }
+            )
+    for row in fitted_rows:
+        flat_flag = any(flag in row.get("flags", "") for flag in ("flat_source", "flat_target", "flat_source_axis", "flat_target_axis"))
+        if row.get("gate") == "fail" and flat_flag:
+            result.append(
+                {
+                    "table": "fitted_alignment",
+                    "group": row["group"],
+                    "kind": row["fit_kind"],
+                    "source": row["source"],
+                    "target": row["target"],
+                    "diagnostic_status": "flat_unexpected",
+                    "not_valid_reason": "fitted alignment source or target axis is flat and no Stage 0 lock explains it",
+                    "stage_gate": row["gate"],
+                    "standardized_gate": "",
+                    "flags": row["flags"],
+                    "sample_count": row["sample_count"],
+                    "valid_fraction": row["valid_fraction"],
+                }
+            )
+    for row in rotation_rows:
+        status = row.get("diagnostic_status", "valid")
+        if status in NOT_VALID_STATUSES:
+            result.append(
+                {
+                    "table": "rotation_diagnostics",
+                    "group": row["bone_or_region"],
+                    "kind": row["axis"],
+                    "source": row.get("source", ""),
+                    "target": row.get("target", ""),
+                    "diagnostic_status": status,
+                    "not_valid_reason": row.get("not_valid_reason", ""),
+                    "stage_gate": status,
+                    "standardized_gate": "",
+                    "flags": "",
+                    "sample_count": row.get("sample_count", 0),
+                    "valid_fraction": row.get("valid_fraction", 0.0),
+                }
+            )
+    return result
+
+
+def main_bone_movement_summary_rows(rows):
+    movement_kinds = {
+        "hmd_to_fused_head": "head_position_hmd_to_fused",
+        "stage1_mediapipe_candidate_pelvis": "pelvis_mediapipe_to_candidate",
+        "quest_shoulder_output_measure": "shoulder_quest_to_fused",
+        "stage2_mediapipe_candidate_shoulder": "shoulder_mediapipe_to_candidate",
+        "stage1_mediapipe_candidate_torso": "torso_mediapipe_to_candidate",
+        "arm_conflict_measure_only": "arm_quest_vs_mediapipe_measure_only",
+        "quest_arm_output_measure": "hand_quest_to_manny_output",
+        "output_verification": "visible_output_lock_stage0",
+        "stage2_output_shoulder_compare": "visible_shoulder_output_lock_stage0",
+    }
+    result = []
+    for row in rows:
+        label = movement_kinds.get(row["pair_kind"])
+        if label is None:
+            continue
+        result.append(
+            {
+                "bone_or_region": label,
+                "source": row["source"],
+                "target": row["target"],
+                "zero_lag_corr": row["corr_zero_lag"],
+                "best_lag_ms": row["best_lag_seconds"] * 1000.0 if np.isfinite(row["best_lag_seconds"]) else math.nan,
+                "best_lag_corr": row["corr_best_lag"],
+                "sample_count": row["sample_count"],
+                "valid_fraction": row["valid_fraction"],
+                "diagnostic_status": row.get("diagnostic_status", "valid"),
+                "not_valid_reason": row.get("not_valid_reason", ""),
+                "note": row.get("not_valid_reason", "") or "Recorded numeric movement diagnostic.",
+            }
+        )
+    return result
+
+
+def rotation_diagnostic_rows(samples, signals, times, sample_total, mediapipe_advance_seconds):
+    rows = []
+    for axis in ROT_AXES:
+        source = f"hmd.rot.{axis}"
+        target = f"fused.head.rot.{axis}"
+        if source in signals and target in signals:
+            metric = pair_metrics(times, sample_total, signals, source, target, "head", "hmd_to_fused_head_rotation", mediapipe_advance_seconds)
+            rows.append(
+                {
+                    "bone_or_region": "head_rotation_hmd_to_fused",
+                    "axis": axis,
+                    "source": source,
+                    "target": target,
+                    "has_rotation": True,
+                    "rotation_source": "hmd_authoritative",
+                    "zero_lag_corr": metric["corr_zero_lag"],
+                    "best_lag_ms": metric["best_lag_seconds"] * 1000.0 if np.isfinite(metric["best_lag_seconds"]) else math.nan,
+                    "best_lag_corr": metric["corr_best_lag"],
+                    "sample_count": metric["sample_count"],
+                    "valid_fraction": metric["valid_fraction"],
+                    "diagnostic_status": "valid",
+                    "not_valid_reason": "",
+                    "note": "HMD to fused head rotation is the comparable authoritative rotation source in this capture.",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "bone_or_region": "head_rotation_hmd_to_fused",
+                    "axis": axis,
+                    "source": source,
+                    "target": target,
+                    "has_rotation": False,
+                    "rotation_source": "none",
+                    "zero_lag_corr": math.nan,
+                    "best_lag_ms": math.nan,
+                    "best_lag_corr": math.nan,
+                    "sample_count": 0,
+                    "valid_fraction": 0.0,
+                    "diagnostic_status": "not_recorded",
+                    "not_valid_reason": "HMD or fused head rotation field was not recorded.",
+                    "note": "HMD/fused head rotation was expected but unavailable.",
+                }
+            )
+
+    for source_prefix, label, reason in (
+        ("solver.head", "head_rotation_hmd_to_solver", "solver head rotation diagnostics were not recorded in this capture"),
+        ("manny.head.local_rot", "manny_head_local_rotation", "Manny head local rotation recorder lane is flat/unsuitable in Stage 0; HMD to fused head rotation is authoritative"),
+    ):
+        for axis in ROT_AXES:
+            source = f"hmd.rot.{axis}" if source_prefix == "solver.head" else f"{source_prefix}.{axis}"
+            target = f"{source_prefix}.{axis}" if source_prefix == "solver.head" else ""
+            if source_prefix == "solver.head" and source in signals and target in signals:
+                metric = pair_metrics(times, sample_total, signals, source, target, "head", "hmd_to_solver_head", mediapipe_advance_seconds)
+                status = metric.get("diagnostic_status", "valid")
+                rows.append(
+                    {
+                        "bone_or_region": label,
+                        "axis": axis,
+                        "source": source,
+                        "target": target,
+                        "has_rotation": status == "valid",
+                        "rotation_source": "solver" if status == "valid" else "none",
+                        "zero_lag_corr": metric["corr_zero_lag"],
+                        "best_lag_ms": metric["best_lag_seconds"] * 1000.0 if np.isfinite(metric["best_lag_seconds"]) else math.nan,
+                        "best_lag_corr": metric["corr_best_lag"],
+                        "sample_count": metric["sample_count"],
+                        "valid_fraction": metric["valid_fraction"],
+                        "diagnostic_status": status,
+                        "not_valid_reason": metric.get("not_valid_reason", ""),
+                        "note": metric.get("not_valid_reason", "") or "Solver head rotation was recorded.",
+                    }
+                )
+            else:
+                values = signals.get(source, {}).get("values", np.asarray([], dtype=float))
+                value_range = percentile_range(values) if values.size else math.nan
+                status = "flat_expected_stage0" if source_prefix == "manny.head.local_rot" and np.isfinite(value_range) and value_range <= 1.0e-6 else "not_recorded"
+                rows.append(
+                    {
+                        "bone_or_region": label,
+                        "axis": axis,
+                        "source": source,
+                        "target": target,
+                        "has_rotation": False,
+                        "rotation_source": "none",
+                        "zero_lag_corr": math.nan,
+                        "best_lag_ms": math.nan,
+                        "best_lag_corr": math.nan,
+                        "sample_count": int(np.count_nonzero(np.isfinite(values))) if values.size else 0,
+                        "valid_fraction": float(np.count_nonzero(np.isfinite(values)) / sample_total) if values.size and sample_total else 0.0,
+                        "diagnostic_status": status,
+                        "not_valid_reason": reason,
+                        "note": reason,
+                    }
+                )
+
+    for region in ("chest", "pelvis", "left_shoulder", "right_shoulder"):
+        rot_values = array_series(samples, ["fusion", "mediapipe_candidate", "pose", region, "rot"], 3)
+        rot_count = int(np.count_nonzero(np.all(np.isfinite(rot_values), axis=1)))
+        rows.append(
+            {
+                "bone_or_region": f"mediapipe_candidate_{region}_rotation",
+                "axis": "pitch/yaw/roll",
+                "source": f"fusion.mediapipe_candidate.pose.{region}.rot",
+                "target": "",
+                "has_rotation": False,
+                "rotation_source": "derived_unavailable",
+                "zero_lag_corr": math.nan,
+                "best_lag_ms": math.nan,
+                "best_lag_corr": math.nan,
+                "sample_count": rot_count,
+                "valid_fraction": float(rot_count / sample_total) if sample_total else 0.0,
+                "diagnostic_status": "derived_unavailable",
+                "not_valid_reason": "MediaPipe candidate body lane records landmark-derived positions; robust torso/pelvis/shoulder rotations are not recorded or derived here.",
+                "note": "Position diagnostics are valid; body rotation diagnostics are explicitly unavailable.",
+            }
+        )
+
+    for side in ("left", "right"):
+        rows.append(
+            {
+                "bone_or_region": f"quest_{side}_arm_chain_rotation",
+                "axis": "pitch/yaw/roll",
+                "source": f"fusion.source.{side}_arm_chain",
+                "target": "",
+                "has_rotation": False,
+                "rotation_source": "none",
+                "zero_lag_corr": math.nan,
+                "best_lag_ms": math.nan,
+                "best_lag_corr": math.nan,
+                "sample_count": 0,
+                "valid_fraction": 0.0,
+                "diagnostic_status": "not_recorded",
+                "not_valid_reason": "Quest arm chain capture records shoulder/elbow/wrist positions but no chain rotation field.",
+                "note": "Do not infer Quest arm rotations from chain positions in this report.",
+            }
+        )
+    return rows
+
+
 def timing_summary(samples):
     rows = []
     for field in TIMING_MS_FIELDS:
@@ -1422,7 +1929,7 @@ def face_summary(samples):
 def plot_groups(out_dir, times, signals, rows, mediapipe_advance_seconds=0.0):
     charts = {}
     for group in sorted({row["group"] for row in rows}):
-        group_rows = [row for row in rows if row["group"] == group]
+        group_rows = [row for row in rows if row["group"] == group and row["source"] in signals and row["target"] in signals]
         if not group_rows:
             continue
         for chunk_start in range(0, len(group_rows), 12):
@@ -1605,6 +2112,23 @@ def main():
     for source, target, group, pair_kind in expected_pairs():
         if source in signals and target in signals:
             rows.append(pair_metrics(times, len(samples), signals, source, target, group, pair_kind, mediapipe_advance_seconds))
+        else:
+            missing = empty_metric_row(
+                source,
+                target,
+                group,
+                pair_kind,
+                "not_recorded",
+                "source signal was not recorded in this capture"
+                if source not in signals and target in signals
+                else "target signal was not recorded in this capture"
+                if source in signals and target not in signals
+                else "source and target signals were not recorded in this capture",
+                mediapipe_advance_seconds,
+            )
+            missing["source_recorded"] = source in signals
+            missing["target_recorded"] = target in signals
+            rows.append(missing)
     rows.sort(key=lambda row: (row["measurement_only"], row["group"], row["pair_kind"], row["source"], row["target"]))
 
     pair_fields = [
@@ -1631,6 +2155,10 @@ def main():
         "stage_gate",
         "mediapipe_advance_ms",
         "flags",
+        "diagnostic_status",
+        "not_valid_reason",
+        "source_recorded",
+        "target_recorded",
     ]
     metrics_csv = out_dir / "mpq_shadow_pair_metrics.csv"
     write_csv(metrics_csv, rows, pair_fields)
@@ -1662,6 +2190,10 @@ def main():
         "raw_pair_flags",
         "raw_amplitude_ratio_target_over_source",
         "mediapipe_advance_ms",
+        "diagnostic_status",
+        "not_valid_reason",
+        "source_recorded",
+        "target_recorded",
     ]
     write_csv(standardized_csv, standardized_rows, standardized_fields)
 
@@ -1733,6 +2265,82 @@ def main():
     ]
     write_csv(fitted_csv, fitted_rows, fitted_fields)
 
+    region_rows = region_ownership_availability(samples)
+    region_csv = out_dir / "mpq_shadow_region_ownership_availability.csv"
+    region_fields = [
+        "region",
+        "lane",
+        "path",
+        "valid_samples",
+        "valid_fraction",
+        "loc_samples",
+        "loc_fraction",
+        "rot_samples",
+        "quat_samples",
+        "has_rotation",
+        "rotation_range_max_p95_p05",
+        "rotation_source",
+        "owner_counts_json",
+        "source_state_counts_json",
+        "confidence_p50",
+    ]
+    write_csv(region_csv, region_rows, region_fields)
+
+    rotation_rows = rotation_diagnostic_rows(samples, signals, times, len(samples), mediapipe_advance_seconds)
+    rotation_csv = out_dir / "main_bone_rotation_correlation_summary.csv"
+    rotation_fields = [
+        "bone_or_region",
+        "axis",
+        "source",
+        "target",
+        "has_rotation",
+        "rotation_source",
+        "zero_lag_corr",
+        "best_lag_ms",
+        "best_lag_corr",
+        "sample_count",
+        "valid_fraction",
+        "diagnostic_status",
+        "not_valid_reason",
+        "note",
+    ]
+    write_csv(rotation_csv, rotation_rows, rotation_fields)
+
+    movement_rows = main_bone_movement_summary_rows(rows)
+    movement_csv = out_dir / "main_bone_movement_correlation_summary.csv"
+    movement_fields = [
+        "bone_or_region",
+        "source",
+        "target",
+        "zero_lag_corr",
+        "best_lag_ms",
+        "best_lag_corr",
+        "sample_count",
+        "valid_fraction",
+        "diagnostic_status",
+        "not_valid_reason",
+        "note",
+    ]
+    write_csv(movement_csv, movement_rows, movement_fields)
+
+    reason_rows = not_valid_reason_rows(rows, fitted_rows, rotation_rows)
+    reason_csv = out_dir / "mpq_shadow_not_valid_reasons.csv"
+    reason_fields = [
+        "table",
+        "group",
+        "kind",
+        "source",
+        "target",
+        "diagnostic_status",
+        "not_valid_reason",
+        "stage_gate",
+        "standardized_gate",
+        "flags",
+        "sample_count",
+        "valid_fraction",
+    ]
+    write_csv(reason_csv, reason_rows, reason_fields)
+
     charts = plot_groups(out_dir, times, signals, rows, mediapipe_advance_seconds)
     timing_chart = plot_timing(out_dir, times, samples)
     if timing_chart:
@@ -1761,6 +2369,10 @@ def main():
         "landmark_inventory_csv": str(landmark_csv),
         "timing_summary_csv": str(timing_csv),
         "fitted_alignment_csv": str(fitted_csv),
+        "region_ownership_availability_csv": str(region_csv),
+        "not_valid_reasons_csv": str(reason_csv),
+        "main_bone_movement_correlation_summary_csv": str(movement_csv),
+        "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
         "charts": charts,
         "outputs": {
             "metrics_csv": str(metrics_csv),
@@ -1769,7 +2381,19 @@ def main():
             "landmark_inventory_csv": str(landmark_csv),
             "timing_summary_csv": str(timing_csv),
             "fitted_alignment_csv": str(fitted_csv),
+            "region_ownership_availability_csv": str(region_csv),
+            "not_valid_reasons_csv": str(reason_csv),
+            "main_bone_movement_correlation_summary_csv": str(movement_csv),
+            "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
             "charts": charts,
+        },
+        "region_ownership_availability": region_rows,
+        "rotation_diagnostics": rotation_rows,
+        "not_valid_reason_summary": {
+            "csv": str(reason_csv),
+            "count": len(reason_rows),
+            "status_counts": {status: sum(1 for row in reason_rows if row["diagnostic_status"] == status) for status in sorted({row["diagnostic_status"] for row in reason_rows})},
+            "rows": reason_rows,
         },
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
         "standardized_alignment_summary": summarize_standardized_alignment(rows),
@@ -1789,6 +2413,10 @@ def main():
                 "landmark_inventory_csv": str(landmark_csv),
                 "timing_summary_csv": str(timing_csv),
                 "fitted_alignment_csv": str(fitted_csv),
+                "region_ownership_availability_csv": str(region_csv),
+                "not_valid_reasons_csv": str(reason_csv),
+                "main_bone_movement_correlation_summary_csv": str(movement_csv),
+                "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
                 "charts": charts,
             },
             indent=2,
