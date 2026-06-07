@@ -82,6 +82,56 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("MediaPipe body authority mode. 0=trace-only/no pose authority, 1=allow only after stable calibration, 2=legacy allow when calibrated and fresh."));
 
+	TAutoConsoleVariable<int32> CVarBodyFusionStage1TorsoPelvisHint(
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"),
+		0,
+		TEXT("When non-zero, enables the guarded Stage 1 MediaPipe vertical pelvis/torso hint path while keeping full BodyFusion pose writes, head, arms, wrists, hands, and fingers under their existing authorities."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintBlend(
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"),
+		0.25f,
+		TEXT("Blend fraction for Stage 1 vertical MediaPipe pelvis/torso offsets. Values are clamped to 0..1 at use time."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisMaxVerticalCm(
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisMaxVerticalCm"),
+		8.0f,
+		TEXT("Maximum absolute vertical offset in centimeters that Stage 1 MediaPipe pelvis/torso hinting may apply per sampled target."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintHalfLifeSeconds(
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"),
+		0.04f,
+		TEXT("Smoothing half-life in seconds for guarded Stage 1 vertical MediaPipe pelvis/torso hints. 0 disables smoothing."));
+
+	TAutoConsoleVariable<int32> CVarBodyFusionStage2ShoulderClavicleHint(
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"),
+		0,
+		TEXT("When non-zero, enables guarded Stage 2A MediaPipe shoulder-lift hints that translate only visible clavicle bones. Head, arms, wrists, hands, fingers, and full arm IK endpoints remain under existing HMD/Quest authority."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHintBlend(
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"),
+		0.20f,
+		TEXT("Blend fraction for Stage 2A positive shoulder/clavicle lift hints. Values are clamped to 0..1 at use time."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleResponseScale(
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"),
+		4.5f,
+		TEXT("Scales Stage 2A positive MediaPipe shoulder-lift response before clamping. This mirrors the proven Manny MediaPipe-only shoulder-lift response without giving MediaPipe arm, wrist, hand, or finger authority."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleMaxLiftCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"),
+		5.0f,
+		TEXT("Maximum positive clavicle lift, in centimeters, that Stage 2A may apply per side. Negative shoulder deltas are ignored."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHalfLifeSeconds(
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"),
+		0.04f,
+		TEXT("Smoothing half-life in seconds for guarded Stage 2A clavicle lift hints. 0 disables smoothing."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderContradictionCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"),
+		20.0f,
+		TEXT("If a fresh Quest/full-arm shoulder chain differs from the calibrated MediaPipe shoulder by more than this many vertical centimeters, suppress that Stage 2A side. 0 disables this contradiction gate."));
+
 	TAutoConsoleVariable<int32> CVarBodyFusionCalibrationStableFrames(
 		TEXT("mp.BodyFusion.CalibrationStableFrames"),
 		15,

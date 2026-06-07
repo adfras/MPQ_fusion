@@ -3,6 +3,7 @@
 #include "EmbodiedFusionComponent.h"
 #include "MediaPipeTrackedSkeletonActor.h"
 #include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeBodyFusionRuntime.h"
 #include "MediaPipePoseLog.h"
 #include "MediaPipeSolvedPose.h"
 #include "MediaPipePoseTrackerComponent.h"
@@ -75,6 +76,18 @@ TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionOnPlay(
 	TEXT("mp.RecordMPQShadowFusionOnPlay"),
 	0,
 	TEXT("When non-zero, automatically starts a shadow-only MediaPipe/Quest BodyFusion capture for each PIE/VR Preview run."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionStage1TorsoPelvisHintOnPlay(
+	TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"),
+	0,
+	TEXT("When non-zero, the next MPQ on-play capture preserves the guarded Stage 1 vertical torso/pelvis hint instead of resetting to pure Stage 0 shadow output."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay(
+	TEXT("mp.RecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay"),
+	0,
+	TEXT("When non-zero, the next MPQ on-play capture preserves the guarded Stage 2A shoulder/clavicle lift hint instead of resetting to pure Stage 0 shadow output."),
 	ECVF_Default);
 
 TAutoConsoleVariable<float> CVarRecordMPQShadowFusionOnPlayDuration(
@@ -209,6 +222,7 @@ struct FMannyBoneTimeseriesRecorder
 	uint32 LastAutoStartWorldId = 0;
 	uint32 AutoStartArmSerial = 0;
 	bool bHasSampleWallSeconds = false;
+	bool bAnalyzeAfterWrite = true;
 	FString Mode;
 	FString EndReason;
 	FString AnalyzerPathOverride;
@@ -243,6 +257,8 @@ struct FMPQShadowAutoStartRequest
 	double StartDeadlineSeconds = 0.0;
 	double DurationSeconds = 0.0;
 	bool bAnalyzeAfterWrite = true;
+	bool bStage1TorsoPelvisHint = false;
+	bool bStage2ShoulderClavicleHint = false;
 	FString OutputPath;
 	FString Label;
 	uint32 StartedWorldId = 0;
@@ -254,6 +270,30 @@ struct FMPQShadowAutoStartRequest
 
 FMPQShadowAutoStartRequest GMPQShadowAutoStartRequest;
 uint32 GMPQShadowNextArmSerial = 0;
+
+struct FMPQStage2DebugRecorderSideState
+{
+	bool bHasSmoothedLift = false;
+	float SmoothedLiftCm = 0.0f;
+	bool bHasShoulderLiftBaseline = false;
+	float ShoulderLiftBaselineCm = 0.0f;
+};
+
+struct FMPQStage2DebugRecorderState
+{
+	FMPQStage2DebugRecorderSideState Left;
+	FMPQStage2DebugRecorderSideState Right;
+};
+
+TMap<uint32, FMPQStage2DebugRecorderState> GMPQStage2DebugRecorderStates;
+
+constexpr float DefaultMPQStage1TorsoPelvisHintBlend = 0.25f;
+constexpr float DefaultMPQStage1TorsoPelvisMaxVerticalCm = 8.0f;
+constexpr float DefaultMPQStage1TorsoPelvisHintHalfLifeSeconds = 0.04f;
+constexpr float DefaultMPQStage2ShoulderClavicleHintBlend = 0.20f;
+constexpr float DefaultMPQStage2ShoulderClavicleResponseScale = 4.5f;
+constexpr float DefaultMPQStage2ShoulderClavicleMaxLiftCm = 5.0f;
+constexpr float DefaultMPQStage2ShoulderClavicleHalfLifeSeconds = 0.04f;
 
 const TCHAR* MPQShadowAutoStartSkipReasonText(const EMPQShadowAutoStartSkipReason Reason)
 {
@@ -331,7 +371,9 @@ void ArmMPQShadowAutoStartRequest(
 	const double DurationSeconds,
 	const FString& OutputPath,
 	const bool bAnalyzeAfterWrite,
-	const FString& Label)
+	const FString& Label,
+	const bool bStage1TorsoPelvisHint = false,
+	const bool bStage2ShoulderClavicleHint = false)
 {
 	++GMPQShadowNextArmSerial;
 	GMPQShadowAutoStartRequest = FMPQShadowAutoStartRequest();
@@ -341,6 +383,8 @@ void ArmMPQShadowAutoStartRequest(
 	GMPQShadowAutoStartRequest.StartDeadlineSeconds = GMPQShadowAutoStartRequest.PreparedAtSeconds + 10.0;
 	GMPQShadowAutoStartRequest.DurationSeconds = FMath::Clamp(DurationSeconds, 0.1, 120.0);
 	GMPQShadowAutoStartRequest.bAnalyzeAfterWrite = bAnalyzeAfterWrite;
+	GMPQShadowAutoStartRequest.bStage1TorsoPelvisHint = bStage1TorsoPelvisHint;
+	GMPQShadowAutoStartRequest.bStage2ShoulderClavicleHint = bStage2ShoulderClavicleHint;
 	GMPQShadowAutoStartRequest.OutputPath = OutputPath;
 	GMPQShadowAutoStartRequest.Label = Label;
 
@@ -350,11 +394,13 @@ void ArmMPQShadowAutoStartRequest(
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.MPQShadowAutoStart: armed serial=%u duration=%.3fs path=%s label=%s shadowOnly=1 authority=0 writePose=0 armFallbacks=off"),
+		TEXT("mp.MPQShadowAutoStart: armed serial=%u duration=%.3fs path=%s label=%s shadowOnly=1 authority=0 writePose=0 stage1TorsoPelvisHint=%d stage2ShoulderClavicleHint=%d armFallbacks=off"),
 		GMPQShadowAutoStartRequest.ArmSerial,
 		GMPQShadowAutoStartRequest.DurationSeconds,
 		*GMPQShadowAutoStartRequest.OutputPath,
-		*GMPQShadowAutoStartRequest.Label);
+		*GMPQShadowAutoStartRequest.Label,
+		GMPQShadowAutoStartRequest.bStage1TorsoPelvisHint ? 1 : 0,
+		GMPQShadowAutoStartRequest.bStage2ShoulderClavicleHint ? 1 : 0);
 }
 
 void EnsureMPQShadowAutoStartRequestFromCVars()
@@ -368,7 +414,9 @@ void EnsureMPQShadowAutoStartRequestFromCVars()
 		static_cast<double>(CVarRecordMPQShadowFusionOnPlayDuration.GetValueOnAnyThread()),
 		CVarRecordMPQShadowFusionOnPlayPath.GetValueOnAnyThread(),
 		CVarRecordMPQShadowFusionAnalyzeAfterWrite.GetValueOnAnyThread() != 0,
-		TEXT("cvar_on_play"));
+		TEXT("cvar_on_play"),
+		CVarRecordMPQShadowFusionStage1TorsoPelvisHintOnPlay.GetValueOnAnyThread() != 0,
+		CVarRecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay.GetValueOnAnyThread() != 0);
 }
 
 void LogMPQShadowAutoStartSkip(
@@ -533,6 +581,18 @@ TSharedRef<FJsonObject> JsonShoulderSignalSnapshot(const FMediaPipePoseDrivenSho
 	Result->SetNumberField(TEXT("applied_upper_lift_cm"), Snapshot.AppliedUpperLiftCm);
 	Result->SetNumberField(TEXT("up_weight"), Snapshot.UpWeight);
 	Result->SetNumberField(TEXT("forward_weight"), Snapshot.ForwardWeight);
+	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_hint_valid"), Snapshot.bStage2ShoulderClavicleHintValid);
+	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_suppressed_by_contradiction"), Snapshot.bStage2ShoulderClavicleSuppressedByContradiction);
+	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_had_contradiction_source"), Snapshot.bStage2ShoulderClavicleHadContradictionSource);
+	Result->SetNumberField(TEXT("stage2_candidate_shoulder_lift_from_pelvis_cm"), Snapshot.Stage2CandidateShoulderLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_reference_shoulder_lift_from_pelvis_cm"), Snapshot.Stage2ReferenceShoulderLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_raw_lift_delta_cm"), Snapshot.Stage2RawLiftDeltaCm);
+	Result->SetNumberField(TEXT("stage2_positive_target_lift_cm"), Snapshot.Stage2PositiveTargetLiftCm);
+	Result->SetNumberField(TEXT("stage2_contradiction_delta_cm"), Snapshot.Stage2ContradictionDeltaCm);
+	Result->SetNumberField(TEXT("stage2_smoothed_lift_cm"), Snapshot.Stage2SmoothedLiftCm);
+	Result->SetNumberField(TEXT("stage2_pre_solve_clavicle_lift_from_pelvis_cm"), Snapshot.Stage2PreSolveClavicleLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_target_clavicle_lift_from_pelvis_cm"), Snapshot.Stage2TargetClavicleLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_applied_clavicle_lift_cm"), Snapshot.Stage2AppliedClavicleLiftCm);
 	return Result;
 }
 
@@ -546,6 +606,255 @@ TSharedRef<FJsonObject> JsonSignalSnapshot(const FMediaPipePoseDrivenSignalSnaps
 	Result->SetObjectField(TEXT("left_shoulder"), JsonShoulderSignalSnapshot(Snapshot.LeftShoulder));
 	Result->SetObjectField(TEXT("right_shoulder"), JsonShoulderSignalSnapshot(Snapshot.RightShoulder));
 	return Result;
+}
+
+float MPQStage2HalfLifeToAlpha(const float HalfLifeSeconds, const float DeltaSeconds)
+{
+	if (HalfLifeSeconds <= KINDA_SMALL_NUMBER)
+	{
+		return 1.0f;
+	}
+	return 1.0f - FMath::Exp2(-FMath::Max(0.0f, DeltaSeconds) / HalfLifeSeconds);
+}
+
+float UpdateMPQStage2ShoulderLiftBaseline(
+	const float CandidateLiftCm,
+	const float DeltaSeconds,
+	FMPQStage2DebugRecorderSideState& InOutSideState)
+{
+	constexpr float BaselineFollowThresholdCm = 0.5f;
+	constexpr float BaselineFollowHalfLifeSeconds = 1.5f;
+	if (!InOutSideState.bHasShoulderLiftBaseline)
+	{
+		InOutSideState.ShoulderLiftBaselineCm = CandidateLiftCm;
+		InOutSideState.bHasShoulderLiftBaseline = true;
+	}
+	else if (CandidateLiftCm < InOutSideState.ShoulderLiftBaselineCm)
+	{
+		InOutSideState.ShoulderLiftBaselineCm = CandidateLiftCm;
+	}
+	else if (CandidateLiftCm - InOutSideState.ShoulderLiftBaselineCm <= BaselineFollowThresholdCm)
+	{
+		const float Alpha = MPQStage2HalfLifeToAlpha(BaselineFollowHalfLifeSeconds, DeltaSeconds);
+		InOutSideState.ShoulderLiftBaselineCm =
+			FMath::Lerp(InOutSideState.ShoulderLiftBaselineCm, CandidateLiftCm, Alpha);
+	}
+	return InOutSideState.ShoulderLiftBaselineCm;
+}
+
+bool GetReferenceBoneComponentTranslation(
+	const USkeletalMeshComponent* MeshComponent,
+	const FName BoneName,
+	FVector& OutTranslation)
+{
+	const USkeletalMesh* SkeletalMesh = MeshComponent ? MeshComponent->GetSkeletalMeshAsset() : nullptr;
+	if (!SkeletalMesh)
+	{
+		return false;
+	}
+
+	const FReferenceSkeleton& RefSkeleton = SkeletalMesh->GetRefSkeleton();
+	const int32 BoneIndex = RefSkeleton.FindBoneIndex(BoneName);
+	if (BoneIndex == INDEX_NONE)
+	{
+		return false;
+	}
+
+	FTransform ComponentTransform = RefSkeleton.GetRefBonePose()[BoneIndex];
+	for (int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
+		ParentIndex != INDEX_NONE;
+		ParentIndex = RefSkeleton.GetParentIndex(ParentIndex))
+	{
+		ComponentTransform = ComponentTransform * RefSkeleton.GetRefBonePose()[ParentIndex];
+	}
+	OutTranslation = ComponentTransform.GetTranslation();
+	return true;
+}
+
+bool FillMPQStage2RecorderSideSnapshot(
+	const USkeletalMeshComponent* DrivenMesh,
+	const FEmbodiedFusionFrame& FusionFrame,
+	const bool bIsLeft,
+	const FTransform& WorldToComponent,
+	const FVector& CandidatePelvisComp,
+	const FVector& RefPelvisComp,
+	const float Blend,
+	const float ResponseScale,
+	const float MaxLiftCm,
+	const float HalfLifeSeconds,
+	const float ContradictionCm,
+	const float DeltaSeconds,
+	FMPQStage2DebugRecorderSideState& InOutSideState,
+	FMediaPipePoseDrivenShoulderSignalSnapshot& OutSnapshot)
+{
+	const FName ClavicleBoneName = bIsLeft ? FName(TEXT("clavicle_l")) : FName(TEXT("clavicle_r"));
+	if (!DrivenMesh || DrivenMesh->GetBoneIndex(ClavicleBoneName) == INDEX_NONE)
+	{
+		InOutSideState = FMPQStage2DebugRecorderSideState();
+		return false;
+	}
+
+	const FMediaPipeFusedBodyPoint& CandidateShoulder = bIsLeft
+		? FusionFrame.MediaPipeCandidate.Pose.LeftShoulder
+		: FusionFrame.MediaPipeCandidate.Pose.RightShoulder;
+	if (!CandidateShoulder.bValid)
+	{
+		InOutSideState = FMPQStage2DebugRecorderSideState();
+		return false;
+	}
+
+	const FVector CandidateShoulderComp = WorldToComponent.TransformPosition(CandidateShoulder.LocationWorld);
+	if (CandidateShoulderComp.ContainsNaN())
+	{
+		InOutSideState = FMPQStage2DebugRecorderSideState();
+		return false;
+	}
+
+	float ContradictionDeltaCm = 0.0f;
+	bool bHadContradictionSource = false;
+	bool bSuppressedByContradiction = false;
+	const FMediaPipeBodyFusionSourceStatus& ArmChainStatus = bIsLeft
+		? FusionFrame.SourceFrame.LeftArmChainStatus
+		: FusionFrame.SourceFrame.RightArmChainStatus;
+	if (ContradictionCm > KINDA_SMALL_NUMBER && ArmChainStatus.IsFresh())
+	{
+		const FVector QuestShoulderWorld = bIsLeft
+			? FusionFrame.SourceFrame.LeftArmShoulderWorld
+			: FusionFrame.SourceFrame.RightArmShoulderWorld;
+		const FVector QuestShoulderComp = WorldToComponent.TransformPosition(QuestShoulderWorld);
+		if (!QuestShoulderComp.ContainsNaN())
+		{
+			bHadContradictionSource = true;
+			ContradictionDeltaCm = FMath::Abs(CandidateShoulderComp.Z - QuestShoulderComp.Z);
+			bSuppressedByContradiction = ContradictionDeltaCm > ContradictionCm;
+		}
+	}
+
+	const float CandidateShoulderLiftFromPelvisCm = CandidateShoulderComp.Z - CandidatePelvisComp.Z;
+	const float RefShoulderLiftFromPelvisCm =
+		UpdateMPQStage2ShoulderLiftBaseline(CandidateShoulderLiftFromPelvisCm, DeltaSeconds, InOutSideState);
+	const float RawLiftCm = CandidateShoulderLiftFromPelvisCm - RefShoulderLiftFromPelvisCm;
+	const float TargetLiftCm = FMath::Clamp(FMath::Max(0.0f, RawLiftCm) * Blend * ResponseScale, 0.0f, MaxLiftCm);
+	if (bSuppressedByContradiction)
+	{
+		InOutSideState = FMPQStage2DebugRecorderSideState();
+	}
+	else if (!InOutSideState.bHasSmoothedLift)
+	{
+		InOutSideState.SmoothedLiftCm = TargetLiftCm;
+		InOutSideState.bHasSmoothedLift = true;
+	}
+	else
+	{
+		const float Alpha = MPQStage2HalfLifeToAlpha(HalfLifeSeconds, DeltaSeconds);
+		InOutSideState.SmoothedLiftCm = FMath::Lerp(InOutSideState.SmoothedLiftCm, TargetLiftCm, Alpha);
+	}
+
+	const float SmoothedLiftCm = bSuppressedByContradiction ? 0.0f : InOutSideState.SmoothedLiftCm;
+	float PreSolveClavicleLiftFromPelvisCm = 0.0f;
+	const FTransform LiveClavicleComp = DrivenMesh->GetBoneTransform(ClavicleBoneName, RTS_Component);
+	PreSolveClavicleLiftFromPelvisCm = LiveClavicleComp.GetTranslation().Z - RefPelvisComp.Z;
+	const float TargetClavicleLiftFromPelvisCm = PreSolveClavicleLiftFromPelvisCm + SmoothedLiftCm;
+
+	OutSnapshot.bValid = true;
+	OutSnapshot.bStage2ShoulderClavicleHintValid = true;
+	OutSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = bSuppressedByContradiction;
+	OutSnapshot.bStage2ShoulderClavicleHadContradictionSource = bHadContradictionSource;
+	OutSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = CandidateShoulderLiftFromPelvisCm;
+	OutSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = RefShoulderLiftFromPelvisCm;
+	OutSnapshot.Stage2RawLiftDeltaCm = RawLiftCm;
+	OutSnapshot.Stage2PositiveTargetLiftCm = TargetLiftCm;
+	OutSnapshot.Stage2ContradictionDeltaCm = ContradictionDeltaCm;
+	OutSnapshot.Stage2SmoothedLiftCm = SmoothedLiftCm;
+	OutSnapshot.Stage2PreSolveClavicleLiftFromPelvisCm = PreSolveClavicleLiftFromPelvisCm;
+	OutSnapshot.Stage2TargetClavicleLiftFromPelvisCm = TargetClavicleLiftFromPelvisCm;
+	OutSnapshot.Stage2AppliedClavicleLiftCm = TargetClavicleLiftFromPelvisCm - PreSolveClavicleLiftFromPelvisCm;
+	return true;
+}
+
+bool BuildMPQStage2RecorderFallbackSnapshot(
+	const USkeletalMeshComponent* DrivenMesh,
+	const FEmbodiedFusionFrame& FusionFrame,
+	const float DeltaSeconds,
+	FMediaPipePoseDrivenSignalSnapshot& OutSnapshot)
+{
+	OutSnapshot.Reset();
+	if (!DrivenMesh ||
+		!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread() ||
+		FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread() ||
+		!FMediaPipeBodyFusionRuntimePolicy::IsStage2ShoulderClavicleHintEnabledAnyThread())
+	{
+		return false;
+	}
+
+	const FEmbodiedFusionMediaPipeCandidate& Candidate = FusionFrame.MediaPipeCandidate;
+	if (Candidate.bCalibrationUsable == 0 ||
+		Candidate.bHasCalibratedPose == 0 ||
+		!Candidate.BodyPoseStatus.IsFresh() ||
+		!Candidate.Pose.Pelvis.bValid)
+	{
+		GMPQStage2DebugRecorderStates.FindOrAdd(DrivenMesh->GetUniqueID()) = FMPQStage2DebugRecorderState();
+		return false;
+	}
+
+	FVector RefPelvisComp = FVector::ZeroVector;
+	if (!GetReferenceBoneComponentTranslation(DrivenMesh, FName(TEXT("pelvis")), RefPelvisComp))
+	{
+		return false;
+	}
+
+	const FTransform WorldToComponent = DrivenMesh->GetComponentTransform().Inverse();
+	const FVector CandidatePelvisComp = WorldToComponent.TransformPosition(Candidate.Pose.Pelvis.LocationWorld);
+	if (CandidatePelvisComp.ContainsNaN())
+	{
+		return false;
+	}
+
+	const float Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHintBlendAnyThread();
+	const float ResponseScale = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleResponseScaleAnyThread();
+	const float MaxLiftCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleMaxLiftCmAnyThread();
+	const float HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
+	const float ContradictionCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThread();
+	if (Blend <= KINDA_SMALL_NUMBER || MaxLiftCm <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	FMPQStage2DebugRecorderState& RecorderState = GMPQStage2DebugRecorderStates.FindOrAdd(DrivenMesh->GetUniqueID());
+	const bool bLeft = FillMPQStage2RecorderSideSnapshot(
+		DrivenMesh,
+		FusionFrame,
+		true,
+		WorldToComponent,
+		CandidatePelvisComp,
+		RefPelvisComp,
+		Blend,
+		ResponseScale,
+		MaxLiftCm,
+		HalfLifeSeconds,
+		ContradictionCm,
+		DeltaSeconds,
+		RecorderState.Left,
+		OutSnapshot.LeftShoulder);
+	const bool bRight = FillMPQStage2RecorderSideSnapshot(
+		DrivenMesh,
+		FusionFrame,
+		false,
+		WorldToComponent,
+		CandidatePelvisComp,
+		RefPelvisComp,
+		Blend,
+		ResponseScale,
+		MaxLiftCm,
+		HalfLifeSeconds,
+		ContradictionCm,
+		DeltaSeconds,
+		RecorderState.Right,
+		OutSnapshot.RightShoulder);
+	OutSnapshot.bValid = bLeft || bRight;
+	OutSnapshot.RuntimeStateKey = DrivenMesh->GetUniqueID();
+	OutSnapshot.PoseTimestampUs = static_cast<int64>(Candidate.TimestampSeconds * 1000000.0);
+	return OutSnapshot.bValid;
 }
 
 const TCHAR* BodyFusionSourceStateName(const EMediaPipeBodyFusionSourceState State)
@@ -854,6 +1163,36 @@ void WriteMannyBoneTimeseries()
 	Root->SetNumberField(TEXT("end_wall_seconds"), GMannyBoneTimeseriesRecorder.EndSeconds);
 	Root->SetStringField(TEXT("end_reason"), GMannyBoneTimeseriesRecorder.EndReason);
 	Root->SetNumberField(TEXT("sample_count"), GMannyBoneTimeseriesRecorder.SampleCount);
+	TSharedRef<FJsonObject> RuntimeCVars = MakeShared<FJsonObject>();
+	auto AddRuntimeIntCVar = [&RuntimeCVars](const TCHAR* Name)
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+		{
+			RuntimeCVars->SetNumberField(Name, Variable->GetInt());
+		}
+	};
+	auto AddRuntimeFloatCVar = [&RuntimeCVars](const TCHAR* Name)
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+		{
+			RuntimeCVars->SetNumberField(Name, Variable->GetFloat());
+		}
+	};
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.Enable"));
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.Debug"));
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.WritePose"));
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.MediaPipeAuthority"));
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage1TorsoPelvisMaxVerticalCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"));
+	AddRuntimeIntCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"));
+	Root->SetObjectField(TEXT("runtime_cvars"), RuntimeCVars);
 	Root->SetArrayField(TEXT("samples"), GMannyBoneTimeseriesRecorder.Samples);
 
 	FString Json;
@@ -886,9 +1225,21 @@ void WriteMannyBoneTimeseries()
 		*GMannyBoneTimeseriesRecorder.EndReason,
 		*GMannyBoneTimeseriesRecorder.OutputPath);
 
-	AnalyzeMannyHeadTimeseries(
-		GMannyBoneTimeseriesRecorder.OutputPath,
-		GMannyBoneTimeseriesRecorder.AnalyzerPathOverride);
+	if (GMannyBoneTimeseriesRecorder.bAnalyzeAfterWrite)
+	{
+		AnalyzeMannyHeadTimeseries(
+			GMannyBoneTimeseriesRecorder.OutputPath,
+			GMannyBoneTimeseriesRecorder.AnalyzerPathOverride);
+	}
+	else
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Log,
+			TEXT("mp.RecordMannyBoneTimeseries: analyzer skipped mode=%s path=%s"),
+			*GMannyBoneTimeseriesRecorder.Mode,
+			*GMannyBoneTimeseriesRecorder.OutputPath);
+	}
 }
 
 void StopMannyBoneTimeseries(const EMannyBoneTimeseriesEndReason Reason = EMannyBoneTimeseriesEndReason::ManualStop)
@@ -994,7 +1345,8 @@ void StartMannyBoneTimeseriesRecording(
 	const uint32 AutoStartWorldId,
 	const FString& Mode = TEXT("manual"),
 	const FString& AnalyzerPathOverride = FString(),
-	const uint32 AutoStartArmSerial = 0)
+	const uint32 AutoStartArmSerial = 0,
+	const bool bAnalyzeAfterWrite = true)
 {
 	GMannyBoneTimeseriesRecorder.bActive = true;
 	GMannyBoneTimeseriesRecorder.bAutoStarted = bAutoStarted;
@@ -1010,20 +1362,23 @@ void StartMannyBoneTimeseriesRecording(
 	GMannyBoneTimeseriesRecorder.AutoStartWorldId = AutoStartWorldId;
 	GMannyBoneTimeseriesRecorder.AutoStartArmSerial = AutoStartArmSerial;
 	GMannyBoneTimeseriesRecorder.bHasSampleWallSeconds = false;
+	GMannyBoneTimeseriesRecorder.bAnalyzeAfterWrite = bAnalyzeAfterWrite;
 	GMannyBoneTimeseriesRecorder.Mode = Mode;
 	GMannyBoneTimeseriesRecorder.EndReason.Reset();
 	GMannyBoneTimeseriesRecorder.AnalyzerPathOverride = AnalyzerPathOverride;
 	GMannyBoneTimeseriesRecorder.Samples.Reset();
+	GMPQStage2DebugRecorderStates.Reset();
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s auto=%d worldId=%u armSerial=%u mode=%s analyzerOverride=%s"),
+		TEXT("mp.RecordMannyBoneTimeseries: recording duration=%.3fs path=%s auto=%d worldId=%u armSerial=%u mode=%s analyze=%d analyzerOverride=%s"),
 		GMannyBoneTimeseriesRecorder.DurationSeconds,
 		*GMannyBoneTimeseriesRecorder.OutputPath,
 		bAutoStarted ? 1 : 0,
 		AutoStartWorldId,
 		AutoStartArmSerial,
 		*GMannyBoneTimeseriesRecorder.Mode,
+		GMannyBoneTimeseriesRecorder.bAnalyzeAfterWrite ? 1 : 0,
 		*GMannyBoneTimeseriesRecorder.AnalyzerPathOverride);
 }
 
@@ -1085,12 +1440,16 @@ void SetConsoleVariableStringForShadowCapture(const TCHAR* Name, const FString& 
 	Variable->Set(*Value, ECVF_SetByConsole);
 }
 
-void ApplyMPQShadowFusionCaptureCVars()
+void ApplyMPQShadowFusionCaptureCVars(
+	const bool bStage1TorsoPelvisHint = false,
+	const bool bStage2ShoulderClavicleHint = false)
 {
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Enable"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Debug"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.WritePose"), 0);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.MediaPipeAuthority"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"), bStage1TorsoPelvisHint ? 1 : 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"), bStage2ShoulderClavicleHint ? 1 : 0);
 
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestHandTracking"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.QuestHandDriveFingerBones"), 1);
@@ -1111,6 +1470,16 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 	double DurationSeconds = 45.0;
 	float MaxPredictionMs = 50.0f;
 	bool bPredictionEnabled = true;
+	bool bAnalyzeAfterWrite = true;
+	bool bStage1TorsoPelvisHint = false;
+	bool bStage2ShoulderClavicleHint = false;
+	float Stage1TorsoPelvisHintBlend = DefaultMPQStage1TorsoPelvisHintBlend;
+	float Stage1TorsoPelvisMaxVerticalCm = DefaultMPQStage1TorsoPelvisMaxVerticalCm;
+	float Stage1TorsoPelvisHintHalfLifeSeconds = DefaultMPQStage1TorsoPelvisHintHalfLifeSeconds;
+	float Stage2ShoulderClavicleHintBlend = DefaultMPQStage2ShoulderClavicleHintBlend;
+	float Stage2ShoulderClavicleResponseScale = DefaultMPQStage2ShoulderClavicleResponseScale;
+	float Stage2ShoulderClavicleMaxLiftCm = DefaultMPQStage2ShoulderClavicleMaxLiftCm;
+	float Stage2ShoulderClavicleHalfLifeSeconds = DefaultMPQStage2ShoulderClavicleHalfLifeSeconds;
 	FString Label;
 	for (const FString& Arg : Args)
 	{
@@ -1138,13 +1507,93 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 		{
 			MaxPredictionMs = FMath::Clamp(FCString::Atof(*Value), 0.0f, 250.0f);
 		}
+		else if (Key.Equals(TEXT("analyze"), ESearchCase::IgnoreCase))
+		{
+			bAnalyzeAfterWrite = FCString::Atoi(*Value) != 0;
+		}
 		else if (Key.Equals(TEXT("label"), ESearchCase::IgnoreCase))
 		{
 			Label = Value;
 		}
+		else if (Key.Equals(TEXT("stage1"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisHint"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("torsoPelvisHint"), ESearchCase::IgnoreCase))
+		{
+			bStage1TorsoPelvisHint = FCString::Atoi(*Value) != 0;
+		}
+		else if (Key.Equals(TEXT("stage2"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleHint"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("shoulderClavicleHint"), ESearchCase::IgnoreCase))
+		{
+			bStage2ShoulderClavicleHint = FCString::Atoi(*Value) != 0;
+		}
+		else if (Key.Equals(TEXT("blend"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1Blend"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisBlend"), ESearchCase::IgnoreCase))
+		{
+			Stage1TorsoPelvisHintBlend = FMath::Clamp(FCString::Atof(*Value), 0.0f, 1.0f);
+		}
+		else if (Key.Equals(TEXT("maxVerticalCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1MaxVerticalCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisMaxVerticalCm"), ESearchCase::IgnoreCase))
+		{
+			Stage1TorsoPelvisMaxVerticalCm = FMath::Clamp(FCString::Atof(*Value), 0.0f, 100.0f);
+		}
+		else if (Key.Equals(TEXT("halfLife"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1HalfLife"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisHalfLife"), ESearchCase::IgnoreCase))
+		{
+			Stage1TorsoPelvisHintHalfLifeSeconds = FMath::Clamp(FCString::Atof(*Value), 0.0f, 1.0f);
+		}
+		else if (Key.Equals(TEXT("halfLifeMs"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1HalfLifeMs"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisHalfLifeMs"), ESearchCase::IgnoreCase))
+		{
+			Stage1TorsoPelvisHintHalfLifeSeconds = FMath::Clamp(FCString::Atof(*Value) * 0.001f, 0.0f, 1.0f);
+		}
+		else if (Key.Equals(TEXT("stage2Blend"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderBlend"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleBlend"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderClavicleHintBlend = FMath::Clamp(FCString::Atof(*Value), 0.0f, 1.0f);
+		}
+		else if (Key.Equals(TEXT("stage2Scale"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ResponseScale"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderScale"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleResponseScale"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderClavicleResponseScale = FMath::Clamp(FCString::Atof(*Value), 0.0f, 8.0f);
+		}
+		else if (Key.Equals(TEXT("stage2MaxLiftCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderMaxLiftCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleMaxLiftCm"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderClavicleMaxLiftCm = FMath::Clamp(FCString::Atof(*Value), 0.0f, 100.0f);
+		}
+		else if (Key.Equals(TEXT("stage2HalfLife"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderHalfLife"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleHalfLife"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderClavicleHalfLifeSeconds = FMath::Clamp(FCString::Atof(*Value), 0.0f, 1.0f);
+		}
+		else if (Key.Equals(TEXT("stage2HalfLifeMs"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderHalfLifeMs"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleHalfLifeMs"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderClavicleHalfLifeSeconds = FMath::Clamp(FCString::Atof(*Value) * 0.001f, 0.0f, 1.0f);
+		}
 	}
 
-	ApplyMPQShadowFusionCaptureCVars();
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"), bStage1TorsoPelvisHint ? 1 : 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay"), bStage2ShoulderClavicleHint ? 1 : 0);
+	ApplyMPQShadowFusionCaptureCVars(bStage1TorsoPelvisHint, bStage2ShoulderClavicleHint);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"), Stage1TorsoPelvisHintBlend);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage1TorsoPelvisMaxVerticalCm"), Stage1TorsoPelvisMaxVerticalCm);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"), Stage1TorsoPelvisHintHalfLifeSeconds);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"), Stage2ShoulderClavicleHintBlend);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"), Stage2ShoulderClavicleResponseScale);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"), Stage2ShoulderClavicleMaxLiftCm);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"), Stage2ShoulderClavicleHalfLifeSeconds);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamHandsCameraIndex"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamDirectWmfCapture"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamPreview"), 1);
@@ -1156,7 +1605,7 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.MediaPipeAdaptivePoseLog"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlay"), 1);
 	SetConsoleVariableFloatForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlayDuration"), static_cast<float>(DurationSeconds));
-	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"), 1);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"), bAnalyzeAfterWrite ? 1 : 0);
 
 	const FString Stamp = FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S"));
 	if (Label.IsEmpty())
@@ -1172,16 +1621,32 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 		*Label,
 		*Stamp);
 	SetConsoleVariableStringForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlayPath"), OutputPath);
-	ArmMPQShadowAutoStartRequest(DurationSeconds, OutputPath, true, Label);
+	ArmMPQShadowAutoStartRequest(
+		DurationSeconds,
+		OutputPath,
+		bAnalyzeAfterWrite,
+		Label,
+		bStage1TorsoPelvisHint,
+		bStage2ShoulderClavicleHint);
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=%d duration=%.3fs prediction=%d maxPredictionMs=%.1f path=%s BodyFusion shadow-only armFallbacks=off"),
+		TEXT("mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=%d duration=%.3fs prediction=%d maxPredictionMs=%.1f analyze=%d path=%s BodyFusion shadow-only stage1TorsoPelvisHint=%d blend=%.3f maxVerticalCm=%.1f halfLife=%.3fs stage2ShoulderClavicleHint=%d stage2Blend=%.3f stage2Scale=%.2f stage2MaxLiftCm=%.1f stage2HalfLife=%.3fs armFallbacks=off"),
 		InputMaxDimension,
 		DurationSeconds,
 		bPredictionEnabled ? 1 : 0,
 		MaxPredictionMs,
-		*OutputPath);
+		bAnalyzeAfterWrite ? 1 : 0,
+		*OutputPath,
+		bStage1TorsoPelvisHint ? 1 : 0,
+		Stage1TorsoPelvisHintBlend,
+		Stage1TorsoPelvisMaxVerticalCm,
+		Stage1TorsoPelvisHintHalfLifeSeconds,
+		bStage2ShoulderClavicleHint ? 1 : 0,
+		Stage2ShoulderClavicleHintBlend,
+		Stage2ShoulderClavicleResponseScale,
+		Stage2ShoulderClavicleMaxLiftCm,
+		Stage2ShoulderClavicleHalfLifeSeconds);
 }
 
 void StartMPQShadowFusionCapture(const TArray<FString>& Args)
@@ -1189,6 +1654,8 @@ void StartMPQShadowFusionCapture(const TArray<FString>& Args)
 	FString OutputPath(TEXT("Saved/CodexAgent/Diagnostics/mpq_shadow_fusion_latest.json"));
 	double DurationSeconds = 12.0;
 	bool bAnalyzeAfterWrite = true;
+	bool bStage1TorsoPelvisHint = false;
+	bool bStage2ShoulderClavicleHint = false;
 	for (const FString& Arg : Args)
 	{
 		FString Key;
@@ -1209,23 +1676,39 @@ void StartMPQShadowFusionCapture(const TArray<FString>& Args)
 		{
 			bAnalyzeAfterWrite = FCString::Atoi(*Value) != 0;
 		}
+		else if (Key.Equals(TEXT("stage1"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage1TorsoPelvisHint"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("torsoPelvisHint"), ESearchCase::IgnoreCase))
+		{
+			bStage1TorsoPelvisHint = FCString::Atoi(*Value) != 0;
+		}
+		else if (Key.Equals(TEXT("stage2"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderClavicleHint"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("shoulderClavicleHint"), ESearchCase::IgnoreCase))
+		{
+			bStage2ShoulderClavicleHint = FCString::Atoi(*Value) != 0;
+		}
 	}
 
-	ApplyMPQShadowFusionCaptureCVars();
+	ApplyMPQShadowFusionCaptureCVars(bStage1TorsoPelvisHint, bStage2ShoulderClavicleHint);
 	StartMannyBoneTimeseriesRecording(
 		DurationSeconds,
 		OutputPath,
 		false,
 		0,
 		TEXT("mpq_shadow_fusion"),
-		bAnalyzeAfterWrite ? FString(TEXT("Tools/AnalyzeMPQShadowFusionCapture.py")) : FString());
+		bAnalyzeAfterWrite ? FString(TEXT("Tools/AnalyzeMPQShadowFusionCapture.py")) : FString(),
+		0,
+		bAnalyzeAfterWrite);
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.StartMPQShadowFusionCapture: duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0) armFallbacks=off"),
+		TEXT("mp.StartMPQShadowFusionCapture: duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0 Stage1TorsoPelvisHint=%d Stage2ShoulderClavicleHint=%d) armFallbacks=off"),
 		DurationSeconds,
 		*OutputPath,
-		bAnalyzeAfterWrite ? 1 : 0);
+		bAnalyzeAfterWrite ? 1 : 0,
+		bStage1TorsoPelvisHint ? 1 : 0,
+		bStage2ShoulderClavicleHint ? 1 : 0);
 }
 
 void TryAutoStartMPQShadowFusionTimeseries(const AMediaPipePoseDrivenSkeletalActor* Actor, const USkeletalMeshComponent* DrivenMesh)
@@ -1270,7 +1753,9 @@ void TryAutoStartMPQShadowFusionTimeseries(const AMediaPipePoseDrivenSkeletalAct
 		return;
 	}
 
-	ApplyMPQShadowFusionCaptureCVars();
+	ApplyMPQShadowFusionCaptureCVars(
+		GMPQShadowAutoStartRequest.bStage1TorsoPelvisHint,
+		GMPQShadowAutoStartRequest.bStage2ShoulderClavicleHint);
 	const double DurationSeconds = FMath::Clamp(GMPQShadowAutoStartRequest.DurationSeconds, 0.1, 120.0);
 	const bool bAnalyzeAfterWrite = GMPQShadowAutoStartRequest.bAnalyzeAfterWrite;
 	const FString OutputPath = GMPQShadowAutoStartRequest.OutputPath.IsEmpty()
@@ -1284,28 +1769,35 @@ void TryAutoStartMPQShadowFusionTimeseries(const AMediaPipePoseDrivenSkeletalAct
 		WorldId,
 		TEXT("auto_mpq_shadow_fusion"),
 		bAnalyzeAfterWrite ? FString(TEXT("Tools/AnalyzeMPQShadowFusionCapture.py")) : FString(),
-		ArmSerial);
+		ArmSerial,
+		bAnalyzeAfterWrite);
 	GMannyBoneTimeseriesRecorder.LastAutoStartWorldId = WorldId;
 	GMPQShadowAutoStartRequest.StartedWorldId = WorldId;
 	GMPQShadowAutoStartRequest.StartedArmSerial = ArmSerial;
 	GMPQShadowAutoStartRequest.bArmed = false;
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionOnPlay"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"), 0);
+	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay"), 0);
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.MPQShadowAutoStart: started serial=%u worldId=%u duration=%.3fs path=%s analyze=%d"),
+		TEXT("mp.MPQShadowAutoStart: started serial=%u worldId=%u duration=%.3fs path=%s analyze=%d stage1TorsoPelvisHint=%d stage2ShoulderClavicleHint=%d"),
 		ArmSerial,
 		WorldId,
 		DurationSeconds,
 		*OutputPath,
-		bAnalyzeAfterWrite ? 1 : 0);
+		bAnalyzeAfterWrite ? 1 : 0,
+		GMPQShadowAutoStartRequest.bStage1TorsoPelvisHint ? 1 : 0,
+		GMPQShadowAutoStartRequest.bStage2ShoulderClavicleHint ? 1 : 0);
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.StartMPQShadowFusionCapture: autoOnPlay=1 duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0) armFallbacks=off"),
+		TEXT("mp.StartMPQShadowFusionCapture: autoOnPlay=1 duration=%.3fs path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=0 MediaPipeAuthority=0 Stage1TorsoPelvisHint=%d Stage2ShoulderClavicleHint=%d) armFallbacks=off"),
 		DurationSeconds,
 		*OutputPath,
-		bAnalyzeAfterWrite ? 1 : 0);
+		bAnalyzeAfterWrite ? 1 : 0,
+		GMPQShadowAutoStartRequest.bStage1TorsoPelvisHint ? 1 : 0,
+		GMPQShadowAutoStartRequest.bStage2ShoulderClavicleHint ? 1 : 0);
 }
 
 void TryAutoStartMannyHeadTimeseries(const AMediaPipePoseDrivenSkeletalActor* Actor)
@@ -1601,18 +2093,44 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		}
 	}
 
-	if (UMediaPipePoseDrivenAnimInstance* PoseAnimInstance = Cast<UMediaPipePoseDrivenAnimInstance>(DrivenMesh->GetAnimInstance()))
+	const UEmbodiedFusionComponent* FusionComponent = Actor->GetActiveEmbodiedFusionComponent();
+	const FEmbodiedFusionFrame* FusionFrameForRecorder = FusionComponent ? &FusionComponent->GetLatestFusionFrame() : nullptr;
+	UAnimInstance* DrivenAnimInstance = DrivenMesh->GetAnimInstance();
+	TSharedRef<FJsonObject> AnimObject = MakeShared<FJsonObject>();
+	AnimObject->SetStringField(TEXT("driven_component"), DrivenMesh->GetPathName());
+	AnimObject->SetStringField(TEXT("anim_class"), GetPathNameSafe(DrivenMesh->GetAnimClass()));
+	AnimObject->SetStringField(TEXT("anim_instance_class"), DrivenAnimInstance ? DrivenAnimInstance->GetClass()->GetPathName() : FString());
+	AnimObject->SetBoolField(TEXT("native_pose_driven_anim_instance"), Cast<UMediaPipePoseDrivenAnimInstance>(DrivenAnimInstance) != nullptr);
+	AnimObject->SetBoolField(TEXT("solver_snapshot_from_component_cache"), false);
+	AnimObject->SetBoolField(TEXT("solver_snapshot_from_native_anim_instance"), false);
+	AnimObject->SetBoolField(TEXT("solver_snapshot_from_recorder_stage2_fallback"), false);
+	Sample->SetObjectField(TEXT("anim"), AnimObject);
+
+	FMediaPipePoseDrivenSignalSnapshot SignalSnapshot;
+	if (UMediaPipePoseDrivenAnimInstance::GetLatestSignalSnapshotForComponent(DrivenMesh, SignalSnapshot))
 	{
-		FMediaPipePoseDrivenSignalSnapshot SignalSnapshot;
+		Sample->SetObjectField(TEXT("solver"), JsonSignalSnapshot(SignalSnapshot));
+		AnimObject->SetBoolField(TEXT("solver_snapshot_from_component_cache"), true);
+	}
+	else if (UMediaPipePoseDrivenAnimInstance* PoseAnimInstance = Cast<UMediaPipePoseDrivenAnimInstance>(DrivenAnimInstance))
+	{
 		if (PoseAnimInstance->GetLatestSignalSnapshot(SignalSnapshot))
 		{
 			Sample->SetObjectField(TEXT("solver"), JsonSignalSnapshot(SignalSnapshot));
+			AnimObject->SetBoolField(TEXT("solver_snapshot_from_native_anim_instance"), true);
 		}
 	}
-
-	if (const UEmbodiedFusionComponent* FusionComponent = Actor->GetActiveEmbodiedFusionComponent())
+	if (!Sample->HasField(TEXT("solver")) &&
+		FusionFrameForRecorder &&
+		BuildMPQStage2RecorderFallbackSnapshot(DrivenMesh, *FusionFrameForRecorder, DeltaSeconds, SignalSnapshot))
 	{
-		Sample->SetObjectField(TEXT("fusion"), JsonEmbodiedFusionFrame(FusionComponent->GetLatestFusionFrame()));
+		Sample->SetObjectField(TEXT("solver"), JsonSignalSnapshot(SignalSnapshot));
+		AnimObject->SetBoolField(TEXT("solver_snapshot_from_recorder_stage2_fallback"), true);
+	}
+
+	if (FusionFrameForRecorder)
+	{
+		Sample->SetObjectField(TEXT("fusion"), JsonEmbodiedFusionFrame(*FusionFrameForRecorder));
 	}
 
 	TSharedRef<FJsonObject> ActorObject = MakeShared<FJsonObject>();
@@ -1668,12 +2186,12 @@ FAutoConsoleCommand GMannyHeadTimeseriesCommand(
 
 FAutoConsoleCommand GMPQShadowFusionCaptureCommand(
 	TEXT("mp.StartMPQShadowFusionCapture"),
-	TEXT("Start a shadow-only MediaPipe/Quest/BodyFusion diagnostic capture. Usage: mp.StartMPQShadowFusionCapture duration=12 path=Saved/CodexAgent/Diagnostics/mpq_shadow_fusion.json analyze=1"),
+	TEXT("Start a shadow-only MediaPipe/Quest/BodyFusion diagnostic capture. Usage: mp.StartMPQShadowFusionCapture duration=12 path=Saved/CodexAgent/Diagnostics/mpq_shadow_fusion.json analyze=1 stage1=0"),
 	FConsoleCommandWithArgsDelegate::CreateStatic(&StartMPQShadowFusionCapture));
 
 FAutoConsoleCommand GMPQShadowLatencyTrialCommand(
 	TEXT("mp.PrepareMPQShadowLatencyTrial"),
-	TEXT("Prepare the next VR Preview for a shadow-only MediaPipe/Quest latency trial. Usage: mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=camo384"),
+	TEXT("Prepare the next VR Preview for a MediaPipe/Quest latency trial. Usage: mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=camo384 stage1=0 blend=0.25 halfLife=0.04 stage2=0 stage2Blend=0.2 stage2MaxLiftCm=5 stage2HalfLife=0.04 analyze=1"),
 	FConsoleCommandWithArgsDelegate::CreateStatic(&PrepareMPQShadowLatencyTrial));
 
 int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeletalMeshComponent* PresentationMesh)

@@ -78,7 +78,6 @@ MEASURE_ONLY_PAIR_KINDS = {
     "quest_arm_output_measure",
     "quest_shoulder_output_measure",
     "shoulder_conflict_measure",
-    "stage2_output_shoulder_compare",
 }
 
 POOR_AREA_COMPENSATION_FIELDS = [
@@ -189,6 +188,9 @@ CONDITIONING_FIELDS = [
     "legs_quality",
     "feet_ankles_quality",
 ]
+
+LIVE_SPINE_BONES = ("spine_01", "spine_02", "spine_03", "spine_04", "spine_05")
+LIVE_CHEST_BONES_DESC = tuple(reversed(LIVE_SPINE_BONES))
 
 FACE_LANDMARK_INDICES = {
     "nose_tip": 1,
@@ -444,7 +446,11 @@ def empty_metric_row(source_name, target_name, group, pair_kind, status, reason,
     return row
 
 
-def flat_expected_stage0_pair(pair_kind):
+def flat_expected_stage0_pair(pair_kind, stage1_active=False, stage2_active=False):
+    if stage1_active and pair_kind == "stage1_output_vertical_hint":
+        return False
+    if stage2_active and pair_kind == "stage2_output_shoulder_compare":
+        return False
     return pair_kind in {
         "hmd_to_output_head",
         "output_verification",
@@ -459,7 +465,7 @@ def coordinate_space_not_comparable_pair(source_name, target_name, pair_kind):
     return False
 
 
-def classify_pair_status(row, source_recorded=True, target_recorded=True):
+def classify_pair_status(row, source_recorded=True, target_recorded=True, stage1_active=False, stage2_active=False):
     missing_world_output = (
         (row["source"].startswith("manny.") and ".world_" in row["source"])
         or (row["target"].startswith("manny.") and ".world_" in row["target"])
@@ -489,7 +495,7 @@ def classify_pair_status(row, source_recorded=True, target_recorded=True):
     if row["sample_count"] < 8 or row["valid_fraction"] < 0.25:
         return "source_unavailable", "source/target overlap is too sparse for a defensible diagnostic", "genuine_source_unavailable", "collect_cleaner_capture"
     flags = set(flag for flag in row["flags"].split(";") if flag)
-    if ("flat_source" in flags or "flat_target" in flags) and flat_expected_stage0_pair(row["pair_kind"]):
+    if ("flat_source" in flags or "flat_target" in flags) and flat_expected_stage0_pair(row["pair_kind"], stage1_active, stage2_active):
         return "flat_expected_stage0", "flat visible-output row is expected while Stage 0 keeps MediaPipe authority disabled", "genuine_stage0_policy", "none"
     if coordinate_space_not_comparable_pair(row["source"], row["target"], row["pair_kind"]):
         return (
@@ -654,6 +660,31 @@ def add_difference_signal(signals, name, group, a_name, b_name, source_kind="der
     add_signal(signals, name, group, signals[a_name]["values"] - signals[b_name]["values"], source_kind)
 
 
+def signal_valid_count(signals, name):
+    if name not in signals:
+        return 0
+    return int(np.count_nonzero(np.isfinite(signals[name]["values"])))
+
+
+def add_signal_alias(signals, alias_name, source_name, source_kind=None):
+    if source_name not in signals:
+        return False
+    source = signals[source_name]
+    signals[alias_name] = {
+        "group": source["group"],
+        "values": source["values"].copy(),
+        "source_kind": source["source_kind"] if source_kind is None else source_kind,
+    }
+    return True
+
+
+def select_live_chest_bone(signals, field):
+    for bone in LIVE_CHEST_BONES_DESC:
+        if signal_valid_count(signals, f"manny.{bone}.{field}.z") >= MIN_SIGNAL_SAMPLES:
+            return bone
+    return None
+
+
 def face_normalized_landmark_points(samples, landmark_index):
     points = np.full((len(samples), 3), math.nan, dtype=float)
     for sample_index, sample in enumerate(samples):
@@ -763,8 +794,16 @@ def extract_signals(samples):
         )
         add_path_signal(signals, samples, f"manny.pelvis.loc.{axis}", "pelvis", ["live", "pelvis", "loc", index], "manny")
         add_path_signal(signals, samples, f"manny.pelvis.world_loc.{axis}", "pelvis", ["live", "pelvis", "world_loc", index], "manny")
-        add_path_signal(signals, samples, f"manny.spine_03.loc.{axis}", "torso", ["live", "spine_03", "loc", index], "manny")
-        add_path_signal(signals, samples, f"manny.spine_03.world_loc.{axis}", "torso", ["live", "spine_03", "world_loc", index], "manny")
+        for spine_bone in LIVE_SPINE_BONES:
+            add_path_signal(signals, samples, f"manny.{spine_bone}.loc.{axis}", "torso", ["live", spine_bone, "loc", index], "manny")
+            add_path_signal(
+                signals,
+                samples,
+                f"manny.{spine_bone}.world_loc.{axis}",
+                "torso",
+                ["live", spine_bone, "world_loc", index],
+                "manny",
+            )
         for side in ("left", "right"):
             hand_bone = "hand_l" if side == "left" else "hand_r"
             clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
@@ -830,11 +869,46 @@ def extract_signals(samples):
             add_path_signal(signals, samples, f"manny.{clavicle_bone}.loc.{axis}", "shoulders", ["live", clavicle_bone, "loc", index], "manny")
             add_path_signal(signals, samples, f"manny.{clavicle_bone}.world_loc.{axis}", "shoulders", ["live", clavicle_bone, "world_loc", index], "manny")
 
+    live_chest_bone = select_live_chest_bone(signals, "loc")
+    live_world_chest_bone = select_live_chest_bone(signals, "world_loc")
+    for axis in AXES:
+        if live_chest_bone:
+            add_signal_alias(signals, f"manny.chest.loc.{axis}", f"manny.{live_chest_bone}.loc.{axis}", "manny")
+        if live_world_chest_bone:
+            add_signal_alias(signals, f"manny.chest.world_loc.{axis}", f"manny.{live_world_chest_bone}.world_loc.{axis}", "manny")
+
     for rot_axis, index in ROT_AXES.items():
         add_path_signal(signals, samples, f"hmd.rot.{rot_axis}", "head", ["fusion", "source", "hmd", "rot", index], "hmd")
         add_path_signal(signals, samples, f"fused.head.rot.{rot_axis}", "head", ["fusion", "pose", "head", "rot", index], "fused")
         add_path_signal(signals, samples, f"manny.head.local_rot.{rot_axis}", "head", ["live", "head", "local_rot", index], "manny")
         add_path_signal(signals, samples, f"solver.head.{rot_axis}", "head", ["solver", "head", f"computed_{rot_axis}_deg"], "solver")
+
+    for field in (
+        "solver_snapshot_from_component_cache",
+        "solver_snapshot_from_native_anim_instance",
+        "solver_snapshot_from_recorder_stage2_fallback",
+    ):
+        add_path_signal(signals, samples, f"anim.{field}", "anim_diagnostics", ["anim", field], "anim")
+
+    for side in ("left", "right"):
+        solver_name = f"{side}_shoulder"
+        signal_prefix = f"solver.{side}_shoulder.stage2"
+        for field in (
+            "stage2_shoulder_clavicle_hint_valid",
+            "stage2_shoulder_clavicle_suppressed_by_contradiction",
+            "stage2_shoulder_clavicle_had_contradiction_source",
+            "stage2_candidate_shoulder_lift_from_pelvis_cm",
+            "stage2_reference_shoulder_lift_from_pelvis_cm",
+            "stage2_raw_lift_delta_cm",
+            "stage2_positive_target_lift_cm",
+            "stage2_contradiction_delta_cm",
+            "stage2_smoothed_lift_cm",
+            "stage2_pre_solve_clavicle_lift_from_pelvis_cm",
+            "stage2_target_clavicle_lift_from_pelvis_cm",
+            "stage2_applied_clavicle_lift_cm",
+        ):
+            signal_name = f"{signal_prefix}.{field.removeprefix('stage2_')}"
+            add_path_signal(signals, samples, signal_name, "shoulders_stage2_debug", ["solver", solver_name, field], "solver")
 
     for prefix, root_path in LANDMARK_SPACES.items():
         add_landmark_space(signals, samples, prefix, root_path)
@@ -863,8 +937,17 @@ def extract_signals(samples):
         "mp_candidate.pelvis.loc.y",
         "mediapipe_candidate",
     )
-    add_difference_signal(signals, "manny.torso_height", "torso", "manny.spine_03.loc.z", "manny.pelvis.loc.z", "manny")
-    add_difference_signal(signals, "manny.world_torso_height", "torso", "manny.spine_03.world_loc.z", "manny.pelvis.world_loc.z", "manny")
+    add_difference_signal(signals, "manny.spine_03_torso_height", "torso", "manny.spine_03.loc.z", "manny.pelvis.loc.z", "manny")
+    add_difference_signal(
+        signals,
+        "manny.spine_03_world_torso_height",
+        "torso",
+        "manny.spine_03.world_loc.z",
+        "manny.pelvis.world_loc.z",
+        "manny",
+    )
+    add_difference_signal(signals, "manny.torso_height", "torso", "manny.chest.loc.z", "manny.pelvis.loc.z", "manny")
+    add_difference_signal(signals, "manny.world_torso_height", "torso", "manny.chest.world_loc.z", "manny.pelvis.world_loc.z", "manny")
     for side in ("left", "right"):
         clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
         add_difference_signal(
@@ -946,6 +1029,8 @@ def expected_pairs():
         ("mp_candidate.pelvis.loc.z", "shadow.pelvis.loc.z", "pelvis", "mediapipe_candidate_vs_fused_shadow_measure"),
         ("shadow.pelvis.loc.z", "fused.pelvis.loc.z", "pelvis", "shadow_vs_visible_pelvis_lock"),
         ("fused.pelvis.loc.z", "manny.pelvis.world_loc.z", "pelvis", "output_verification"),
+        ("mp_candidate.pelvis.loc.z", "manny.pelvis.world_loc.z", "pelvis", "stage1_output_vertical_hint"),
+        ("mp_candidate.torso_height", "manny.world_torso_height", "torso", "stage1_output_vertical_hint"),
     ]
     for side in ("left", "right"):
         clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
@@ -958,7 +1043,7 @@ def expected_pairs():
                     "stage2_mediapipe_candidate_shoulder",
                 ),
                 (
-                    f"mp_body.{side}_shoulder_lift_from_hips",
+                    f"mp_candidate.{side}.shoulder_lift_from_pelvis",
                     f"manny.{clavicle_bone}_world_lift_from_pelvis",
                     "shoulders",
                     "stage2_output_shoulder_compare",
@@ -1054,6 +1139,12 @@ def comparison_metadata(group, pair_kind, source_name, target_name):
             "authority_policy": "stage1_vertical_torso_pelvis_hint_only",
             "interpretation": "Stage 1 torso diagnostic row; visible head, hands, arms, wrists, and fingers remain Quest/HMD-owned.",
         }
+    if pair_kind == "stage1_output_vertical_hint":
+        return {
+            "comparison_role": "stage1_vertical_hint_output_verification",
+            "authority_policy": "stage1_vertical_torso_pelvis_hint_only",
+            "interpretation": "Stage 1 visible-output row; MediaPipe may affect only vertical pelvis/torso output, while head and upper limbs remain under existing HMD/Quest authority.",
+        }
     if pair_kind.startswith("stage2_mediapipe_candidate_shoulder"):
         return {
             "comparison_role": "mp_only_shoulder_candidate_quality",
@@ -1073,7 +1164,18 @@ def comparison_metadata(group, pair_kind, source_name, target_name):
     }
 
 
-def pair_metrics(times, sample_total, signals, source_name, target_name, group, pair_kind, mediapipe_advance_seconds=0.0):
+def pair_metrics(
+    times,
+    sample_total,
+    signals,
+    source_name,
+    target_name,
+    group,
+    pair_kind,
+    mediapipe_advance_seconds=0.0,
+    stage1_active=False,
+    stage2_active=False,
+):
     source = adjusted_signal(times, signals, source_name, mediapipe_advance_seconds)
     target = adjusted_signal(times, signals, target_name, mediapipe_advance_seconds)
     valid_count = int(np.count_nonzero(np.isfinite(source) & np.isfinite(target)))
@@ -1088,6 +1190,12 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
     corr_zero = safe_corr(source, target)
     valid_fraction = valid_count / sample_total if sample_total > 0 else 0.0
     metadata = comparison_metadata(group, pair_kind, source_name, target_name)
+    if stage2_active and pair_kind == "stage2_output_shoulder_compare":
+        metadata = {
+            "comparison_role": "stage2_clavicle_vertical_hint_output_verification",
+            "authority_policy": "stage2_clavicle_vertical_hint_only_no_arm_endpoint_authority",
+            "interpretation": "Stage 2A visible-output row; MediaPipe may affect only bounded vertical clavicle translation while arms, wrists, hands, fingers, and full arm IK endpoints remain under existing authority.",
+        }
     measurement_only = (
         group in {"arms_measure_only", "lower_body_measure_only"}
         or "measure_only" in pair_kind
@@ -1199,7 +1307,7 @@ def pair_metrics(times, sample_total, signals, source_name, target_name, group, 
         "source_recorded": True,
         "target_recorded": True,
     }
-    status, reason, true_cause, fix_action = classify_pair_status(row)
+    status, reason, true_cause, fix_action = classify_pair_status(row, stage1_active=stage1_active, stage2_active=stage2_active)
     row["diagnostic_status"] = status
     row["not_valid_reason"] = reason
     row["true_cause"] = true_cause
@@ -1804,7 +1912,7 @@ def poor_area_compensation_specs():
                         "notes": "Candidate compared with shadow/fused context to separate candidate tracking from ownership/output.",
                     }
                 )
-            manny_target = "manny.spine_03.loc" if point == "chest" else "manny.pelvis.loc"
+            manny_target = "manny.chest.loc" if point == "chest" else "manny.pelvis.loc"
             specs.append(
                 {
                     "area": f"mediapipe_candidate_{group}_context",
@@ -2633,7 +2741,8 @@ def region_ownership_availability(samples):
     for region, bone, rotation_field in (
         ("head", "head", "local_rot"),
         ("pelvis", "pelvis", "rot"),
-        ("chest", "spine_03", "rot"),
+        ("chest_mid", "spine_03", "rot"),
+        ("chest_top", "spine_05", "rot"),
         ("left_shoulder", "clavicle_l", "rot"),
         ("right_shoulder", "clavicle_r", "rot"),
         ("left_hand", "hand_l", "rot"),
@@ -2712,17 +2821,20 @@ def not_valid_reason_rows(rows, fitted_rows, rotation_rows):
     return result
 
 
-def main_bone_movement_summary_rows(rows):
+def main_bone_movement_summary_rows(rows, stage2_active=False):
     movement_kinds = {
         "hmd_to_fused_head": "head_position_hmd_to_fused",
         "stage1_mediapipe_candidate_pelvis": "pelvis_mediapipe_to_candidate",
         "quest_shoulder_output_measure": "shoulder_quest_to_fused",
         "stage2_mediapipe_candidate_shoulder": "shoulder_mediapipe_to_candidate",
         "stage1_mediapipe_candidate_torso": "torso_mediapipe_to_candidate",
+        "stage1_output_vertical_hint": "stage1_vertical_hint_to_visible_output",
         "arm_conflict_measure_only": "arm_quest_vs_mediapipe_measure_only",
         "quest_arm_output_measure": "hand_quest_to_manny_output",
         "output_verification": "visible_output_lock_stage0",
-        "stage2_output_shoulder_compare": "visible_shoulder_output_lock_stage0",
+        "stage2_output_shoulder_compare": "stage2_clavicle_vertical_hint_to_visible_output"
+        if stage2_active
+        else "visible_shoulder_output_lock_stage0",
     }
     result = []
     for row in rows:
@@ -3177,6 +3289,191 @@ def estimate_mediapipe_lag_ms(rows):
     }
 
 
+def finite_percentile(values, percentile):
+    clean = finite(values)
+    if clean.size == 0:
+        return math.nan
+    return float(np.nanpercentile(clean, percentile))
+
+
+def stage2_debug_signal_name(side, field):
+    return f"solver.{side}_shoulder.stage2.{field}"
+
+
+def stage2_debug_diagnostic_rows(times, sample_total, signals):
+    rows = []
+    for side in ("left", "right"):
+        clavicle_bone = "clavicle_l" if side == "left" else "clavicle_r"
+        names = {
+            "valid": stage2_debug_signal_name(side, "shoulder_clavicle_hint_valid"),
+            "suppressed": stage2_debug_signal_name(side, "shoulder_clavicle_suppressed_by_contradiction"),
+            "had_contradiction_source": stage2_debug_signal_name(side, "shoulder_clavicle_had_contradiction_source"),
+            "candidate": stage2_debug_signal_name(side, "candidate_shoulder_lift_from_pelvis_cm"),
+            "reference": stage2_debug_signal_name(side, "reference_shoulder_lift_from_pelvis_cm"),
+            "raw_delta": stage2_debug_signal_name(side, "raw_lift_delta_cm"),
+            "target": stage2_debug_signal_name(side, "positive_target_lift_cm"),
+            "contradiction_delta": stage2_debug_signal_name(side, "contradiction_delta_cm"),
+            "smoothed": stage2_debug_signal_name(side, "smoothed_lift_cm"),
+            "pre_solve": stage2_debug_signal_name(side, "pre_solve_clavicle_lift_from_pelvis_cm"),
+            "target_lift": stage2_debug_signal_name(side, "target_clavicle_lift_from_pelvis_cm"),
+            "applied": stage2_debug_signal_name(side, "applied_clavicle_lift_cm"),
+            "visible": f"manny.{clavicle_bone}_world_lift_from_pelvis",
+        }
+        recorded = all(name in signals for key, name in names.items() if key != "visible")
+        row = {
+            "side": side,
+            "recorded": recorded,
+            "sample_count": 0,
+            "valid_fraction": 0.0,
+            "suppressed_fraction": math.nan,
+            "had_contradiction_source_fraction": math.nan,
+            "candidate_lift_p05": math.nan,
+            "candidate_lift_p50": math.nan,
+            "candidate_lift_p95": math.nan,
+            "reference_lift_p50": math.nan,
+            "raw_lift_delta_p05": math.nan,
+            "raw_lift_delta_p50": math.nan,
+            "raw_lift_delta_p95": math.nan,
+            "positive_target_lift_p95": math.nan,
+            "contradiction_delta_p95": math.nan,
+            "smoothed_lift_p95": math.nan,
+            "pre_solve_clavicle_lift_p50": math.nan,
+            "target_clavicle_lift_p50": math.nan,
+            "applied_clavicle_lift_p05": math.nan,
+            "applied_clavicle_lift_p50": math.nan,
+            "applied_clavicle_lift_p95": math.nan,
+            "candidate_to_smoothed_corr": math.nan,
+            "candidate_to_smoothed_best_lag_ms": math.nan,
+            "target_to_visible_corr": math.nan,
+            "target_to_visible_best_lag_ms": math.nan,
+            "applied_to_visible_corr": math.nan,
+            "applied_to_visible_best_lag_ms": math.nan,
+            "diagnostic_status": "not_recorded",
+            "interpretation": "Stage 2A internal debug fields were not recorded in this capture; rerun VR Preview with the instrumented build.",
+        }
+        if not recorded:
+            rows.append(row)
+            continue
+
+        valid = signals[names["valid"]]["values"] > 0.5
+        row["sample_count"] = int(np.count_nonzero(valid))
+        row["valid_fraction"] = row["sample_count"] / sample_total if sample_total > 0 else 0.0
+        if row["sample_count"] <= 0:
+            row["diagnostic_status"] = "no_valid_stage2_samples"
+            row["interpretation"] = "Stage 2A debug fields were recorded, but no valid Stage 2A samples were marked."
+            rows.append(row)
+            continue
+
+        suppressed = signals[names["suppressed"]]["values"] > 0.5
+        had_contradiction_source = signals[names["had_contradiction_source"]]["values"] > 0.5
+        row["suppressed_fraction"] = float(np.count_nonzero(suppressed & valid) / row["sample_count"])
+        row["had_contradiction_source_fraction"] = float(np.count_nonzero(had_contradiction_source & valid) / row["sample_count"])
+
+        for key, prefix in (
+            ("candidate", "candidate_lift"),
+            ("raw_delta", "raw_lift_delta"),
+            ("applied", "applied_clavicle_lift"),
+        ):
+            values = signals[names[key]]["values"][valid]
+            row[f"{prefix}_p05"] = finite_percentile(values, 5)
+            row[f"{prefix}_p50"] = finite_percentile(values, 50)
+            row[f"{prefix}_p95"] = finite_percentile(values, 95)
+        for key, field in (
+            ("reference", "reference_lift_p50"),
+            ("target", "positive_target_lift_p95"),
+            ("contradiction_delta", "contradiction_delta_p95"),
+            ("smoothed", "smoothed_lift_p95"),
+            ("pre_solve", "pre_solve_clavicle_lift_p50"),
+            ("target_lift", "target_clavicle_lift_p50"),
+        ):
+            percentile = 95 if field.endswith("_p95") else 50
+            row[field] = finite_percentile(signals[names[key]]["values"][valid], percentile)
+
+        for source_key, target_key, prefix in (
+            ("candidate", "smoothed", "candidate_to_smoothed"),
+            ("target_lift", "visible", "target_to_visible"),
+            ("applied", "visible", "applied_to_visible"),
+        ):
+            if names[source_key] not in signals or names[target_key] not in signals:
+                continue
+            source = signals[names[source_key]]["values"]
+            target = signals[names[target_key]]["values"]
+            mask = valid & np.isfinite(source) & np.isfinite(target)
+            if np.count_nonzero(mask) < MIN_SIGNAL_SAMPLES:
+                continue
+            lag, corr = best_lag(times[mask], source[mask], target[mask])
+            row[f"{prefix}_corr"] = corr
+            row[f"{prefix}_best_lag_ms"] = lag * 1000.0 if np.isfinite(lag) else math.nan
+
+        if row["suppressed_fraction"] > 0.25:
+            row["diagnostic_status"] = "contradiction_suppressed"
+            row["interpretation"] = "Contradiction gating suppressed a substantial fraction of Stage 2A samples."
+        elif np.isfinite(row["applied_clavicle_lift_p50"]) and row["applied_clavicle_lift_p50"] < -0.1:
+            row["diagnostic_status"] = "post_arm_solve_overwrite_downward"
+            row["interpretation"] = "Stage 2A is often writing below the post-arm-solve clavicle position."
+        elif np.isfinite(row["positive_target_lift_p95"]) and row["positive_target_lift_p95"] < 0.75:
+            row["diagnostic_status"] = "target_lift_too_small"
+            row["interpretation"] = "The Stage 2A target is small after reference thresholding, blend, and clamping."
+        else:
+            row["diagnostic_status"] = "recorded"
+            row["interpretation"] = "Stage 2A debug fields were recorded; inspect target, smoothed, and applied amplitudes against visible output."
+        rows.append(row)
+    return rows
+
+
+def summarize_stage2_debug(rows):
+    recorded_rows = [row for row in rows if row["recorded"]]
+    return {
+        "recorded": bool(recorded_rows),
+        "sides_recorded": [row["side"] for row in recorded_rows],
+        "status_by_side": {row["side"]: row["diagnostic_status"] for row in rows},
+        "needs_new_vr_preview_for_stage2_debug": not bool(recorded_rows),
+        "rows": rows,
+    }
+
+
+def summarize_solver_snapshot_sources(samples):
+    sample_count = len(samples)
+    component_cache_count = 0
+    native_anim_instance_count = 0
+    recorder_stage2_fallback_count = 0
+    for sample in samples:
+        anim = sample.get("anim", {}) if isinstance(sample, dict) else {}
+        if not isinstance(anim, dict):
+            continue
+        component_cache_count += 1 if anim.get("solver_snapshot_from_component_cache") is True else 0
+        native_anim_instance_count += 1 if anim.get("solver_snapshot_from_native_anim_instance") is True else 0
+        recorder_stage2_fallback_count += 1 if anim.get("solver_snapshot_from_recorder_stage2_fallback") is True else 0
+
+    runtime_solver_count = component_cache_count + native_anim_instance_count
+    fallback_fraction = recorder_stage2_fallback_count / sample_count if sample_count else math.nan
+    runtime_fraction = runtime_solver_count / sample_count if sample_count else math.nan
+    if recorder_stage2_fallback_count and not runtime_solver_count:
+        status = "fallback_only"
+        interpretation = "Stage 2A solver fields were estimated by the recorder fallback, so they do not prove the anim node applied the clavicle hint."
+    elif recorder_stage2_fallback_count:
+        status = "mixed_runtime_and_fallback"
+        interpretation = "Some Stage 2A solver fields came from the recorder fallback; inspect runtime and fallback samples separately before judging visible output."
+    elif runtime_solver_count:
+        status = "runtime_anim_solver"
+        interpretation = "Stage 2A solver fields came from the runtime anim solver snapshot."
+    else:
+        status = "no_solver_snapshot"
+        interpretation = "No solver snapshot source was recorded."
+
+    return {
+        "sample_count": sample_count,
+        "runtime_solver_count": runtime_solver_count,
+        "component_cache_count": component_cache_count,
+        "native_anim_instance_count": native_anim_instance_count,
+        "recorder_stage2_fallback_count": recorder_stage2_fallback_count,
+        "runtime_solver_fraction": runtime_fraction,
+        "recorder_stage2_fallback_fraction": fallback_fraction,
+        "status": status,
+        "interpretation": interpretation,
+    }
+
+
 def stage_recommendations(rows, timing_rows, inventory_rows):
     non_measure_failures = [
         row
@@ -3192,7 +3489,11 @@ def stage_recommendations(rows, timing_rows, inventory_rows):
         for axis in ("x", "y")
     )
     stage2_rows = [row for row in rows if row["pair_kind"].startswith("stage2_") and not row["measurement_only"]]
-    stage2_pass = [row for row in stage2_rows if row["stage_gate"] == "pass"]
+    stage2_candidate_rows = [row for row in stage2_rows if row["pair_kind"] == "stage2_mediapipe_candidate_shoulder"]
+    stage2_output_rows = [row for row in stage2_rows if row["pair_kind"] == "stage2_output_shoulder_compare"]
+    stage2_candidate_pass = [row for row in stage2_candidate_rows if row["stage_gate"] == "pass"]
+    stage2_output_pass = [row for row in stage2_output_rows if row["stage_gate"] == "pass"]
+    stage2_visible_output_verified = bool(stage2_output_rows) and len(stage2_output_pass) == len(stage2_output_rows)
     lag = estimate_mediapipe_lag_ms(rows)
 
     body_inventory = [row for row in inventory_rows if row["space"] == "mp_body"]
@@ -3220,8 +3521,12 @@ def stage_recommendations(rows, timing_rows, inventory_rows):
         "stage1_planar_pelvis_ready": bool(pelvis_planar_pass),
         "stage1_planar_policy": "planar_pelvis_disabled_no_chasing",
         "stage1_pass_pairs": stage1_pass,
-        "stage2_shoulder_hint_ready": bool(stage2_pass),
-        "stage2_pass_pairs": stage2_pass,
+        "stage2_shoulder_candidate_input_ready": bool(stage2_candidate_pass),
+        "stage2_shoulder_visible_output_verified": stage2_visible_output_verified,
+        "stage2_shoulder_hint_ready": stage2_visible_output_verified,
+        "stage2_candidate_pass_pairs": stage2_candidate_pass,
+        "stage2_visible_output_pass_pairs": stage2_output_pass,
+        "stage2_visible_output_fail_pairs": [row for row in stage2_output_rows if row["stage_gate"] != "pass"],
         "first_active_fusion_recommendation": first_active,
         "blocked_reasons": sorted({flag for row in non_measure_failures for flag in row["flags"].split(";") if flag}),
         "safe_next_trials": [
@@ -3255,6 +3560,9 @@ def main():
     samples = data.get("samples", [])
     if not samples:
         raise SystemExit(f"No samples found in {args.input}")
+    runtime_cvars = data.get("runtime_cvars", {}) if isinstance(data.get("runtime_cvars", {}), dict) else {}
+    stage1_active = float(runtime_cvars.get("mp.BodyFusion.Stage1TorsoPelvisHint", 0) or 0) != 0.0
+    stage2_active = float(runtime_cvars.get("mp.BodyFusion.Stage2ShoulderClavicleHint", 0) or 0) != 0.0
 
     out_dir = args.out_dir or args.input.with_suffix("").parent / f"{args.input.stem}_mpq_shadow_analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -3263,10 +3571,25 @@ def main():
     times = times - time0
 
     signals = extract_signals(samples)
+    live_chest_bone = select_live_chest_bone(signals, "loc")
+    live_world_chest_bone = select_live_chest_bone(signals, "world_loc")
     rows = []
     for source, target, group, pair_kind in expected_pairs():
         if source in signals and target in signals:
-            rows.append(pair_metrics(times, len(samples), signals, source, target, group, pair_kind, mediapipe_advance_seconds))
+            rows.append(
+                pair_metrics(
+                    times,
+                    len(samples),
+                    signals,
+                    source,
+                    target,
+                    group,
+                    pair_kind,
+                    mediapipe_advance_seconds,
+                    stage1_active,
+                    stage2_active,
+                )
+            )
         else:
             missing = empty_metric_row(
                 source,
@@ -3285,6 +3608,12 @@ def main():
             missing["source_recorded"] = source in signals
             missing["target_recorded"] = target in signals
             metadata = comparison_metadata(group, pair_kind, source, target)
+            if stage2_active and pair_kind == "stage2_output_shoulder_compare":
+                metadata = {
+                    "comparison_role": "stage2_clavicle_vertical_hint_output_verification",
+                    "authority_policy": "stage2_clavicle_vertical_hint_only_no_arm_endpoint_authority",
+                    "interpretation": "Stage 2A visible-output row; MediaPipe may affect only bounded vertical clavicle translation while arms, wrists, hands, fingers, and full arm IK endpoints remain under existing authority.",
+                }
             missing["comparison_role"] = metadata["comparison_role"]
             missing["authority_policy"] = metadata["authority_policy"]
             missing["interpretation"] = metadata["interpretation"]
@@ -3488,7 +3817,7 @@ def main():
     ]
     write_csv(rotation_csv, rotation_rows, rotation_fields)
 
-    movement_rows = main_bone_movement_summary_rows(rows)
+    movement_rows = main_bone_movement_summary_rows(rows, stage2_active)
     movement_csv = out_dir / "main_bone_movement_correlation_summary.csv"
     movement_fields = [
         "bone_or_region",
@@ -3506,6 +3835,41 @@ def main():
         "note",
     ]
     write_csv(movement_csv, movement_rows, movement_fields)
+
+    stage2_debug_rows = stage2_debug_diagnostic_rows(times, len(samples), signals)
+    stage2_debug_csv = out_dir / "mpq_shadow_stage2_debug.csv"
+    stage2_debug_fields = [
+        "side",
+        "recorded",
+        "sample_count",
+        "valid_fraction",
+        "suppressed_fraction",
+        "had_contradiction_source_fraction",
+        "candidate_lift_p05",
+        "candidate_lift_p50",
+        "candidate_lift_p95",
+        "reference_lift_p50",
+        "raw_lift_delta_p05",
+        "raw_lift_delta_p50",
+        "raw_lift_delta_p95",
+        "positive_target_lift_p95",
+        "contradiction_delta_p95",
+        "smoothed_lift_p95",
+        "pre_solve_clavicle_lift_p50",
+        "target_clavicle_lift_p50",
+        "applied_clavicle_lift_p05",
+        "applied_clavicle_lift_p50",
+        "applied_clavicle_lift_p95",
+        "candidate_to_smoothed_corr",
+        "candidate_to_smoothed_best_lag_ms",
+        "target_to_visible_corr",
+        "target_to_visible_best_lag_ms",
+        "applied_to_visible_corr",
+        "applied_to_visible_best_lag_ms",
+        "diagnostic_status",
+        "interpretation",
+    ]
+    write_csv(stage2_debug_csv, stage2_debug_rows, stage2_debug_fields)
 
     reason_rows = not_valid_reason_rows(rows, fitted_rows, rotation_rows)
     reason_csv = out_dir / "mpq_shadow_not_valid_reasons.csv"
@@ -3581,6 +3945,11 @@ def main():
         "duration_seconds": float(np.nanmax(times) - np.nanmin(times)) if len(times) > 1 else 0.0,
         "signal_count": len(signals),
         "pair_count": len(rows),
+        "live_chest_signal": {
+            "local_bone": live_chest_bone,
+            "world_bone": live_world_chest_bone,
+            "note": "manny.chest.* aliases the highest recorded live spine bone so torso-height output is compared against the actual chest endpoint, not a mid-spine bone.",
+        },
         "analysis_mediapipe_advance_ms": args.mediapipe_advance_ms,
         "analysis_mediapipe_advance_note": "Positive values advance MediaPipe landmark signals offline before metrics and plots are scored.",
         "arm_policy": "arms_measurement_only_no_mediapipe_arm_fallback_decision",
@@ -3597,6 +3966,7 @@ def main():
         "not_valid_reasons_csv": str(reason_csv),
         "main_bone_movement_correlation_summary_csv": str(movement_csv),
         "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
+        "stage2_debug_csv": str(stage2_debug_csv),
         "axis_search_diagnostics_csv": str(axis_csv),
         "poor_area_compensation_csv": str(compensation_csv),
         "charts": charts,
@@ -3611,6 +3981,7 @@ def main():
             "not_valid_reasons_csv": str(reason_csv),
             "main_bone_movement_correlation_summary_csv": str(movement_csv),
             "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
+            "stage2_debug_csv": str(stage2_debug_csv),
             "axis_search_diagnostics_csv": str(axis_csv),
             "poor_area_compensation_csv": str(compensation_csv),
             "charts": charts,
@@ -3625,7 +3996,9 @@ def main():
             "fix_action_counts": {action: sum(1 for row in reason_rows if row["fix_action"] == action) for action in sorted({row["fix_action"] for row in reason_rows})},
             "rows": reason_rows,
         },
+        "solver_snapshot_source_summary": summarize_solver_snapshot_sources(samples),
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
+        "stage2_debug_summary": summarize_stage2_debug(stage2_debug_rows),
         "standardized_alignment_summary": summarize_standardized_alignment(rows),
         "fitted_alignment_summary": summarize_fitted_alignment(fitted_rows),
         "physical_fit_summary": summarize_fitted_alignment(fitted_rows),
@@ -3649,6 +4022,7 @@ def main():
                 "not_valid_reasons_csv": str(reason_csv),
                 "main_bone_movement_correlation_summary_csv": str(movement_csv),
                 "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
+                "stage2_debug_csv": str(stage2_debug_csv),
                 "axis_search_diagnostics_csv": str(axis_csv),
                 "poor_area_compensation_csv": str(compensation_csv),
                 "charts": charts,

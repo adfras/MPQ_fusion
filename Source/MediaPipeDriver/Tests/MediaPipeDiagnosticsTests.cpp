@@ -1100,6 +1100,78 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("BodyFusion MediaPipe authority header handle matches registry value"), CVarBodyFusionMediaPipeAuthority.GetValueOnAnyThread(), BodyFusionMediaPipeAuthority->GetInt());
 	}
 
+	IConsoleVariable* BodyFusionStage1TorsoPelvisHint = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"));
+	TestNotNull(TEXT("BodyFusion Stage 1 torso/pelvis hint CVar is registered"), BodyFusionStage1TorsoPelvisHint);
+	if (BodyFusionStage1TorsoPelvisHint)
+	{
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint defaults off"), 0, BodyFusionStage1TorsoPelvisHint->GetInt());
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint header handle matches registry value"), CVarBodyFusionStage1TorsoPelvisHint.GetValueOnAnyThread(), BodyFusionStage1TorsoPelvisHint->GetInt());
+	}
+
+	IConsoleVariable* BodyFusionStage1TorsoPelvisHintBlend = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"));
+	TestNotNull(TEXT("BodyFusion Stage 1 torso/pelvis hint blend CVar is registered"), BodyFusionStage1TorsoPelvisHintBlend);
+	if (BodyFusionStage1TorsoPelvisHintBlend)
+	{
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint blend default"), 0.25f, BodyFusionStage1TorsoPelvisHintBlend->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint blend header handle matches registry value"), CVarBodyFusionStage1TorsoPelvisHintBlend.GetValueOnAnyThread(), BodyFusionStage1TorsoPelvisHintBlend->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage1TorsoPelvisMaxVerticalCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage1TorsoPelvisMaxVerticalCm"));
+	TestNotNull(TEXT("BodyFusion Stage 1 torso/pelvis max vertical CVar is registered"), BodyFusionStage1TorsoPelvisMaxVerticalCm);
+	if (BodyFusionStage1TorsoPelvisMaxVerticalCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis max vertical default"), 8.0f, BodyFusionStage1TorsoPelvisMaxVerticalCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis max vertical header handle matches registry value"), CVarBodyFusionStage1TorsoPelvisMaxVerticalCm.GetValueOnAnyThread(), BodyFusionStage1TorsoPelvisMaxVerticalCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage1TorsoPelvisHintHalfLife = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"));
+	TestNotNull(TEXT("BodyFusion Stage 1 torso/pelvis hint half-life CVar is registered"), BodyFusionStage1TorsoPelvisHintHalfLife);
+	if (BodyFusionStage1TorsoPelvisHintHalfLife)
+	{
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint half-life default"), 0.04f, BodyFusionStage1TorsoPelvisHintHalfLife->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 1 torso/pelvis hint half-life header handle matches registry value"), CVarBodyFusionStage1TorsoPelvisHintHalfLifeSeconds.GetValueOnAnyThread(), BodyFusionStage1TorsoPelvisHintHalfLife->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderClavicleHint = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle hint CVar is registered"), BodyFusionStage2ShoulderClavicleHint);
+	if (BodyFusionStage2ShoulderClavicleHint)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint defaults off"), 0, BodyFusionStage2ShoulderClavicleHint->GetInt());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleHint.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleHint->GetInt());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderClavicleHintBlend = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend CVar is registered"), BodyFusionStage2ShoulderClavicleHintBlend);
+	if (BodyFusionStage2ShoulderClavicleHintBlend)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend default"), 0.20f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleHintBlend.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderClavicleMaxLiftCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle max lift CVar is registered"), BodyFusionStage2ShoulderClavicleMaxLiftCm);
+	if (BodyFusionStage2ShoulderClavicleMaxLiftCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle max lift default"), 5.0f, BodyFusionStage2ShoulderClavicleMaxLiftCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle max lift header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleMaxLiftCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleMaxLiftCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderClavicleHalfLife = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle half-life CVar is registered"), BodyFusionStage2ShoulderClavicleHalfLife);
+	if (BodyFusionStage2ShoulderClavicleHalfLife)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle half-life default"), 0.04f, BodyFusionStage2ShoulderClavicleHalfLife->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle half-life header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleHalfLifeSeconds.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleHalfLife->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderContradictionCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder contradiction CVar is registered"), BodyFusionStage2ShoulderContradictionCm);
+	if (BodyFusionStage2ShoulderContradictionCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder contradiction default"), 20.0f, BodyFusionStage2ShoulderContradictionCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder contradiction header handle matches registry value"), CVarBodyFusionStage2ShoulderContradictionCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderContradictionCm->GetFloat());
+	}
+
 	IConsoleVariable* BodyFusionCalibrationStableFrames = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.CalibrationStableFrames"));
 	TestNotNull(TEXT("BodyFusion calibration stable frame CVar is registered"), BodyFusionCalibrationStableFrames);
 	if (BodyFusionCalibrationStableFrames)
@@ -1146,6 +1218,20 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("MPQ shadow-fusion analyze defaults on"), 1, MPQShadowFusionAnalyze->GetInt());
 	}
 
+	IConsoleVariable* MPQShadowFusionStage1OnPlay = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"));
+	TestNotNull(TEXT("MPQ shadow-fusion Stage 1 on-play CVar is registered"), MPQShadowFusionStage1OnPlay);
+	if (MPQShadowFusionStage1OnPlay)
+	{
+		TestEqual(TEXT("MPQ shadow-fusion Stage 1 on-play defaults off"), 0, MPQShadowFusionStage1OnPlay->GetInt());
+	}
+
+	IConsoleVariable* MPQShadowFusionStage2OnPlay = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay"));
+	TestNotNull(TEXT("MPQ shadow-fusion Stage 2 on-play CVar is registered"), MPQShadowFusionStage2OnPlay);
+	if (MPQShadowFusionStage2OnPlay)
+	{
+		TestEqual(TEXT("MPQ shadow-fusion Stage 2 on-play defaults off"), 0, MPQShadowFusionStage2OnPlay->GetInt());
+	}
+
 	IConsoleVariable* MPQShadowFusionPath = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlayPath"));
 	TestNotNull(TEXT("MPQ shadow-fusion path CVar is registered"), MPQShadowFusionPath);
 
@@ -1173,12 +1259,23 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		TEXT("mp.BodyFusion.Debug"),
 		TEXT("mp.BodyFusion.WritePose"),
 		TEXT("mp.BodyFusion.MediaPipeAuthority"),
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"),
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"),
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisMaxVerticalCm"),
+		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"),
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"),
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"),
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"),
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"),
+		TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"),
 		TEXT("mp.QuestArmDropoutDownFallback"),
 		TEXT("mp.QuestConstrainedArmBodyFallback"),
 		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
 		TEXT("mp.RecordMPQShadowFusionOnPlay"),
 		TEXT("mp.RecordMPQShadowFusionOnPlayDuration"),
 		TEXT("mp.RecordMPQShadowFusionAnalyzeAfterWrite"),
+		TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"),
+		TEXT("mp.RecordMPQShadowFusionStage2ShoulderClavicleHintOnPlay"),
 		TEXT("mp.RecordMPQShadowFusionOnPlayPath"),
 		TEXT("mp.AutoQuestWebcamHandsCameraIndex"),
 		TEXT("mp.AutoQuestWebcamDirectWmfCapture"),
@@ -1218,6 +1315,22 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("Prepared MPQ trial keeps MediaPipe authority diagnostic-only"), 0, BodyFusionMediaPipeAuthority->GetInt());
 		}
+		if (BodyFusionStage1TorsoPelvisHint)
+		{
+			TestEqual(TEXT("Prepared MPQ trial keeps Stage 1 torso/pelvis hint off by default"), 0, BodyFusionStage1TorsoPelvisHint->GetInt());
+		}
+		if (MPQShadowFusionStage1OnPlay)
+		{
+			TestEqual(TEXT("Prepared MPQ trial keeps Stage 1 on-play request off by default"), 0, MPQShadowFusionStage1OnPlay->GetInt());
+		}
+		if (BodyFusionStage2ShoulderClavicleHint)
+		{
+			TestEqual(TEXT("Prepared MPQ trial keeps Stage 2 shoulder/clavicle hint off by default"), 0, BodyFusionStage2ShoulderClavicleHint->GetInt());
+		}
+		if (MPQShadowFusionStage2OnPlay)
+		{
+			TestEqual(TEXT("Prepared MPQ trial keeps Stage 2 on-play request off by default"), 0, MPQShadowFusionStage2OnPlay->GetInt());
+		}
 
 		if (IConsoleVariable* QuestArmDropoutDownFallback = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmDropoutDownFallback")))
 		{
@@ -1246,6 +1359,58 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		if (MPQShadowFusionPath)
 		{
 			TestTrue(TEXT("Prepared MPQ trial output path contains label"), MPQShadowFusionPath->GetString().Contains(TEXT("automation_cvar_test")));
+		}
+
+		const bool bStage1Processed = IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=automation_stage1_cvar_test stage1=1 analyze=0 blend=0.5 halfLife=0.03"),
+			OutputDevice,
+			nullptr);
+		TestTrue(TEXT("MPQ shadow-fusion latency trial accepts Stage 1/analyze/blend/half-life options"), bStage1Processed);
+		if (BodyFusionStage1TorsoPelvisHint)
+		{
+			TestEqual(TEXT("Prepared Stage 1 MPQ trial enables Stage 1 torso/pelvis hint"), 1, BodyFusionStage1TorsoPelvisHint->GetInt());
+		}
+		if (MPQShadowFusionStage1OnPlay)
+		{
+			TestEqual(TEXT("Prepared Stage 1 MPQ trial preserves Stage 1 on play"), 1, MPQShadowFusionStage1OnPlay->GetInt());
+		}
+		if (MPQShadowFusionAnalyze)
+		{
+			TestEqual(TEXT("Prepared Stage 1 MPQ trial can disable in-editor analyzer"), 0, MPQShadowFusionAnalyze->GetInt());
+		}
+		if (BodyFusionStage1TorsoPelvisHintBlend)
+		{
+			TestEqual(TEXT("Prepared Stage 1 MPQ trial stores requested blend"), 0.5f, BodyFusionStage1TorsoPelvisHintBlend->GetFloat());
+		}
+		if (BodyFusionStage1TorsoPelvisHintHalfLife)
+		{
+			TestEqual(TEXT("Prepared Stage 1 MPQ trial stores requested half-life"), 0.03f, BodyFusionStage1TorsoPelvisHintHalfLife->GetFloat());
+		}
+
+		const bool bStage2Processed = IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=automation_stage2_cvar_test stage1=1 stage2=1 analyze=0 blend=0.5 halfLife=0.04 stage2Blend=0.2 stage2MaxLiftCm=4.5 stage2HalfLife=0.05"),
+			OutputDevice,
+			nullptr);
+		TestTrue(TEXT("MPQ shadow-fusion latency trial accepts Stage 2 shoulder/clavicle options"), bStage2Processed);
+		if (BodyFusionStage2ShoulderClavicleHint)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial enables Stage 2 shoulder/clavicle hint"), 1, BodyFusionStage2ShoulderClavicleHint->GetInt());
+		}
+		if (MPQShadowFusionStage2OnPlay)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial preserves Stage 2 on play"), 1, MPQShadowFusionStage2OnPlay->GetInt());
+		}
+		if (BodyFusionStage2ShoulderClavicleHintBlend)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested blend"), 0.2f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderClavicleMaxLiftCm)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested max lift"), 4.5f, BodyFusionStage2ShoulderClavicleMaxLiftCm->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderClavicleHalfLife)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested half-life"), 0.05f, BodyFusionStage2ShoulderClavicleHalfLife->GetFloat());
 		}
 	}
 	RestoreConsoleSnapshots();
