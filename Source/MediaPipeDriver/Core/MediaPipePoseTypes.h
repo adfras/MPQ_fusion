@@ -126,6 +126,13 @@ struct FMediaPipePoseFrame
 	FMediaPipeRawHandPair Hands{};
 	FMediaPipeRawFacePose Face{};
 	int64 TimestampUs = 0;
+	double SourceCaptureWallSeconds = -1.0;
+	double EnqueueWallSeconds = -1.0;
+	double WorkerStartWallSeconds = -1.0;
+	double NativeProcessEndWallSeconds = -1.0;
+	double LandmarkEndWallSeconds = -1.0;
+	double PublishWallSeconds = -1.0;
+	double ConditionedQueryWallSeconds = -1.0;
 	bool bValid = false;
 	bool bSourceConditioned = false;
 	bool bHasHands = false;

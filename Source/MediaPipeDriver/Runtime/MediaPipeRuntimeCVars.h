@@ -19,7 +19,18 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarQuestHandRotationBlend;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionEnable;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionDebug;
+	extern TAutoConsoleVariable<int32> CVarBodyFusionWritePose;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionMediaPipeAuthority;
+	extern TAutoConsoleVariable<int32> CVarBodyFusionStage1TorsoPelvisHint;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintBlend;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisMaxVerticalCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintHalfLifeSeconds;
+	extern TAutoConsoleVariable<int32> CVarBodyFusionStage2ShoulderClavicleHint;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHintBlend;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleResponseScale;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleMaxLiftCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHalfLifeSeconds;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderContradictionCm;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionCalibrationStableFrames;
 	extern TAutoConsoleVariable<float> CVarBodyFusionCalibrationHoldSeconds;
 	extern TAutoConsoleVariable<int32> CVarQuestWristRelativeCalibration;

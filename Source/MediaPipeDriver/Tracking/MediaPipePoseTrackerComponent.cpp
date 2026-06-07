@@ -183,6 +183,16 @@ namespace
 		InOutLastSubmittedTimestampUs = TimestampUs;
 		return TimestampUs;
 	}
+
+	double ResolveSourceCaptureWallSeconds(const int64 SourceTimestampUs)
+	{
+		// Direct WMF frames use FPlatformTime seconds converted to microseconds.
+		// Short media-player timeline timestamps are not in that clock domain.
+		static constexpr int64 PlatformTimeLikeThresholdUs = 1000000000000LL;
+		return SourceTimestampUs >= PlatformTimeLikeThresholdUs
+			? static_cast<double>(SourceTimestampUs) * 1.0e-6
+			: FPlatformTime::Seconds();
+	}
 }
 
 UMediaPipePoseTrackerComponent::UMediaPipePoseTrackerComponent()
@@ -515,7 +525,13 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 							EstimatedMediaFrameStepSeconds,
 							LastSubmittedNativeTimestampUs,
 							NativeTimestampOffsetUs);
-						const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, MediaTextureReadbackEpoch);
+						const bool bEnqueued = Tracker->EnqueueFrame(
+							MoveTemp(Rgb),
+							InferenceSize.X,
+							InferenceSize.Y,
+							EnqueueTimestampUs,
+							MediaTextureReadbackEpoch,
+							ResolveSourceCaptureWallSeconds(MediaTextureReadbackTimestampUs));
 						bEnqueuedAny = bEnqueued || bEnqueuedAny;
 						if (bEnqueued)
 						{
@@ -716,7 +732,13 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 				EstimatedMediaFrameStepSeconds,
 				LastSubmittedNativeTimestampUs,
 				NativeTimestampOffsetUs);
-			const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, SourceEpoch);
+			const bool bEnqueued = Tracker->EnqueueFrame(
+				MoveTemp(Rgb),
+				InferenceSize.X,
+				InferenceSize.Y,
+				EnqueueTimestampUs,
+				SourceEpoch,
+				ResolveSourceCaptureWallSeconds(TimestampUs));
 			if (bEnqueued)
 			{
 				++RuntimeStats.ComponentEnqueueSuccessCount;
@@ -793,7 +815,13 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 				StepSeconds,
 				LastSubmittedNativeTimestampUs,
 				NativeTimestampOffsetUs);
-			const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), InferenceSize.X, InferenceSize.Y, EnqueueTimestampUs, SourceEpoch);
+			const bool bEnqueued = Tracker->EnqueueFrame(
+				MoveTemp(Rgb),
+				InferenceSize.X,
+				InferenceSize.Y,
+				EnqueueTimestampUs,
+				SourceEpoch,
+				ResolveSourceCaptureWallSeconds(TimestampUs));
 			if (bEnqueued)
 			{
 				++RuntimeStats.ComponentEnqueueSuccessCount;
@@ -844,7 +872,13 @@ bool UMediaPipePoseTrackerComponent::ProcessFrame()
 		StepSeconds,
 		LastSubmittedNativeTimestampUs,
 		NativeTimestampOffsetUs);
-	const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), Size.X, Size.Y, EnqueueTimestampUs, SourceEpoch);
+	const bool bEnqueued = Tracker->EnqueueFrame(
+		MoveTemp(Rgb),
+		Size.X,
+		Size.Y,
+		EnqueueTimestampUs,
+		SourceEpoch,
+		ResolveSourceCaptureWallSeconds(TimestampUs));
 	if (bEnqueued)
 	{
 		++RuntimeStats.ComponentEnqueueSuccessCount;
@@ -901,7 +935,13 @@ bool UMediaPipePoseTrackerComponent::ProcessRgbFrame(TArray<uint8>&& Rgb, FIntPo
 		StepSeconds,
 		LastSubmittedNativeTimestampUs,
 		NativeTimestampOffsetUs);
-	const bool bEnqueued = Tracker->EnqueueFrame(MoveTemp(Rgb), Size.X, Size.Y, EnqueueTimestampUs, SourceEpoch);
+	const bool bEnqueued = Tracker->EnqueueFrame(
+		MoveTemp(Rgb),
+		Size.X,
+		Size.Y,
+		EnqueueTimestampUs,
+		SourceEpoch,
+		ResolveSourceCaptureWallSeconds(TimestampUs));
 	if (bEnqueued)
 	{
 		++RuntimeStats.ComponentEnqueueSuccessCount;

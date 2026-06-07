@@ -49,6 +49,16 @@ mp.MediaPipeHolisticHeadSolve 1
 
 Regression guard: `TestingKit5.MediaPipe.RuntimeProfile.MediaPipeOnlyEmbodiedWebcamShoulderShrugDefaults` must pass before changing the MediaPipe-only embodied webcam profile. Do not claim this visual behavior from automation alone; validate in PIE or headset view with the user in frame. When user pose timing matters, ask the user to press Play rather than starting PIE for them.
 
+For MPQ Stage 2A shoulder/clavicle trials, treat `solver_snapshot_from_recorder_stage2_fallback=true` as an estimate only. A useful runtime proof needs `solver_snapshot_from_component_cache=true` or `solver_snapshot_from_native_anim_instance=true`; fallback-only Stage 2A rows do not prove the anim node applied clavicle motion.
+
+Stage 2A uses `mp.BodyFusion.Stage2ShoulderClavicleResponseScale` to scale positive MediaPipe shoulder-lift evidence before the existing `mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm` clamp. The default is `4.5`, matching the proven Manny MediaPipe-only shoulder-lift response scale, but it is scoped only to bounded clavicle lift. It must not be used to give MediaPipe authority over elbows, wrists, hands, fingers, arm fallback, or the HMD camera anchor.
+
+Stage 2A must run before the Quest arm/hand solve in the anim graph evaluation order. If the clavicle hint runs after the Quest arm has already placed upperarm/lowerarm/hand component-space bones, the parent clavicle can move against already-solved children and make the visible MetaHuman shoulder/arm read as fighting or inverted. Quest still owns the arm endpoint; Stage 2A only adjusts the shoulder base before that solve.
+
+2026-06-07 Stage 2A checkpoint: after moving Stage 2A before the Quest arm/hand solve and rebuilding normally, the proof run `Saved/CodexAgent/Diagnostics/mpq_shadow_latency_stage2aPreArmSolveProof_20260607_203128.json` completed 45 seconds with 1339 samples. The driven component was the MetaHuman body mesh `BP_Kellan_C_0.Body`, despite legacy internal labels and analyzer fields still using Manny names. Stage 2A solver fields came from the runtime anim solver, not the recorder fallback. Both sides reached the 5 cm clamp, `stage2_shoulder_hint_ready=true`, and `stage2_visible_output_fail_pairs=[]`.
+
+The same proof showed positive MetaHuman shoulder sign: left applied lift to clavicle Z correlation `0.992`, right `0.998`. Quest wrist to MetaHuman hand output was no longer flat in that capture: left hand Y/Z correlations `0.923`/`0.966`, right hand Y/Z `0.965`/`0.972`. Left Quest tracking was intermittent during part of the run, so left-side hand/arm conclusions should be treated as useful but not a perfect clean proof. Future analyzer/report wording should distinguish the internal driver actor label `MP_LiveMediaPipeManny` from the actual driven MetaHuman body component.
+
 ## Bridge
 
 Start the local bridge:

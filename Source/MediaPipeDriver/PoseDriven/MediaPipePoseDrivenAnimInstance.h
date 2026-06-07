@@ -22,6 +22,7 @@
 
 class AActor;
 class UMediaPipePoseDrivenAnimInstance;
+class USkeletalMeshComponent;
 
 struct FMediaPipePoseDrivenHeadSignalSnapshot
 {
@@ -89,6 +90,18 @@ struct FMediaPipePoseDrivenShoulderSignalSnapshot
 	float AppliedUpperLiftCm = 0.0f;
 	float UpWeight = 0.0f;
 	float ForwardWeight = 0.0f;
+	bool bStage2ShoulderClavicleHintValid = false;
+	bool bStage2ShoulderClavicleSuppressedByContradiction = false;
+	bool bStage2ShoulderClavicleHadContradictionSource = false;
+	float Stage2CandidateShoulderLiftFromPelvisCm = 0.0f;
+	float Stage2ReferenceShoulderLiftFromPelvisCm = 0.0f;
+	float Stage2RawLiftDeltaCm = 0.0f;
+	float Stage2PositiveTargetLiftCm = 0.0f;
+	float Stage2ContradictionDeltaCm = 0.0f;
+	float Stage2SmoothedLiftCm = 0.0f;
+	float Stage2PreSolveClavicleLiftFromPelvisCm = 0.0f;
+	float Stage2TargetClavicleLiftFromPelvisCm = 0.0f;
+	float Stage2AppliedClavicleLiftCm = 0.0f;
 };
 
 struct FMediaPipePoseDrivenSignalSnapshot
@@ -564,6 +577,7 @@ private:
 	FQuestHandTrackingSnapshot QuestHands{};
 	FMediaPipeFullArmChainSnapshot FullArmChain{};
 	FEmbodiedFusionFrame BodyFusionFrame;
+	bool bHasQuestOrHmdRuntimeInput = false;
 	FMediaPipeResolvedMetaHumanTarget TargetMetaHumanProfile;
 	FMediaPipeAvatarProfileResolverLogState TargetProfileLogState;
 	bool bHasCachedQuestHmdPose = false;
@@ -640,6 +654,10 @@ private:
 	void ApplyRotationCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FQuat& TargetRotCS) const;
 	void ApplyTranslationDeltaCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FVector& DeltaComp) const;
 	bool ShouldUseBodyFusionPoseForEvaluation() const;
+	bool ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const;
+	bool ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const;
+	bool DriveBodyFusionStage1TorsoPelvisHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
+	bool DriveBodyFusionStage2ShoulderClavicleHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	bool DriveBodyFusionPoseCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DrivePelvisTranslationCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void UpdateFkRootGroundingCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
@@ -696,6 +714,8 @@ public:
 	void SetUseQuestHandTracking(bool bInUseQuestHandTracking);
 	void SetDriveQuestFingerBones(bool bInDriveQuestFingerBones);
 	bool GetLatestSignalSnapshot(FMediaPipePoseDrivenSignalSnapshot& OutSnapshot);
+	static bool GetLatestSignalSnapshotForComponent(const USkeletalMeshComponent* InComponent, FMediaPipePoseDrivenSignalSnapshot& OutSnapshot);
+	static void PublishLatestSignalSnapshotForRuntimeKey(uint32 RuntimeKey, const FMediaPipePoseDrivenSignalSnapshot& Snapshot);
 
 protected:
 	virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;

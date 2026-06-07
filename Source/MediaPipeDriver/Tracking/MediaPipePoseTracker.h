@@ -22,7 +22,13 @@ public:
 		bool bUseMock);
 	void Shutdown();
 
-	bool EnqueueFrame(TArray<uint8>&& Rgb, int32 Width, int32 Height, int64 TimestampUs, int32 SourceEpoch);
+	bool EnqueueFrame(
+		TArray<uint8>&& Rgb,
+		int32 Width,
+		int32 Height,
+		int64 TimestampUs,
+		int32 SourceEpoch,
+		double SourceCaptureWallSeconds);
 	void ClearLatestFrame(int32 SourceEpoch);
 	bool GetLatestFrame(FMediaPipePoseFrame& OutFrame) const;
 	bool IsInitialized() const;

@@ -117,6 +117,50 @@ TAutoConsoleVariable<FString> CVarPlacedEmbodiedVideoFile(
 	TEXT(""),
 	TEXT("Optional relative or absolute video file path to use instead of a webcam for mp.StartPlacedEmbodiedTracking."));
 
+bool IsMPQShadowAutoStartCVarArmed()
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlay")))
+	{
+		return Variable->GetInt() != 0;
+	}
+	return false;
+}
+
+FString GetMPQShadowAutoStartCVarPath()
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordMPQShadowFusionOnPlayPath")))
+	{
+		return Variable->GetString();
+	}
+	return FString();
+}
+
+void LogMPQShadowRuntimeProbe(
+	const TCHAR* Phase,
+	const UWorld* World,
+	const AActor* SourceActor = nullptr,
+	const AActor* MannyActor = nullptr,
+	const TCHAR* Detail = TEXT(""))
+{
+	if (!IsMPQShadowAutoStartCVarArmed())
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.MPQShadowAutoStart: %s worldId=%u worldType=%d source=%s manny=%s hasLiveMannyTag=%d path=%s detail=%s"),
+		Phase ? Phase : TEXT("runtimeProbe"),
+		World ? World->GetUniqueID() : 0,
+		World ? static_cast<int32>(World->WorldType) : -1,
+		*GetNameSafe(SourceActor),
+		*GetNameSafe(MannyActor),
+		MannyActor && MannyActor->Tags.Contains(LiveMannyTag) ? 1 : 0,
+		*GetMPQShadowAutoStartCVarPath(),
+		Detail ? Detail : TEXT(""));
+}
+
 TAutoConsoleVariable<float> CVarAutoQuestMirrorDistanceCm(
 	TEXT("mp.AutoQuestMirrorDistanceCm"),
 	200.0f,
@@ -3569,9 +3613,11 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 {
 	if (CVarAutoQuestWebcamHands.GetValueOnGameThread() == 0 || !IsAutoQuestWorld(World))
 	{
+		LogMPQShadowRuntimeProbe(TEXT("spawnSkipped"), World, nullptr, nullptr, TEXT("AutoQuestWebcamHands disabled or world is not PIE/Game"));
 		return;
 	}
 
+	LogMPQShadowRuntimeProbe(TEXT("spawnBegin"), World);
 	if (AMediaPipeEmbodiedAvatarPawn* PlacedPawn = FindPlacedEmbodiedAvatarPawn(World))
 	{
 		if (PlacedPawn->Tags.Contains(CommandOnlyEmbodiedStartTag))
@@ -3580,6 +3626,7 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 			{
 				UE_LOG(LogMediaPipePose, Log, TEXT("Auto Quest webcam: placed embodied pawn=%s is command-only; run mp.StartPlacedEmbodiedTracking to start tracking."),
 					*GetNameSafe(PlacedPawn));
+				LogMPQShadowRuntimeProbe(TEXT("spawnSkipped"), World, nullptr, PlacedPawn, TEXT("placed embodied pawn is command-only"));
 				return;
 			}
 
@@ -3590,6 +3637,7 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 				*GetNameSafe(PlacedPawn),
 				*PlacedPawn->GetActorLocation().ToCompactString(),
 				*PlacedPawn->GetActorRotation().ToCompactString());
+			LogMPQShadowRuntimeProbe(TEXT("spawnDelegated"), World, nullptr, PlacedPawn, TEXT("auto-started command-only placed embodied pawn"));
 			return;
 		}
 
@@ -3598,6 +3646,7 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 			*GetNameSafe(PlacedPawn),
 			*PlacedPawn->GetActorLocation().ToCompactString(),
 			*PlacedPawn->GetActorRotation().ToCompactString());
+		LogMPQShadowRuntimeProbe(TEXT("spawnDelegated"), World, nullptr, PlacedPawn, TEXT("delegated startup to placed embodied pawn"));
 		return;
 	}
 
@@ -3614,6 +3663,12 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 		&& FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag)
 		&& (!bUseMetaHuman || FindLiveMetaHumanActor(World, ActiveMetaHumanProfile.ProfileId)))
 	{
+		LogMPQShadowRuntimeProbe(
+			TEXT("spawnExisting"),
+			World,
+			FindTaggedActor<AMediaPipeQuestWebcamSourceActor>(World, LiveVideoTag),
+			FindTaggedActor<AMediaPipePoseDrivenSkeletalActor>(World, LiveMannyTag),
+			TEXT("source and Manny already exist"));
 		return;
 	}
 
@@ -3621,6 +3676,7 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 	FString CaptureLabel;
 	if (!TryResolveCaptureDevice(CaptureUrl, CaptureLabel))
 	{
+		LogMPQShadowRuntimeProbe(TEXT("spawnSkipped"), World, nullptr, nullptr, TEXT("capture device resolution failed"));
 		return;
 	}
 
@@ -3657,6 +3713,7 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 
 	if (!SourceActor)
 	{
+		LogMPQShadowRuntimeProbe(TEXT("spawnSkipped"), World, nullptr, nullptr, TEXT("source actor missing after spawn attempt"));
 		return;
 	}
 
@@ -3779,6 +3836,11 @@ void SpawnAutoQuestWebcamHands(UWorld* World)
 			bEmbodiedView ? TEXT("Embodied") : TEXT("MirrorStation"),
 			bEmbodiedView ? GetEmbodiedAnchorMode() : 0,
 			*CaptureLabel);
+		LogMPQShadowRuntimeProbe(TEXT("spawnReady"), World, SourceActor, MannyActor, *CaptureLabel);
+	}
+	else
+	{
+		LogMPQShadowRuntimeProbe(TEXT("spawnSkipped"), World, SourceActor, nullptr, TEXT("Manny actor missing after spawn attempt"));
 	}
 }
 
@@ -3801,6 +3863,7 @@ void HandlePIEReady(UGameInstance* GameInstance)
 {
 	if (GameInstance)
 	{
+		LogMPQShadowRuntimeProbe(TEXT("pieReady"), GameInstance->GetWorld());
 		SpawnAutoQuestWebcamHandsNextTick(GameInstance->GetWorld());
 	}
 }
