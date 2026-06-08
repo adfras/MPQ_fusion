@@ -69,6 +69,25 @@ COMPENSATION_CORR_DELTA = 0.05
 COMPENSATION_GOOD_CORR = 0.75
 COMPENSATION_GOOD_LAG_SECONDS = 0.10
 
+STAGE2_CONFLICT_STRESS_FINAL_COMMAND = (
+    "mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=60 prediction=1 maxPredictionMs=50 "
+    "label=stage2_conflict_stress_final stage1=1 blend=0.5 halfLife=0.04 "
+    "stage2=1 stage2Blend=0.2 stage2Scale=4.5 stage2MaxLiftCm=5 stage2HalfLife=0.04 analyze=0"
+)
+
+STAGE2_CONFLICT_STRESS_REQUIRED_CVARS = (
+    ("mp.BodyFusion.WritePose", 0.0, "shadow-only capture; do not write the fused pose"),
+    ("mp.BodyFusion.MediaPipeAuthority", 0.0, "MediaPipe must not take full-body authority"),
+    ("mp.BodyFusion.Stage1TorsoPelvisHint", 1.0, "Stage 1 vertical torso/pelvis hint enabled"),
+    ("mp.BodyFusion.Stage1TorsoPelvisHintBlend", 0.5, "proven Stage 1 blend"),
+    ("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife", 0.04, "proven Stage 1 smoothing half-life"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHint", 1.0, "Stage 2 shoulder/clavicle hint enabled"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHintBlend", 0.2, "proven Stage 2 blend"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleResponseScale", 4.5, "proven Stage 2 shoulder response scale"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm", 5.0, "bounded Stage 2 max clavicle lift"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHalfLife", 0.04, "proven Stage 2 smoothing half-life"),
+)
+
 MEASURE_ONLY_PAIR_KINDS = {
     "arm_conflict_measure_only",
     "arm_conflict_raw_measure_only",
@@ -3474,6 +3493,199 @@ def summarize_solver_snapshot_sources(samples):
     }
 
 
+def cvar_matches_expected(value, expected):
+    numeric = to_float(value)
+    if not np.isfinite(numeric):
+        return False, numeric
+    tolerance = max(1.0e-3, abs(expected) * 1.0e-4)
+    return abs(numeric - expected) <= tolerance, numeric
+
+
+def summarize_runtime_cvars(runtime_cvars):
+    rows = []
+    for name, expected, note in STAGE2_CONFLICT_STRESS_REQUIRED_CVARS:
+        present = name in runtime_cvars
+        actual = runtime_cvars.get(name)
+        matches, numeric = cvar_matches_expected(actual, expected)
+        rows.append(
+            {
+                "name": name,
+                "expected": expected,
+                "actual": actual,
+                "actual_numeric": numeric,
+                "present": present,
+                "matches": bool(present and matches),
+                "note": note,
+            }
+        )
+
+    return {
+        "recorded": bool(runtime_cvars),
+        "stage2_conflict_stress_settings_match": bool(rows) and all(row["matches"] for row in rows),
+        "stage2_conflict_stress_required_cvars": rows,
+        "arm_fallback_policy": "off_by_mpq_shadow_capture_route; the armFallbacks=off proof is emitted in the MPQ auto-start log, not as a runtime_cvars field.",
+        "record_manny_head_policy": "Set mp.RecordMannyHeadOnPlay 0 before VR Preview; this recorder guard is not stored in MPQ runtime_cvars.",
+        "final_trial_command": STAGE2_CONFLICT_STRESS_FINAL_COMMAND,
+    }
+
+
+def summarize_counted_values(values):
+    counts = {}
+    for value in values:
+        if value is None or value == "":
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return [
+        {
+            "value": value,
+            "count": count,
+        }
+        for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def summarize_driven_components(samples):
+    components = []
+    actors = []
+    anim_classes = []
+    native_pose_driven_count = 0
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        actor = sample.get("actor")
+        if isinstance(actor, str):
+            actors.append(actor)
+        elif isinstance(actor, dict) and isinstance(actor.get("label"), str):
+            actors.append(actor["label"])
+        anim = sample.get("anim", {})
+        if not isinstance(anim, dict):
+            continue
+        driven_component = anim.get("driven_component")
+        if isinstance(driven_component, str):
+            components.append(driven_component)
+        anim_class = anim.get("anim_class") or anim.get("anim_instance_class")
+        if isinstance(anim_class, str):
+            anim_classes.append(anim_class)
+        native_pose_driven_count += 1 if anim.get("native_pose_driven_anim_instance") is True else 0
+
+    component_counts = summarize_counted_values(components)
+    actor_counts = summarize_counted_values(actors)
+    anim_class_counts = summarize_counted_values(anim_classes)
+    primary_component = component_counts[0]["value"] if component_counts else ""
+    primary_actor = actor_counts[0]["value"] if actor_counts else ""
+    return {
+        "primary_driven_component": primary_component,
+        "primary_actor": primary_actor,
+        "driven_component_counts": component_counts,
+        "actor_counts": actor_counts,
+        "anim_class_counts": anim_class_counts,
+        "native_pose_driven_anim_instance_fraction": native_pose_driven_count / len(samples) if samples else math.nan,
+        "legacy_signal_namespace": "manny.*",
+        "legacy_signal_namespace_note": (
+            "Analyzer signal names such as manny.hand_l and manny.clavicle_l are the legacy live-bone "
+            "namespace. Treat primary_driven_component as the actual avatar mesh; for the MPQ MetaHuman "
+            "room proof this is expected to be BP_Kellan_C_0.Body."
+        ),
+    }
+
+
+def summarize_stage2_conflict_readiness(input_path, rows, stage2_debug_rows, solver_summary, runtime_cvar_summary, driven_component_summary):
+    stage2_candidate_rows = [
+        row
+        for row in rows
+        if row["pair_kind"] == "stage2_mediapipe_candidate_shoulder" and not row["measurement_only"]
+    ]
+    stage2_output_rows = [
+        row
+        for row in rows
+        if row["pair_kind"] == "stage2_output_shoulder_compare" and not row["measurement_only"]
+    ]
+    stage2_candidate_pass = [row for row in stage2_candidate_rows if row["stage_gate"] == "pass"]
+    stage2_output_pass = [row for row in stage2_output_rows if row["stage_gate"] == "pass"]
+    stage2_output_fail = [row for row in stage2_output_rows if row["stage_gate"] != "pass"]
+    arm_rows = [row for row in rows if row["group"] == "arms_measure_only"]
+    arm_rows_measurement_only = bool(arm_rows) and all(row["measurement_only"] for row in arm_rows)
+    visible_lag_ms = [
+        abs(to_float(row.get("best_lag_seconds")) * 1000.0)
+        for row in stage2_output_rows
+        if np.isfinite(to_float(row.get("best_lag_seconds")))
+    ]
+    debug_recorded_rows = [row for row in stage2_debug_rows if row.get("recorded")]
+    debug_applied_lift_p95 = [
+        to_float(row.get("applied_clavicle_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("applied_clavicle_lift_p95")))
+    ]
+    debug_suppressed_fraction = [
+        to_float(row.get("suppressed_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("suppressed_fraction")))
+    ]
+    debug_applied_visible_corr = [
+        to_float(row.get("applied_to_visible_corr"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("applied_to_visible_corr")))
+    ]
+    input_stem = Path(input_path).stem.lower()
+    is_conflict_stress_capture = "conflict" in input_stem and "stress" in input_stem
+    instrumentation_ready = (
+        runtime_cvar_summary.get("stage2_conflict_stress_settings_match") is True
+        and solver_summary.get("status") == "runtime_anim_solver"
+        and bool(debug_recorded_rows)
+        and bool(stage2_candidate_pass)
+        and bool(stage2_output_rows)
+        and len(stage2_output_pass) == len(stage2_output_rows)
+        and arm_rows_measurement_only
+    )
+    if instrumentation_ready and is_conflict_stress_capture:
+        status = "conflict_stress_capture_ready_for_review"
+    elif instrumentation_ready:
+        status = "instrumentation_ready_existing_capture_is_not_final_conflict_stress"
+    else:
+        status = "not_ready"
+
+    return {
+        "status": status,
+        "needs_new_user_vr_preview_for_final_conflict_stress": bool(instrumentation_ready and not is_conflict_stress_capture),
+        "is_conflict_stress_capture_by_filename": is_conflict_stress_capture,
+        "final_trial_command": STAGE2_CONFLICT_STRESS_FINAL_COMMAND,
+        "runtime_settings_match": runtime_cvar_summary.get("stage2_conflict_stress_settings_match"),
+        "solver_snapshot_status": solver_summary.get("status"),
+        "driven_component": driven_component_summary.get("primary_driven_component", ""),
+        "legacy_signal_namespace": driven_component_summary.get("legacy_signal_namespace", "manny.*"),
+        "stage2_candidate_rows": len(stage2_candidate_rows),
+        "stage2_candidate_pass_rows": len(stage2_candidate_pass),
+        "stage2_output_rows": len(stage2_output_rows),
+        "stage2_output_pass_rows": len(stage2_output_pass),
+        "stage2_visible_output_fail_pairs": stage2_output_fail,
+        "stage2_visible_output_max_abs_lag_ms": max(visible_lag_ms, default=math.nan),
+        "stage2_debug_recorded_sides": [row["side"] for row in debug_recorded_rows],
+        "stage2_debug_required_fields": [
+            "candidate_lift",
+            "reference_lift",
+            "raw_lift_delta",
+            "positive_target_lift",
+            "contradiction_delta",
+            "smoothed_lift",
+            "pre_solve_clavicle_lift",
+            "target_clavicle_lift",
+            "applied_clavicle_lift",
+            "visible_clavicle_output_correlation",
+        ],
+        "stage2_debug_max_suppressed_fraction": max(debug_suppressed_fraction, default=math.nan),
+        "stage2_debug_max_applied_lift_p95_cm": max(debug_applied_lift_p95, default=math.nan),
+        "stage2_debug_min_applied_to_visible_corr": min(debug_applied_visible_corr, default=math.nan),
+        "arm_rows_measurement_only_no_authority": arm_rows_measurement_only,
+        "arm_row_count": len(arm_rows),
+        "authority_policy": {
+            "head": "HMD remains authoritative; MediaPipe head/face is diagnostic only.",
+            "arms": "Quest remains authoritative for wrists, hands, fingers, and reliable arm endpoints; MediaPipe arm fallback remains off.",
+            "stage2": "MediaPipe may contribute only bounded vertical shoulder/clavicle lift.",
+            "legacy_signal_namespace": "manny.* names are analyzer signal lanes, not proof that the driven avatar is Manny.",
+        },
+    }
+
+
 def stage_recommendations(rows, timing_rows, inventory_rows):
     non_measure_failures = [
         row
@@ -3937,6 +4149,19 @@ def main():
     if landmark_chart:
         charts["landmark_availability"] = landmark_chart
 
+    runtime_cvar_summary = summarize_runtime_cvars(runtime_cvars)
+    solver_snapshot_source_summary = summarize_solver_snapshot_sources(samples)
+    stage2_debug_summary = summarize_stage2_debug(stage2_debug_rows)
+    driven_component_summary = summarize_driven_components(samples)
+    stage2_conflict_readiness_summary = summarize_stage2_conflict_readiness(
+        args.input,
+        rows,
+        stage2_debug_rows,
+        solver_snapshot_source_summary,
+        runtime_cvar_summary,
+        driven_component_summary,
+    )
+
     report = {
         "input": str(args.input),
         "schema": data.get("schema"),
@@ -3953,6 +4178,9 @@ def main():
         "analysis_mediapipe_advance_ms": args.mediapipe_advance_ms,
         "analysis_mediapipe_advance_note": "Positive values advance MediaPipe landmark signals offline before metrics and plots are scored.",
         "arm_policy": "arms_measurement_only_no_mediapipe_arm_fallback_decision",
+        "runtime_cvars": runtime_cvars,
+        "runtime_cvar_summary": runtime_cvar_summary,
+        "driven_component_summary": driven_component_summary,
         "capture_states": capture_states,
         "face_summary": face_info,
         "last_pipeline": last_pipeline,
@@ -3996,9 +4224,10 @@ def main():
             "fix_action_counts": {action: sum(1 for row in reason_rows if row["fix_action"] == action) for action in sorted({row["fix_action"] for row in reason_rows})},
             "rows": reason_rows,
         },
-        "solver_snapshot_source_summary": summarize_solver_snapshot_sources(samples),
+        "solver_snapshot_source_summary": solver_snapshot_source_summary,
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
-        "stage2_debug_summary": summarize_stage2_debug(stage2_debug_rows),
+        "stage2_debug_summary": stage2_debug_summary,
+        "stage2_conflict_readiness_summary": stage2_conflict_readiness_summary,
         "standardized_alignment_summary": summarize_standardized_alignment(rows),
         "fitted_alignment_summary": summarize_fitted_alignment(fitted_rows),
         "physical_fit_summary": summarize_fitted_alignment(fitted_rows),
