@@ -1,6 +1,7 @@
 #include "MediaPipeQuestHmdTrackingSource.h"
 
 #include "Engine/Engine.h"
+#include "HAL/PlatformTime.h"
 #include "IXRTrackingSystem.h"
 
 bool FMediaPipeQuestHmdTrackingSource::TryReadWorldPose(
@@ -19,6 +20,7 @@ bool FMediaPipeQuestHmdTrackingSource::TryReadWorldPose(
 	{
 		return false;
 	}
+	const double ReadTimestampSeconds = FPlatformTime::Seconds();
 
 	const FTransform TrackingToWorld = GEngine->XRSystem->GetTrackingToWorldTransform();
 	OutSnapshot.LocationWorld = TrackingToWorld.TransformPosition(HmdLocationTracking);
@@ -26,6 +28,7 @@ bool FMediaPipeQuestHmdTrackingSource::TryReadWorldPose(
 
 	const FVector UpWorld = TrackingToWorld.TransformVectorNoScale(FVector::UpVector).GetSafeNormal();
 	OutSnapshot.TrackingUpWorld = UpWorld.IsNearlyZero() ? FVector::UpVector : UpWorld;
+	OutSnapshot.TimestampSeconds = ReadTimestampSeconds;
 	OutSnapshot.bHasPose = true;
 	return true;
 }

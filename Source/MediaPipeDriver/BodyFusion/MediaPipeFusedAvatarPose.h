@@ -25,6 +25,8 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionDebugErrors
 	float RightWristReachCm = 0.0f;
 	float LeftFootReliability = 0.0f;
 	float RightFootReliability = 0.0f;
+	float LeftHeelReliability = 0.0f;
+	float RightHeelReliability = 0.0f;
 	EMediaPipeBodyFusionAuthorityState BodyAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
 	uint8 bMediaPipePoseAuthorityAllowed = 0;
 
@@ -49,10 +51,12 @@ struct MEDIAPIPEDRIVER_API FMediaPipeFusedAvatarPose
 	FMediaPipeFusedBodyPoint LeftHip;
 	FMediaPipeFusedBodyPoint LeftKnee;
 	FMediaPipeFusedBodyPoint LeftAnkle;
+	FMediaPipeFusedBodyPoint LeftHeel;
 	FMediaPipeFusedBodyPoint LeftFoot;
 	FMediaPipeFusedBodyPoint RightHip;
 	FMediaPipeFusedBodyPoint RightKnee;
 	FMediaPipeFusedBodyPoint RightAnkle;
+	FMediaPipeFusedBodyPoint RightHeel;
 	FMediaPipeFusedBodyPoint RightFoot;
 	FMediaPipeBodyFusionDebugErrors DebugErrors;
 

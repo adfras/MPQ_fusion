@@ -8,10 +8,15 @@
 #include "MediaPipeSolvedPose.h"
 #include "MediaPipePoseTrackerComponent.h"
 #include "MediaPipePoseTypes.h"
+#include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeStage2ShoulderEvidence.h"
+#include "MediaPipeTrackingFusionDataset.h"
 
 #include "Animation/AnimInstance.h"
 #include "ControlRigComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -22,11 +27,16 @@
 #include "HAL/PlatformProcess.h"
 #include "Materials/MaterialInterface.h"
 #include "MediaPlayer.h"
+#include "Misc/App.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "ReferenceSkeleton.h"
+#include "Serialization/Archive.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/UObjectGlobals.h"
+
+#include <initializer_list>
 
 namespace
 {
@@ -108,6 +118,66 @@ TAutoConsoleVariable<int32> CVarRecordMPQShadowFusionAnalyzeAfterWrite(
 	TEXT("When non-zero, run Tools/AnalyzeMPQShadowFusionCapture.py after an automatic MPQ shadow-fusion JSON is written."),
 	ECVF_Default);
 
+TAutoConsoleVariable<int32> CVarRecordTrackingFusionDatasetOnPlay(
+	TEXT("mp.RecordTrackingFusionDatasetOnPlay"),
+	0,
+	TEXT("When non-zero, automatically records a guided Quest/MediaPipe/BodyFusion/MetaHuman dataset on the next PIE/VR Preview run."),
+	ECVF_Default);
+
+TAutoConsoleVariable<float> CVarRecordTrackingFusionDatasetDuration(
+	TEXT("mp.RecordTrackingFusionDatasetDuration"),
+	90.0f,
+	TEXT("Requested seconds for the guided tracking-fusion dataset. The recorder extends this if needed so all movement phases are at least three seconds."),
+	ECVF_Default);
+
+TAutoConsoleVariable<float> CVarRecordTrackingFusionDatasetSampleRate(
+	TEXT("mp.RecordTrackingFusionDatasetSampleRate"),
+	30.0f,
+	TEXT("Fixed-schedule samples per second for all-bone tracking-fusion datasets. <=0 records every tick."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordTrackingFusionDatasetBoneMode(
+	TEXT("mp.RecordTrackingFusionDatasetBoneMode"),
+	TEXT("all"),
+	TEXT("Bone set for tracking-fusion datasets: all records every target mesh ref-skeleton bone; selected records main/finger/known helper bones."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordTrackingFusionDatasetPhasePreset(
+	TEXT("mp.RecordTrackingFusionDatasetPhasePreset"),
+	TEXT("default"),
+	TEXT("Movement phase preset for tracking-fusion datasets: default or avatar_locked_sync_calibration."),
+	ECVF_Default);
+
+TAutoConsoleVariable<float> CVarRecordTrackingFusionDatasetChunkMegabytes(
+	TEXT("mp.RecordTrackingFusionDatasetChunkMegabytes"),
+	128.0f,
+	TEXT("Approximate maximum JSONL sample chunk size in megabytes for tracking-fusion datasets."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordTrackingFusionDatasetLabel(
+	TEXT("mp.RecordTrackingFusionDatasetLabel"),
+	TEXT("correlation_full_body"),
+	TEXT("Label used in the tracking-fusion dataset file name and capture metadata."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordTrackingFusionDatasetPath(
+	TEXT("mp.RecordTrackingFusionDatasetPath"),
+	TEXT(""),
+	TEXT("Optional output JSON path for the tracking-fusion dataset. Empty writes tracking_fusion_dataset_<label>_<timestamp>.json under Saved/CodexAgent/Diagnostics."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarRecordTrackingFusionDatasetAnalyzeAfterWrite(
+	TEXT("mp.RecordTrackingFusionDatasetAnalyzeAfterWrite"),
+	1,
+	TEXT("When non-zero, run Tools/AnalyzeTrackingFusionDataset.py after a tracking-fusion dataset JSON is written."),
+	ECVF_Default);
+
+TAutoConsoleVariable<FString> CVarRecordTrackingFusionDatasetAnalyzerPath(
+	TEXT("mp.RecordTrackingFusionDatasetAnalyzerPath"),
+	TEXT("Tools/AnalyzeTrackingFusionDataset.py"),
+	TEXT("Python analyzer script path used after tracking-fusion dataset recording."),
+	ECVF_Default);
+
 const AActor* ResolveTrackingSourceActor(const AActor* SourceActor)
 {
 	TSet<const AActor*> VisitedActors;
@@ -144,19 +214,57 @@ const TCHAR* MannyRecorderBones[] = {
 	TEXT("neck_02"),
 	TEXT("head"),
 	TEXT("clavicle_l"),
+	TEXT("clavicle_out_l"),
+	TEXT("clavicle_scap_l"),
+	TEXT("clavicle_pec_l"),
 	TEXT("clavicle_r"),
+	TEXT("clavicle_out_r"),
+	TEXT("clavicle_scap_r"),
+	TEXT("clavicle_pec_r"),
 	TEXT("upperarm_l"),
 	TEXT("upperarm_r"),
 	TEXT("upperarm_twist_01_l"),
 	TEXT("upperarm_twist_02_l"),
 	TEXT("upperarm_twist_01_r"),
 	TEXT("upperarm_twist_02_r"),
+	TEXT("upperarm_twistCor_01_l"),
+	TEXT("upperarm_twistCor_02_l"),
+	TEXT("upperarm_bicep_l"),
+	TEXT("upperarm_tricep_l"),
+	TEXT("upperarm_correctiveRoot_l"),
+	TEXT("upperarm_bck_l"),
+	TEXT("upperarm_fwd_l"),
+	TEXT("upperarm_in_l"),
+	TEXT("upperarm_out_l"),
+	TEXT("upperarm_twistCor_01_r"),
+	TEXT("upperarm_twistCor_02_r"),
+	TEXT("upperarm_bicep_r"),
+	TEXT("upperarm_tricep_r"),
+	TEXT("upperarm_correctiveRoot_r"),
+	TEXT("upperarm_bck_r"),
+	TEXT("upperarm_fwd_r"),
+	TEXT("upperarm_in_r"),
+	TEXT("upperarm_out_r"),
 	TEXT("lowerarm_l"),
 	TEXT("lowerarm_r"),
 	TEXT("lowerarm_twist_01_l"),
 	TEXT("lowerarm_twist_02_l"),
 	TEXT("lowerarm_twist_01_r"),
 	TEXT("lowerarm_twist_02_r"),
+	TEXT("lowerarm_correctiveRoot_l"),
+	TEXT("lowerarm_in_l"),
+	TEXT("lowerarm_out_l"),
+	TEXT("lowerarm_fwd_l"),
+	TEXT("lowerarm_bck_l"),
+	TEXT("wrist_inner_l"),
+	TEXT("wrist_outer_l"),
+	TEXT("lowerarm_correctiveRoot_r"),
+	TEXT("lowerarm_in_r"),
+	TEXT("lowerarm_out_r"),
+	TEXT("lowerarm_fwd_r"),
+	TEXT("lowerarm_bck_r"),
+	TEXT("wrist_inner_r"),
+	TEXT("wrist_outer_r"),
 	TEXT("hand_l"),
 	TEXT("hand_r"),
 	TEXT("thigh_l"),
@@ -231,6 +339,172 @@ struct FMannyBoneTimeseriesRecorder
 
 FMannyBoneTimeseriesRecorder GMannyBoneTimeseriesRecorder;
 
+enum class ETrackingFusionDatasetEndReason : uint8
+{
+	DurationReached,
+	EndPlay,
+	ManualStop
+};
+
+struct FTrackingFusionDatasetAvatarKeypoints
+{
+	bool bHasHead = false;
+	FVector HeadWorld = FVector::ZeroVector;
+	bool bHasSpine05 = false;
+	FVector Spine05World = FVector::ZeroVector;
+	bool bHasPelvis = false;
+	FVector PelvisWorld = FVector::ZeroVector;
+	bool bHasHandL = false;
+	FVector HandLWorld = FVector::ZeroVector;
+	bool bHasHandR = false;
+	FVector HandRWorld = FVector::ZeroVector;
+	bool bHasClavicleL = false;
+	FVector ClavicleLWorld = FVector::ZeroVector;
+	bool bHasClavicleR = false;
+	FVector ClavicleRWorld = FVector::ZeroVector;
+};
+
+struct FTrackingFusionDatasetResidualRecord
+{
+	bool bAvailable = false;
+	bool bHasQuestHmdToAvatarHead = false;
+	float QuestHmdToAvatarHeadCm = 0.0f;
+	bool bHasFusedHeadToAvatarHead = false;
+	float FusedHeadToAvatarHeadCm = 0.0f;
+	bool bHasFusedChestToAvatarSpine05 = false;
+	float FusedChestToAvatarSpine05Cm = 0.0f;
+	bool bHasFusedPelvisToAvatarPelvis = false;
+	float FusedPelvisToAvatarPelvisCm = 0.0f;
+	bool bHasQuestLeftHandToAvatarHandL = false;
+	float QuestLeftHandToAvatarHandLCm = 0.0f;
+	bool bHasQuestRightHandToAvatarHandR = false;
+	float QuestRightHandToAvatarHandRCm = 0.0f;
+	bool bHasFusedLeftWristToAvatarHandL = false;
+	float FusedLeftWristToAvatarHandLCm = 0.0f;
+	bool bHasFusedRightWristToAvatarHandR = false;
+	float FusedRightWristToAvatarHandRCm = 0.0f;
+	bool bHasMediaPipeLeftShoulderToAvatarClavicleL = false;
+	float MediaPipeLeftShoulderToAvatarClavicleLCm = 0.0f;
+	bool bHasMediaPipeRightShoulderToAvatarClavicleR = false;
+	float MediaPipeRightShoulderToAvatarClavicleRCm = 0.0f;
+	bool bHasMediaPipeLeftWristToAvatarHandL = false;
+	float MediaPipeLeftWristToAvatarHandLCm = 0.0f;
+	bool bHasMediaPipeRightWristToAvatarHandR = false;
+	float MediaPipeRightWristToAvatarHandRCm = 0.0f;
+};
+
+struct FTrackingFusionDatasetSampleRecord
+{
+	int32 SampleIndex = 0;
+	uint64 FrameNumber = 0;
+	double ElapsedSeconds = 0.0;
+	double ScheduledElapsedSeconds = 0.0;
+	double ScheduleLateSeconds = 0.0;
+	int32 MissedScheduledSamplesThisTick = 0;
+	double SampleWallSeconds = 0.0;
+	float DeltaSeconds = 0.0f;
+	FString ActorLabel;
+	FVector ActorLocation = FVector::ZeroVector;
+	FRotator ActorRotation = FRotator::ZeroRotator;
+	bool bHasRawMediaPipeFrame = false;
+	FMediaPipePoseFrame RawMediaPipeFrame;
+	bool bHasPosePipelineStats = false;
+	FMediaPipePosePipelineStats PosePipelineStats;
+	bool bHasFusionFrame = false;
+	FEmbodiedFusionFrame FusionFrame;
+	FTrackingFusionDatasetResidualRecord Residuals;
+};
+
+struct FTrackingFusionDatasetRecorder
+{
+	bool bActive = false;
+	bool bAutoStarted = false;
+	bool bAnalyzeAfterWrite = true;
+	uint32 AutoStartWorldId = 0;
+	uint32 LastAutoStartWorldId = 0;
+	FString Label;
+	FString OutputPath;
+	FString AnalyzerPathOverride;
+	FString BoneMode;
+	FString PhasePreset = TEXT("default");
+	FString PromptColorName = TEXT("cyan");
+	FString StartUtc;
+	FString EndReason;
+	FString MapPath;
+	FString ActorPath;
+	FString ComponentPath;
+	FString ComponentClassPath;
+	FString SkeletalMeshPath;
+	FString AnimClassPath;
+	double RequestedDurationSeconds = 0.0;
+	double DurationSeconds = 0.0;
+	double StartSeconds = 0.0;
+	double EndSeconds = 0.0;
+	double ActualElapsedSeconds = 0.0;
+	double FirstSampleWallSeconds = 0.0;
+	double LastSampleWallSeconds = 0.0;
+	double SampleTimeSpanSeconds = 0.0;
+	bool bHasSampleWallSeconds = false;
+	int32 SampleCount = 0;
+	int32 CandidateFrameCount = 0;
+	int32 SkippedFrameCount = 0;
+	int32 MissedScheduledSampleCount = 0;
+	double SampleRateHz = 0.0;
+	double SampleIntervalSeconds = 0.0;
+	int32 NextSampleScheduleIndex = 0;
+	int64 MaxSampleChunkBytes = 0;
+	int64 CurrentSampleChunkBytes = 0;
+	int32 CurrentSampleChunkIndex = -1;
+	FArchive* SampleArchive = nullptr;
+	TArray<FString> SampleChunkPaths;
+	int64 CurrentBoneBinaryChunkBytes = 0;
+	int32 CurrentBoneBinaryChunkIndex = -1;
+	FArchive* BoneBinaryArchive = nullptr;
+	FMediaPipeTrackingFusionDatasetBoneSelection BoneSelection;
+	TArray<int32> RecordedBoneIndices;
+	TArray<FMediaPipeTrackingFusionDatasetPhase> Phases;
+	TArray<TSharedPtr<FJsonValue>> BoneHierarchy;
+	TArray<FTrackingFusionDatasetSampleRecord> Samples;
+	TArray<float> BoneSampleFloats;
+	TArray<FTransform> LastComponentTransformsByBone;
+	TArray<FTransform> LastLocalTransformsByBone;
+	TArray<bool> bHasLastTransformsByBone;
+	TMap<FString, FString> CaptureCVarSnapshot;
+	double LastBoneSampleWallSeconds = -1.0;
+	bool bHighVolumeDiagnosticLogsSuppressedForCapture = false;
+	bool bCalibrationDebugHudsSuppressedForCapture = false;
+	int32 LastLoggedPromptPhaseIndex = INDEX_NONE;
+	FString LastLoggedPromptState;
+	double ScheduleDecisionTotalSeconds = 0.0;
+	double ScheduleDecisionMaxSeconds = 0.0;
+	double SampleBuildTotalSeconds = 0.0;
+	double SampleBuildMaxSeconds = 0.0;
+	double BoneBuildTotalSeconds = 0.0;
+	double BoneBuildMaxSeconds = 0.0;
+	double EnqueueTotalSeconds = 0.0;
+	double EnqueueMaxSeconds = 0.0;
+	double SampleSidecarWriteSeconds = 0.0;
+	double BoneSidecarWriteSeconds = 0.0;
+	double ManifestWriteSeconds = 0.0;
+	double AnalyzerSeconds = 0.0;
+	double FileFlushTotalSeconds = 0.0;
+};
+
+struct FTrackingFusionDatasetBoneBinaryChunk
+{
+	FString Path;
+	int32 FirstSampleIndex = 0;
+	int32 SampleCount = 0;
+	int64 Bytes = 0;
+};
+
+FTrackingFusionDatasetRecorder GTrackingFusionDatasetRecorder;
+TArray<FTrackingFusionDatasetBoneBinaryChunk> GTrackingFusionDatasetBoneBinaryChunks;
+TMap<FString, FString> GTrackingFusionDatasetSuppressedDiagnosticLogCVarSnapshot;
+bool GTrackingFusionDatasetHasSuppressedDiagnosticLogCVars = false;
+TMap<FString, FString> GAvatarLockedCalibrationPolicyCVarSnapshot;
+bool GAvatarLockedCalibrationHasPolicyCVarSnapshot = false;
+
 enum class EMPQShadowAutoStartSkipReason : uint8
 {
 	NotArmed,
@@ -275,8 +549,11 @@ struct FMPQStage2DebugRecorderSideState
 {
 	bool bHasSmoothedLift = false;
 	float SmoothedLiftCm = 0.0f;
-	bool bHasShoulderLiftBaseline = false;
-	float ShoulderLiftBaselineCm = 0.0f;
+	bool bHasNeutralReference = false;
+	float NeutralShoulderLiftFromPelvisCm = 0.0f;
+	float NeutralShoulderHeadClearanceCm = 0.0f;
+	float NeutralObservationSeconds = 0.0f;
+	int32 NeutralObservationFrames = 0;
 };
 
 struct FMPQStage2DebugRecorderState
@@ -290,10 +567,14 @@ TMap<uint32, FMPQStage2DebugRecorderState> GMPQStage2DebugRecorderStates;
 constexpr float DefaultMPQStage1TorsoPelvisHintBlend = 0.25f;
 constexpr float DefaultMPQStage1TorsoPelvisMaxVerticalCm = 8.0f;
 constexpr float DefaultMPQStage1TorsoPelvisHintHalfLifeSeconds = 0.04f;
-constexpr float DefaultMPQStage2ShoulderClavicleHintBlend = 0.20f;
-constexpr float DefaultMPQStage2ShoulderClavicleResponseScale = 4.5f;
+constexpr float DefaultMPQStage2ShoulderClavicleHintBlend = 1.0f;
+constexpr float DefaultMPQStage2ShoulderClavicleResponseScale = 1.0f;
 constexpr float DefaultMPQStage2ShoulderClavicleMaxLiftCm = 5.0f;
 constexpr float DefaultMPQStage2ShoulderClavicleHalfLifeSeconds = 0.04f;
+constexpr float DefaultMPQStage2ShoulderArmRaiseFadeStartCm = 35.0f;
+constexpr float DefaultMPQStage2ShoulderArmRaiseFadeFullCm = 50.0f;
+constexpr float DefaultMPQStage2ShoulderShrugStartCm = 2.0f;
+constexpr float DefaultMPQStage2ShoulderShrugFullCm = 8.0f;
 
 const TCHAR* MPQShadowAutoStartSkipReasonText(const EMPQShadowAutoStartSkipReason Reason)
 {
@@ -327,6 +608,21 @@ const TCHAR* MannyBoneTimeseriesEndReasonText(const EMannyBoneTimeseriesEndReaso
 	case EMannyBoneTimeseriesEndReason::EndPlay:
 		return TEXT("end_play");
 	case EMannyBoneTimeseriesEndReason::ManualStop:
+		return TEXT("manual_stop");
+	default:
+		return TEXT("unknown");
+	}
+}
+
+const TCHAR* TrackingFusionDatasetEndReasonText(const ETrackingFusionDatasetEndReason Reason)
+{
+	switch (Reason)
+	{
+	case ETrackingFusionDatasetEndReason::DurationReached:
+		return TEXT("duration_reached");
+	case ETrackingFusionDatasetEndReason::EndPlay:
+		return TEXT("end_play");
+	case ETrackingFusionDatasetEndReason::ManualStop:
 		return TEXT("manual_stop");
 	default:
 		return TEXT("unknown");
@@ -493,6 +789,39 @@ TArray<TSharedPtr<FJsonValue>> JsonQuat(const FQuat& Value)
 	return Result;
 }
 
+TArray<TSharedPtr<FJsonValue>> JsonStringArray(const TArray<FString>& Values)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(Values.Num());
+	for (const FString& Value : Values)
+	{
+		Result.Add(MakeShared<FJsonValueString>(Value));
+	}
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonStringArray(std::initializer_list<const TCHAR*> Values)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(static_cast<int32>(Values.size()));
+	for (const TCHAR* Value : Values)
+	{
+		Result.Add(MakeShared<FJsonValueString>(FString(Value)));
+	}
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonNameArray(const TArray<FName>& Values)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(Values.Num());
+	for (const FName& Value : Values)
+	{
+		Result.Add(MakeShared<FJsonValueString>(Value.ToString()));
+	}
+	return Result;
+}
+
 TSharedRef<FJsonObject> JsonLandmark(const FMediaPipePoseLandmark& Landmark)
 {
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -583,16 +912,42 @@ TSharedRef<FJsonObject> JsonShoulderSignalSnapshot(const FMediaPipePoseDrivenSho
 	Result->SetNumberField(TEXT("forward_weight"), Snapshot.ForwardWeight);
 	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_hint_valid"), Snapshot.bStage2ShoulderClavicleHintValid);
 	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_suppressed_by_contradiction"), Snapshot.bStage2ShoulderClavicleSuppressedByContradiction);
+	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_suppressed_by_arm_ownership"), Snapshot.bStage2ShoulderClavicleSuppressedByArmOwnership);
 	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_had_contradiction_source"), Snapshot.bStage2ShoulderClavicleHadContradictionSource);
+	Result->SetBoolField(TEXT("stage2_shoulder_clavicle_had_quest_arm_raise_source"), Snapshot.bStage2ShoulderClavicleHadQuestArmRaiseSource);
+	Result->SetBoolField(TEXT("stage2_neutral_reference_ready"), Snapshot.bStage2NeutralReferenceReady);
+	Result->SetBoolField(TEXT("stage2_neutral_sample_accepted"), Snapshot.bStage2NeutralSampleAccepted);
+	Result->SetBoolField(TEXT("stage2_clamp_hit"), Snapshot.bStage2ClampHit);
+	Result->SetNumberField(TEXT("stage2_signal_source_mode"), Snapshot.Stage2SignalSourceMode);
+	Result->SetNumberField(TEXT("stage2_signal_source_reliability"), Snapshot.Stage2SignalSourceReliability);
+	Result->SetNumberField(TEXT("stage2_neutral_observation_seconds"), Snapshot.Stage2NeutralObservationSeconds);
 	Result->SetNumberField(TEXT("stage2_candidate_shoulder_lift_from_pelvis_cm"), Snapshot.Stage2CandidateShoulderLiftFromPelvisCm);
 	Result->SetNumberField(TEXT("stage2_reference_shoulder_lift_from_pelvis_cm"), Snapshot.Stage2ReferenceShoulderLiftFromPelvisCm);
 	Result->SetNumberField(TEXT("stage2_raw_lift_delta_cm"), Snapshot.Stage2RawLiftDeltaCm);
+	Result->SetNumberField(TEXT("stage2_shoulder_head_clearance_cm"), Snapshot.Stage2ShoulderHeadClearanceCm);
+	Result->SetNumberField(TEXT("stage2_shoulder_head_clearance_reference_cm"), Snapshot.Stage2ShoulderHeadClearanceReferenceCm);
+	Result->SetNumberField(TEXT("stage2_shoulder_head_clearance_shrug_cm"), Snapshot.Stage2ShoulderHeadClearanceShrugCm);
+	Result->SetNumberField(TEXT("stage2_clearance_primary_evidence_cm"), Snapshot.Stage2ClearancePrimaryEvidenceCm);
+	Result->SetNumberField(TEXT("stage2_raw_lift_confirmation_weight"), Snapshot.Stage2RawLiftConfirmationWeight);
+	Result->SetNumberField(TEXT("stage2_signed_lift_evidence_cm"), Snapshot.Stage2SignedLiftEvidenceCm);
+	Result->SetNumberField(TEXT("stage2_signed_target_lift_cm"), Snapshot.Stage2SignedTargetLiftCm);
+	Result->SetNumberField(TEXT("stage2_applied_response_scale"), Snapshot.Stage2AppliedResponseScale);
+	Result->SetNumberField(TEXT("stage2_positive_lift_evidence_cm"), Snapshot.Stage2PositiveLiftEvidenceCm);
+	Result->SetNumberField(TEXT("stage2_unfaded_positive_target_lift_cm"), Snapshot.Stage2UnfadedPositiveTargetLiftCm);
+	Result->SetNumberField(TEXT("stage2_quest_wrist_lift_from_pelvis_cm"), Snapshot.Stage2QuestWristLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_quest_elbow_lift_from_pelvis_cm"), Snapshot.Stage2QuestElbowLiftFromPelvisCm);
+	Result->SetNumberField(TEXT("stage2_quest_arm_raise_ownership_fade"), Snapshot.Stage2QuestArmRaiseOwnershipFade);
+	Result->SetNumberField(TEXT("stage2_quest_arm_raise_lift_weight"), Snapshot.Stage2QuestArmRaiseLiftWeight);
 	Result->SetNumberField(TEXT("stage2_positive_target_lift_cm"), Snapshot.Stage2PositiveTargetLiftCm);
 	Result->SetNumberField(TEXT("stage2_contradiction_delta_cm"), Snapshot.Stage2ContradictionDeltaCm);
 	Result->SetNumberField(TEXT("stage2_smoothed_lift_cm"), Snapshot.Stage2SmoothedLiftCm);
 	Result->SetNumberField(TEXT("stage2_pre_solve_clavicle_lift_from_pelvis_cm"), Snapshot.Stage2PreSolveClavicleLiftFromPelvisCm);
 	Result->SetNumberField(TEXT("stage2_target_clavicle_lift_from_pelvis_cm"), Snapshot.Stage2TargetClavicleLiftFromPelvisCm);
 	Result->SetNumberField(TEXT("stage2_applied_clavicle_lift_cm"), Snapshot.Stage2AppliedClavicleLiftCm);
+	Result->SetNumberField(TEXT("stage2_applied_clavicle_helper_lift_cm"), Snapshot.Stage2AppliedClavicleHelperLiftCm);
+	Result->SetNumberField(TEXT("stage2_direct_upper_arm_lift_cm"), Snapshot.Stage2DirectUpperArmLiftCm);
+	Result->SetNumberField(TEXT("stage2_direct_lower_arm_lift_cm"), Snapshot.Stage2DirectLowerArmLiftCm);
+	Result->SetNumberField(TEXT("stage2_direct_hand_lift_cm"), Snapshot.Stage2DirectHandLiftCm);
 	return Result;
 }
 
@@ -606,40 +961,6 @@ TSharedRef<FJsonObject> JsonSignalSnapshot(const FMediaPipePoseDrivenSignalSnaps
 	Result->SetObjectField(TEXT("left_shoulder"), JsonShoulderSignalSnapshot(Snapshot.LeftShoulder));
 	Result->SetObjectField(TEXT("right_shoulder"), JsonShoulderSignalSnapshot(Snapshot.RightShoulder));
 	return Result;
-}
-
-float MPQStage2HalfLifeToAlpha(const float HalfLifeSeconds, const float DeltaSeconds)
-{
-	if (HalfLifeSeconds <= KINDA_SMALL_NUMBER)
-	{
-		return 1.0f;
-	}
-	return 1.0f - FMath::Exp2(-FMath::Max(0.0f, DeltaSeconds) / HalfLifeSeconds);
-}
-
-float UpdateMPQStage2ShoulderLiftBaseline(
-	const float CandidateLiftCm,
-	const float DeltaSeconds,
-	FMPQStage2DebugRecorderSideState& InOutSideState)
-{
-	constexpr float BaselineFollowThresholdCm = 0.5f;
-	constexpr float BaselineFollowHalfLifeSeconds = 1.5f;
-	if (!InOutSideState.bHasShoulderLiftBaseline)
-	{
-		InOutSideState.ShoulderLiftBaselineCm = CandidateLiftCm;
-		InOutSideState.bHasShoulderLiftBaseline = true;
-	}
-	else if (CandidateLiftCm < InOutSideState.ShoulderLiftBaselineCm)
-	{
-		InOutSideState.ShoulderLiftBaselineCm = CandidateLiftCm;
-	}
-	else if (CandidateLiftCm - InOutSideState.ShoulderLiftBaselineCm <= BaselineFollowThresholdCm)
-	{
-		const float Alpha = MPQStage2HalfLifeToAlpha(BaselineFollowHalfLifeSeconds, DeltaSeconds);
-		InOutSideState.ShoulderLiftBaselineCm =
-			FMath::Lerp(InOutSideState.ShoulderLiftBaselineCm, CandidateLiftCm, Alpha);
-	}
-	return InOutSideState.ShoulderLiftBaselineCm;
 }
 
 bool GetReferenceBoneComponentTranslation(
@@ -676,13 +997,8 @@ bool FillMPQStage2RecorderSideSnapshot(
 	const FEmbodiedFusionFrame& FusionFrame,
 	const bool bIsLeft,
 	const FTransform& WorldToComponent,
-	const FVector& CandidatePelvisComp,
 	const FVector& RefPelvisComp,
-	const float Blend,
-	const float ResponseScale,
-	const float MaxLiftCm,
-	const float HalfLifeSeconds,
-	const float ContradictionCm,
+	const FMediaPipeStage2ShoulderEvidenceSettings& Settings,
 	const float DeltaSeconds,
 	FMPQStage2DebugRecorderSideState& InOutSideState,
 	FMediaPipePoseDrivenShoulderSignalSnapshot& OutSnapshot)
@@ -694,63 +1010,45 @@ bool FillMPQStage2RecorderSideSnapshot(
 		return false;
 	}
 
-	const FMediaPipeFusedBodyPoint& CandidateShoulder = bIsLeft
-		? FusionFrame.MediaPipeCandidate.Pose.LeftShoulder
-		: FusionFrame.MediaPipeCandidate.Pose.RightShoulder;
-	if (!CandidateShoulder.bValid)
+	FMediaPipeStage2ShoulderEvidenceSideState SideState;
+	SideState.bHasSmoothedLift = InOutSideState.bHasSmoothedLift;
+	SideState.SmoothedLiftCm = InOutSideState.SmoothedLiftCm;
+	SideState.bHasNeutralReference = InOutSideState.bHasNeutralReference;
+	SideState.NeutralShoulderLiftFromPelvisCm = InOutSideState.NeutralShoulderLiftFromPelvisCm;
+	SideState.NeutralShoulderHeadClearanceCm = InOutSideState.NeutralShoulderHeadClearanceCm;
+	SideState.NeutralObservationSeconds = InOutSideState.NeutralObservationSeconds;
+	SideState.NeutralObservationFrames = InOutSideState.NeutralObservationFrames;
+
+	FMediaPipeStage2ShoulderEvidenceResult Evidence;
+	if (!FMediaPipeStage2ShoulderEvidence::BuildSideEvidence(
+			FusionFrame.SourceFrame,
+			FusionFrame.Calibration,
+			bIsLeft,
+			WorldToComponent,
+			Settings,
+			DeltaSeconds,
+			SideState,
+			Evidence))
 	{
-		InOutSideState = FMPQStage2DebugRecorderSideState();
+		InOutSideState.bHasSmoothedLift = SideState.bHasSmoothedLift;
+		InOutSideState.SmoothedLiftCm = SideState.SmoothedLiftCm;
+		InOutSideState.bHasNeutralReference = SideState.bHasNeutralReference;
+		InOutSideState.NeutralShoulderLiftFromPelvisCm = SideState.NeutralShoulderLiftFromPelvisCm;
+		InOutSideState.NeutralShoulderHeadClearanceCm = SideState.NeutralShoulderHeadClearanceCm;
+		InOutSideState.NeutralObservationSeconds = SideState.NeutralObservationSeconds;
+		InOutSideState.NeutralObservationFrames = SideState.NeutralObservationFrames;
 		return false;
 	}
 
-	const FVector CandidateShoulderComp = WorldToComponent.TransformPosition(CandidateShoulder.LocationWorld);
-	if (CandidateShoulderComp.ContainsNaN())
-	{
-		InOutSideState = FMPQStage2DebugRecorderSideState();
-		return false;
-	}
+	InOutSideState.bHasSmoothedLift = SideState.bHasSmoothedLift;
+	InOutSideState.SmoothedLiftCm = SideState.SmoothedLiftCm;
+	InOutSideState.bHasNeutralReference = SideState.bHasNeutralReference;
+	InOutSideState.NeutralShoulderLiftFromPelvisCm = SideState.NeutralShoulderLiftFromPelvisCm;
+	InOutSideState.NeutralShoulderHeadClearanceCm = SideState.NeutralShoulderHeadClearanceCm;
+	InOutSideState.NeutralObservationSeconds = SideState.NeutralObservationSeconds;
+	InOutSideState.NeutralObservationFrames = SideState.NeutralObservationFrames;
 
-	float ContradictionDeltaCm = 0.0f;
-	bool bHadContradictionSource = false;
-	bool bSuppressedByContradiction = false;
-	const FMediaPipeBodyFusionSourceStatus& ArmChainStatus = bIsLeft
-		? FusionFrame.SourceFrame.LeftArmChainStatus
-		: FusionFrame.SourceFrame.RightArmChainStatus;
-	if (ContradictionCm > KINDA_SMALL_NUMBER && ArmChainStatus.IsFresh())
-	{
-		const FVector QuestShoulderWorld = bIsLeft
-			? FusionFrame.SourceFrame.LeftArmShoulderWorld
-			: FusionFrame.SourceFrame.RightArmShoulderWorld;
-		const FVector QuestShoulderComp = WorldToComponent.TransformPosition(QuestShoulderWorld);
-		if (!QuestShoulderComp.ContainsNaN())
-		{
-			bHadContradictionSource = true;
-			ContradictionDeltaCm = FMath::Abs(CandidateShoulderComp.Z - QuestShoulderComp.Z);
-			bSuppressedByContradiction = ContradictionDeltaCm > ContradictionCm;
-		}
-	}
-
-	const float CandidateShoulderLiftFromPelvisCm = CandidateShoulderComp.Z - CandidatePelvisComp.Z;
-	const float RefShoulderLiftFromPelvisCm =
-		UpdateMPQStage2ShoulderLiftBaseline(CandidateShoulderLiftFromPelvisCm, DeltaSeconds, InOutSideState);
-	const float RawLiftCm = CandidateShoulderLiftFromPelvisCm - RefShoulderLiftFromPelvisCm;
-	const float TargetLiftCm = FMath::Clamp(FMath::Max(0.0f, RawLiftCm) * Blend * ResponseScale, 0.0f, MaxLiftCm);
-	if (bSuppressedByContradiction)
-	{
-		InOutSideState = FMPQStage2DebugRecorderSideState();
-	}
-	else if (!InOutSideState.bHasSmoothedLift)
-	{
-		InOutSideState.SmoothedLiftCm = TargetLiftCm;
-		InOutSideState.bHasSmoothedLift = true;
-	}
-	else
-	{
-		const float Alpha = MPQStage2HalfLifeToAlpha(HalfLifeSeconds, DeltaSeconds);
-		InOutSideState.SmoothedLiftCm = FMath::Lerp(InOutSideState.SmoothedLiftCm, TargetLiftCm, Alpha);
-	}
-
-	const float SmoothedLiftCm = bSuppressedByContradiction ? 0.0f : InOutSideState.SmoothedLiftCm;
+	const float SmoothedLiftCm = Evidence.SmoothedLiftCm;
 	float PreSolveClavicleLiftFromPelvisCm = 0.0f;
 	const FTransform LiveClavicleComp = DrivenMesh->GetBoneTransform(ClavicleBoneName, RTS_Component);
 	PreSolveClavicleLiftFromPelvisCm = LiveClavicleComp.GetTranslation().Z - RefPelvisComp.Z;
@@ -758,17 +1056,46 @@ bool FillMPQStage2RecorderSideSnapshot(
 
 	OutSnapshot.bValid = true;
 	OutSnapshot.bStage2ShoulderClavicleHintValid = true;
-	OutSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = bSuppressedByContradiction;
-	OutSnapshot.bStage2ShoulderClavicleHadContradictionSource = bHadContradictionSource;
-	OutSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = CandidateShoulderLiftFromPelvisCm;
-	OutSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = RefShoulderLiftFromPelvisCm;
-	OutSnapshot.Stage2RawLiftDeltaCm = RawLiftCm;
-	OutSnapshot.Stage2PositiveTargetLiftCm = TargetLiftCm;
-	OutSnapshot.Stage2ContradictionDeltaCm = ContradictionDeltaCm;
+	OutSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = Evidence.bSuppressedByContradiction;
+	OutSnapshot.bStage2ShoulderClavicleSuppressedByArmOwnership = Evidence.bSuppressedByArmOwnership;
+	OutSnapshot.bStage2ShoulderClavicleHadContradictionSource = Evidence.bHadContradictionSource;
+	OutSnapshot.bStage2ShoulderClavicleHadQuestArmRaiseSource = Evidence.bHadQuestArmRaiseSource;
+	OutSnapshot.bStage2NeutralReferenceReady = Evidence.bNeutralReferenceReady;
+	OutSnapshot.bStage2NeutralSampleAccepted = Evidence.bNeutralSampleAccepted;
+	OutSnapshot.bStage2ClampHit = Evidence.bClampHit;
+	OutSnapshot.Stage2SignalSourceMode = static_cast<float>(static_cast<uint8>(Evidence.SourceMode));
+	OutSnapshot.Stage2SignalSourceReliability = Evidence.SourceReliability;
+	OutSnapshot.Stage2NeutralObservationSeconds = Evidence.NeutralObservationSeconds;
+	OutSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = Evidence.CandidateShoulderLiftFromPelvisCm;
+	OutSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = Evidence.ReferenceShoulderLiftFromPelvisCm;
+	OutSnapshot.Stage2RawLiftDeltaCm = Evidence.RawLiftDeltaCm;
+	OutSnapshot.Stage2ShoulderHeadClearanceCm = Evidence.ShoulderHeadClearanceCm;
+	OutSnapshot.Stage2ShoulderHeadClearanceReferenceCm = Evidence.ShoulderHeadClearanceReferenceCm;
+	OutSnapshot.Stage2ShoulderHeadClearanceShrugCm = Evidence.ShoulderHeadClearanceShrugCm;
+	OutSnapshot.Stage2ClearancePrimaryEvidenceCm = Evidence.ClearancePrimaryEvidenceCm;
+	OutSnapshot.Stage2RawLiftConfirmationWeight = Evidence.RawLiftConfirmationWeight;
+	OutSnapshot.Stage2SignedLiftEvidenceCm = Evidence.SignedLiftEvidenceCm;
+	OutSnapshot.Stage2SignedTargetLiftCm = Evidence.SignedTargetLiftCm;
+	OutSnapshot.Stage2AppliedResponseScale = Evidence.AppliedResponseScale;
+	OutSnapshot.Stage2PositiveLiftEvidenceCm = Evidence.PositiveLiftEvidenceCm;
+	OutSnapshot.Stage2UnfadedPositiveTargetLiftCm = Evidence.UnfadedPositiveTargetLiftCm;
+	OutSnapshot.Stage2QuestWristLiftFromPelvisCm = Evidence.QuestWristLiftFromPelvisCm;
+	OutSnapshot.Stage2QuestElbowLiftFromPelvisCm = Evidence.QuestElbowLiftFromPelvisCm;
+	OutSnapshot.Stage2QuestArmRaiseOwnershipFade = Evidence.QuestArmRaiseOwnershipFade;
+	OutSnapshot.Stage2QuestArmRaiseLiftWeight = Evidence.QuestArmRaiseLiftWeight;
+	OutSnapshot.Stage2PositiveTargetLiftCm = Evidence.PositiveTargetLiftCm;
+	OutSnapshot.Stage2ContradictionDeltaCm = Evidence.ContradictionDeltaCm;
 	OutSnapshot.Stage2SmoothedLiftCm = SmoothedLiftCm;
 	OutSnapshot.Stage2PreSolveClavicleLiftFromPelvisCm = PreSolveClavicleLiftFromPelvisCm;
 	OutSnapshot.Stage2TargetClavicleLiftFromPelvisCm = TargetClavicleLiftFromPelvisCm;
-	OutSnapshot.Stage2AppliedClavicleLiftCm = TargetClavicleLiftFromPelvisCm - PreSolveClavicleLiftFromPelvisCm;
+	OutSnapshot.Stage2AppliedClavicleLiftCm =
+		(Evidence.bNeutralReferenceReady && !Evidence.bSuppressedByContradiction && !Evidence.bSuppressedByArmOwnership)
+			? TargetClavicleLiftFromPelvisCm - PreSolveClavicleLiftFromPelvisCm
+			: 0.0f;
+	OutSnapshot.Stage2AppliedClavicleHelperLiftCm = 0.0f;
+	OutSnapshot.Stage2DirectUpperArmLiftCm = 0.0f;
+	OutSnapshot.Stage2DirectLowerArmLiftCm = 0.0f;
+	OutSnapshot.Stage2DirectHandLiftCm = 0.0f;
 	return true;
 }
 
@@ -787,11 +1114,9 @@ bool BuildMPQStage2RecorderFallbackSnapshot(
 		return false;
 	}
 
-	const FEmbodiedFusionMediaPipeCandidate& Candidate = FusionFrame.MediaPipeCandidate;
-	if (Candidate.bCalibrationUsable == 0 ||
-		Candidate.bHasCalibratedPose == 0 ||
-		!Candidate.BodyPoseStatus.IsFresh() ||
-		!Candidate.Pose.Pelvis.bValid)
+	if (!FusionFrame.SourceFrame.bHasBodyPose ||
+		!FusionFrame.SourceFrame.BodyPoseStatus.IsFresh() ||
+		!FusionFrame.Calibration.IsUsable())
 	{
 		GMPQStage2DebugRecorderStates.FindOrAdd(DrivenMesh->GetUniqueID()) = FMPQStage2DebugRecorderState();
 		return false;
@@ -804,18 +1129,17 @@ bool BuildMPQStage2RecorderFallbackSnapshot(
 	}
 
 	const FTransform WorldToComponent = DrivenMesh->GetComponentTransform().Inverse();
-	const FVector CandidatePelvisComp = WorldToComponent.TransformPosition(Candidate.Pose.Pelvis.LocationWorld);
-	if (CandidatePelvisComp.ContainsNaN())
-	{
-		return false;
-	}
-
-	const float Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHintBlendAnyThread();
-	const float ResponseScale = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleResponseScaleAnyThread();
-	const float MaxLiftCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleMaxLiftCmAnyThread();
-	const float HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
-	const float ContradictionCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThread();
-	if (Blend <= KINDA_SMALL_NUMBER || MaxLiftCm <= KINDA_SMALL_NUMBER)
+	FMediaPipeStage2ShoulderEvidenceSettings Settings;
+	Settings.Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHintBlendAnyThread();
+	Settings.ResponseScale = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleResponseScaleAnyThread();
+	Settings.MaxLiftCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleMaxLiftCmAnyThread();
+	Settings.HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
+	Settings.ContradictionCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThread();
+	Settings.QuestArmRaiseFadeStartCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeStartCmAnyThread();
+	Settings.QuestArmRaiseFadeFullCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeFullCmAnyThread();
+	Settings.ShrugStartCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugStartCmAnyThread();
+	Settings.ShrugFullCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugFullCmAnyThread();
+	if (Settings.MaxLiftCm <= KINDA_SMALL_NUMBER)
 	{
 		return false;
 	}
@@ -826,13 +1150,8 @@ bool BuildMPQStage2RecorderFallbackSnapshot(
 		FusionFrame,
 		true,
 		WorldToComponent,
-		CandidatePelvisComp,
 		RefPelvisComp,
-		Blend,
-		ResponseScale,
-		MaxLiftCm,
-		HalfLifeSeconds,
-		ContradictionCm,
+		Settings,
 		DeltaSeconds,
 		RecorderState.Left,
 		OutSnapshot.LeftShoulder);
@@ -841,19 +1160,14 @@ bool BuildMPQStage2RecorderFallbackSnapshot(
 		FusionFrame,
 		false,
 		WorldToComponent,
-		CandidatePelvisComp,
 		RefPelvisComp,
-		Blend,
-		ResponseScale,
-		MaxLiftCm,
-		HalfLifeSeconds,
-		ContradictionCm,
+		Settings,
 		DeltaSeconds,
 		RecorderState.Right,
 		OutSnapshot.RightShoulder);
 	OutSnapshot.bValid = bLeft || bRight;
 	OutSnapshot.RuntimeStateKey = DrivenMesh->GetUniqueID();
-	OutSnapshot.PoseTimestampUs = static_cast<int64>(Candidate.TimestampSeconds * 1000000.0);
+	OutSnapshot.PoseTimestampUs = static_cast<int64>(FusionFrame.SourceFrame.BodyPoseTimestampSeconds * 1000000.0);
 	return OutSnapshot.bValid;
 }
 
@@ -961,7 +1275,15 @@ TSharedRef<FJsonObject> JsonFusedPose(const FMediaPipeFusedAvatarPose& Pose)
 	SetFusedPointField(Result, TEXT("right_elbow"), Pose.RightElbow);
 	SetFusedPointField(Result, TEXT("right_wrist"), Pose.RightWrist);
 	SetFusedPointField(Result, TEXT("left_hip"), Pose.LeftHip);
+	SetFusedPointField(Result, TEXT("left_knee"), Pose.LeftKnee);
+	SetFusedPointField(Result, TEXT("left_ankle"), Pose.LeftAnkle);
+	SetFusedPointField(Result, TEXT("left_heel"), Pose.LeftHeel);
+	SetFusedPointField(Result, TEXT("left_foot"), Pose.LeftFoot);
 	SetFusedPointField(Result, TEXT("right_hip"), Pose.RightHip);
+	SetFusedPointField(Result, TEXT("right_knee"), Pose.RightKnee);
+	SetFusedPointField(Result, TEXT("right_ankle"), Pose.RightAnkle);
+	SetFusedPointField(Result, TEXT("right_heel"), Pose.RightHeel);
+	SetFusedPointField(Result, TEXT("right_foot"), Pose.RightFoot);
 
 	TSharedRef<FJsonObject> Debug = MakeShared<FJsonObject>();
 	Debug->SetNumberField(TEXT("camera_to_eye_cm"), Pose.DebugErrors.CameraToEyeCm);
@@ -971,6 +1293,10 @@ TSharedRef<FJsonObject> JsonFusedPose(const FMediaPipeFusedAvatarPose& Pose)
 	Debug->SetNumberField(TEXT("hmd_horizontal_offset_cm"), Pose.DebugErrors.HmdHorizontalOffsetCm);
 	Debug->SetNumberField(TEXT("left_wrist_reach_cm"), Pose.DebugErrors.LeftWristReachCm);
 	Debug->SetNumberField(TEXT("right_wrist_reach_cm"), Pose.DebugErrors.RightWristReachCm);
+	Debug->SetNumberField(TEXT("left_foot_reliability"), Pose.DebugErrors.LeftFootReliability);
+	Debug->SetNumberField(TEXT("right_foot_reliability"), Pose.DebugErrors.RightFootReliability);
+	Debug->SetNumberField(TEXT("left_heel_reliability"), Pose.DebugErrors.LeftHeelReliability);
+	Debug->SetNumberField(TEXT("right_heel_reliability"), Pose.DebugErrors.RightHeelReliability);
 	Debug->SetStringField(TEXT("body_authority_state"), BodyFusionAuthorityStateName(Pose.DebugErrors.BodyAuthorityState));
 	Debug->SetBoolField(TEXT("mediapipe_pose_authority_allowed"), Pose.DebugErrors.bMediaPipePoseAuthorityAllowed != 0);
 	Result->SetObjectField(TEXT("debug"), Debug);
@@ -1144,6 +1470,1984 @@ TSharedRef<FJsonObject> JsonEmbodiedFusionFrame(const FEmbodiedFusionFrame& Fram
 	return Result;
 }
 
+TArray<TSharedPtr<FJsonValue>> JsonRawHandLandmarks(const FMediaPipeRawHandLandmarks& Landmarks)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(MediaPipeHandLandmarkCount);
+	for (int32 Index = 0; Index < MediaPipeHandLandmarkCount; ++Index)
+	{
+		Result.Add(MakeShared<FJsonValueObject>(JsonLandmark(Landmarks.Landmarks[Index])));
+	}
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonRawMediaPipeHands(const FMediaPipeRawHandPair& Hands)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("has_left"), Hands.bHasLeft != 0);
+	Result->SetBoolField(TEXT("has_right"), Hands.bHasRight != 0);
+	Result->SetNumberField(TEXT("left_score"), Hands.LeftScore);
+	Result->SetNumberField(TEXT("right_score"), Hands.RightScore);
+
+	TSharedRef<FJsonObject> Left = MakeShared<FJsonObject>();
+	Left->SetArrayField(TEXT("normalized_landmarks"), JsonRawHandLandmarks(Hands.LeftNormalized));
+	Left->SetArrayField(TEXT("world_landmarks"), JsonRawHandLandmarks(Hands.LeftWorld));
+	Result->SetObjectField(TEXT("left"), Left);
+
+	TSharedRef<FJsonObject> Right = MakeShared<FJsonObject>();
+	Right->SetArrayField(TEXT("normalized_landmarks"), JsonRawHandLandmarks(Hands.RightNormalized));
+	Right->SetArrayField(TEXT("world_landmarks"), JsonRawHandLandmarks(Hands.RightWorld));
+	Result->SetObjectField(TEXT("right"), Right);
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonRawMediaPipeFrame(const FMediaPipePoseFrame& Frame)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("valid"), Frame.bValid);
+	Result->SetNumberField(TEXT("pose_timestamp_us"), static_cast<double>(Frame.TimestampUs));
+	Result->SetBoolField(TEXT("has_hands"), Frame.bHasHands);
+	Result->SetBoolField(TEXT("has_face"), Frame.bHasFace);
+
+	TSharedRef<FJsonObject> TimingObject = MakeShared<FJsonObject>();
+	TimingObject->SetNumberField(TEXT("source_capture_wall_seconds"), Frame.SourceCaptureWallSeconds);
+	TimingObject->SetNumberField(TEXT("enqueue_wall_seconds"), Frame.EnqueueWallSeconds);
+	TimingObject->SetNumberField(TEXT("worker_start_wall_seconds"), Frame.WorkerStartWallSeconds);
+	TimingObject->SetNumberField(TEXT("native_process_end_wall_seconds"), Frame.NativeProcessEndWallSeconds);
+	TimingObject->SetNumberField(TEXT("landmark_end_wall_seconds"), Frame.LandmarkEndWallSeconds);
+	TimingObject->SetNumberField(TEXT("publish_wall_seconds"), Frame.PublishWallSeconds);
+	TimingObject->SetNumberField(TEXT("conditioned_query_wall_seconds"), Frame.ConditionedQueryWallSeconds);
+	Result->SetObjectField(TEXT("timing"), TimingObject);
+
+	TSharedRef<FJsonObject> PoseWorldObject = MakeShared<FJsonObject>();
+	TSharedRef<FJsonObject> PoseNormalizedObject = MakeShared<FJsonObject>();
+	for (int32 LandmarkIndex = 0; LandmarkIndex < MediaPipePoseLandmarkCount && LandmarkIndex < UE_ARRAY_COUNT(MediaPipePoseLandmarkNames); ++LandmarkIndex)
+	{
+		PoseWorldObject->SetObjectField(MediaPipePoseLandmarkNames[LandmarkIndex], JsonLandmark(Frame.World.Points[LandmarkIndex]));
+		PoseNormalizedObject->SetObjectField(MediaPipePoseLandmarkNames[LandmarkIndex], JsonLandmark(Frame.Normalized.Points[LandmarkIndex]));
+	}
+	Result->SetObjectField(TEXT("pose_world_landmarks"), PoseWorldObject);
+	Result->SetObjectField(TEXT("pose_normalized_landmarks"), PoseNormalizedObject);
+	Result->SetObjectField(TEXT("hands"), JsonRawMediaPipeHands(Frame.Hands));
+
+	if (Frame.bHasFace && Frame.Face.bHasFace != 0)
+	{
+		TSharedRef<FJsonObject> FaceObject = MakeShared<FJsonObject>();
+		FaceObject->SetNumberField(TEXT("score"), Frame.Face.Score);
+		FaceObject->SetNumberField(TEXT("count"), Frame.Face.Normalized.Count);
+		FaceObject->SetBoolField(TEXT("has_transform"), Frame.Face.bHasTransform != 0);
+		TArray<TSharedPtr<FJsonValue>> TransformValues;
+		TransformValues.Reserve(16);
+		for (float Value : Frame.Face.FacialTransform)
+		{
+			TransformValues.Add(MakeShared<FJsonValueNumber>(Value));
+		}
+		FaceObject->SetArrayField(TEXT("facial_transform"), TransformValues);
+
+		TArray<TSharedPtr<FJsonValue>> FaceLandmarks;
+		const int32 FaceCount = FMath::Clamp(Frame.Face.Normalized.Count, 0, MediaPipeFaceLandmarkMaxCount);
+		FaceLandmarks.Reserve(FaceCount);
+		for (int32 FaceIndex = 0; FaceIndex < FaceCount; ++FaceIndex)
+		{
+			FaceLandmarks.Add(MakeShared<FJsonValueObject>(JsonLandmark(Frame.Face.Normalized.Landmarks[FaceIndex])));
+		}
+		FaceObject->SetArrayField(TEXT("normalized_landmarks"), FaceLandmarks);
+		Result->SetObjectField(TEXT("face"), FaceObject);
+	}
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonDatasetPhaseMarker(const FMediaPipeTrackingFusionDatasetPhase& Phase)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("phase_index"), Phase.PhaseIndex);
+	Result->SetStringField(TEXT("phase_name"), Phase.PhaseName);
+	Result->SetStringField(TEXT("prompt"), Phase.Prompt);
+	Result->SetStringField(TEXT("region"), Phase.Region);
+	Result->SetNumberField(TEXT("start_time"), Phase.StartTimeSeconds);
+	Result->SetNumberField(TEXT("start_time_seconds"), Phase.StartTimeSeconds);
+	Result->SetNumberField(TEXT("end_time"), Phase.EndTimeSeconds);
+	Result->SetNumberField(TEXT("end_time_seconds"), Phase.EndTimeSeconds);
+	Result->SetNumberField(TEXT("settle_start_time"), Phase.SettleStartTimeSeconds);
+	Result->SetNumberField(TEXT("settle_start_time_seconds"), Phase.SettleStartTimeSeconds);
+	Result->SetNumberField(TEXT("settle_end_time"), Phase.SettleEndTimeSeconds);
+	Result->SetNumberField(TEXT("settle_end_time_seconds"), Phase.SettleEndTimeSeconds);
+	Result->SetNumberField(TEXT("duration_seconds"), Phase.GetDurationSeconds());
+	Result->SetArrayField(TEXT("expected_signal_targets"), JsonStringArray(Phase.ExpectedSignalTargets));
+	Result->SetArrayField(TEXT("readiness_targets"), JsonStringArray(Phase.ReadinessTargets));
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonDatasetPhaseMarkers(const TArray<FMediaPipeTrackingFusionDatasetPhase>& Phases)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(Phases.Num());
+	for (const FMediaPipeTrackingFusionDatasetPhase& Phase : Phases)
+	{
+		Result.Add(MakeShared<FJsonValueObject>(JsonDatasetPhaseMarker(Phase)));
+	}
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonCurrentDatasetPhase(const double ElapsedSeconds)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	if (const FMediaPipeTrackingFusionDatasetPhase* MovementPhase =
+		FMediaPipeTrackingFusionDataset::FindMovementPhaseAtElapsedSeconds(GTrackingFusionDatasetRecorder.Phases, ElapsedSeconds))
+	{
+		if (MovementPhase->ContainsMovementTime(ElapsedSeconds))
+		{
+			Result->SetStringField(TEXT("state"), TEXT("movement"));
+			Result->SetNumberField(TEXT("phase_index"), MovementPhase->PhaseIndex);
+			Result->SetStringField(TEXT("phase_name"), MovementPhase->PhaseName);
+			Result->SetStringField(TEXT("prompt"), MovementPhase->Prompt);
+			Result->SetStringField(TEXT("region"), MovementPhase->Region);
+			Result->SetNumberField(TEXT("phase_elapsed_seconds"), ElapsedSeconds - MovementPhase->StartTimeSeconds);
+			Result->SetNumberField(TEXT("phase_remaining_seconds"), FMath::Max(0.0, MovementPhase->EndTimeSeconds - ElapsedSeconds));
+			Result->SetArrayField(TEXT("expected_signal_targets"), JsonStringArray(MovementPhase->ExpectedSignalTargets));
+			Result->SetArrayField(TEXT("readiness_targets"), JsonStringArray(MovementPhase->ReadinessTargets));
+			return Result;
+		}
+	}
+
+	if (const FMediaPipeTrackingFusionDatasetPhase* SettlePhase =
+		FMediaPipeTrackingFusionDataset::FindSettlePhaseAtElapsedSeconds(GTrackingFusionDatasetRecorder.Phases, ElapsedSeconds))
+	{
+		Result->SetStringField(TEXT("state"), TEXT("neutral_settle"));
+		Result->SetNumberField(TEXT("phase_index"), -1);
+		Result->SetNumberField(TEXT("previous_phase_index"), SettlePhase->PhaseIndex);
+		Result->SetStringField(TEXT("phase_name"), TEXT("neutral_settle"));
+		Result->SetStringField(TEXT("prompt"), TEXT("Settle neutral."));
+		Result->SetNumberField(TEXT("phase_elapsed_seconds"), ElapsedSeconds - SettlePhase->SettleStartTimeSeconds);
+		Result->SetNumberField(TEXT("phase_remaining_seconds"), FMath::Max(0.0, SettlePhase->SettleEndTimeSeconds - ElapsedSeconds));
+		TArray<FString> SettleTargets;
+		SettleTargets.Add(TEXT("neutral_settle"));
+		Result->SetArrayField(TEXT("expected_signal_targets"), JsonStringArray(SettleTargets));
+		return Result;
+	}
+
+	Result->SetStringField(TEXT("state"), TEXT("complete"));
+	Result->SetNumberField(TEXT("phase_index"), -1);
+	Result->SetStringField(TEXT("phase_name"), TEXT("complete"));
+	Result->SetStringField(TEXT("prompt"), TEXT("Dataset routine complete."));
+	return Result;
+}
+
+FString ResolveWorldMapPath(const UWorld* World)
+{
+	if (!World)
+	{
+		return FString();
+	}
+
+	FString MapPath = World->GetOutermost() ? World->GetOutermost()->GetName() : World->GetMapName();
+	for (int32 PieIndex = 0; PieIndex < 16; ++PieIndex)
+	{
+		MapPath.ReplaceInline(*FString::Printf(TEXT("UEDPIE_%d_"), PieIndex), TEXT(""));
+	}
+	return MapPath;
+}
+
+FString UtcTimestampString()
+{
+	return FDateTime::UtcNow().ToString(TEXT("%Y-%m-%dT%H:%M:%SZ"));
+}
+
+FString BoneCategoryForDataset(FName BoneName)
+{
+	if (FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(BoneName))
+	{
+		return TEXT("helper");
+	}
+	if (FMediaPipeTrackingFusionDataset::IsFingerBoneName(BoneName))
+	{
+		return TEXT("finger");
+	}
+	if (FMediaPipeTrackingFusionDataset::IsMainBodyBoneName(BoneName))
+	{
+		return TEXT("main");
+	}
+	return TEXT("other");
+}
+
+FString NormalizeTrackingDatasetBoneMode(const FString& RawMode)
+{
+	const FString Trimmed = RawMode.TrimStartAndEnd();
+	if (Trimmed.Equals(TEXT("selected"), ESearchCase::IgnoreCase) ||
+		Trimmed.Equals(TEXT("filtered"), ESearchCase::IgnoreCase))
+	{
+		return TEXT("selected");
+	}
+	return TEXT("all");
+}
+
+FString NormalizeTrackingDatasetPhasePreset(const FString& RawPreset)
+{
+	const FString Trimmed = RawPreset.TrimStartAndEnd();
+	if (Trimmed.Equals(FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset, ESearchCase::IgnoreCase) ||
+		Trimmed.Equals(TEXT("avatar_locked"), ESearchCase::IgnoreCase) ||
+		Trimmed.Equals(TEXT("sync_calibration"), ESearchCase::IgnoreCase))
+	{
+		return FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset;
+	}
+	return TEXT("default");
+}
+
+bool IsAvatarLockedSyncCalibrationPhasePreset(const FString& PhasePreset)
+{
+	return PhasePreset.Equals(FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset, ESearchCase::IgnoreCase);
+}
+
+TSet<FName> BoneNameSet(const TArray<FName>& BoneNames)
+{
+	TSet<FName> Result;
+	Result.Reserve(BoneNames.Num());
+	for (const FName& BoneName : BoneNames)
+	{
+		Result.Add(BoneName);
+	}
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonRecordedBoneHierarchy(
+	const USkeletalMesh* SkeletalMesh,
+	const FMediaPipeTrackingFusionDatasetBoneSelection& BoneSelection)
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	if (!SkeletalMesh)
+	{
+		return Result;
+	}
+
+	const TSet<FName> RecordedBoneNames = BoneNameSet(BoneSelection.RecordedBones);
+	const FReferenceSkeleton& RefSkeleton = SkeletalMesh->GetRefSkeleton();
+	Result.Reserve(RecordedBoneNames.Num());
+	for (int32 BoneIndex = 0; BoneIndex < RefSkeleton.GetNum(); ++BoneIndex)
+	{
+		const FName BoneName = RefSkeleton.GetBoneName(BoneIndex);
+		if (!RecordedBoneNames.Contains(BoneName))
+		{
+			continue;
+		}
+
+		const int32 ParentIndex = RefSkeleton.GetParentIndex(BoneIndex);
+		const FName ParentName = ParentIndex != INDEX_NONE ? RefSkeleton.GetBoneName(ParentIndex) : NAME_None;
+		TSharedRef<FJsonObject> BoneObject = MakeShared<FJsonObject>();
+		BoneObject->SetNumberField(TEXT("index"), BoneIndex);
+		BoneObject->SetStringField(TEXT("name"), BoneName.ToString());
+		BoneObject->SetNumberField(TEXT("parent_index"), ParentIndex);
+		BoneObject->SetStringField(TEXT("parent_name"), ParentName.IsNone() ? FString() : ParentName.ToString());
+		BoneObject->SetStringField(TEXT("category"), BoneCategoryForDataset(BoneName));
+		BoneObject->SetBoolField(TEXT("parent_recorded"), ParentName.IsNone() || RecordedBoneNames.Contains(ParentName));
+		Result.Add(MakeShared<FJsonValueObject>(BoneObject));
+	}
+	return Result;
+}
+
+void SetJsonTransformFields(const TSharedRef<FJsonObject>& Object, const FTransform& Transform)
+{
+	Object->SetArrayField(TEXT("loc"), JsonVector(Transform.GetLocation()));
+	Object->SetArrayField(TEXT("rot"), JsonRotator(Transform.GetRotation().Rotator()));
+	Object->SetArrayField(TEXT("quat"), JsonQuat(Transform.GetRotation()));
+}
+
+float AngularSpeedDegreesPerSecond(const FQuat& Current, const FQuat& Previous, const double DeltaSeconds)
+{
+	if (DeltaSeconds <= KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+	return static_cast<float>(FMath::RadiansToDegrees(Current.AngularDistance(Previous)) / DeltaSeconds);
+}
+
+void AddDistanceResidual(
+	const TSharedRef<FJsonObject>& Object,
+	const TCHAR* Name,
+	const bool bHasSource,
+	const FVector& Source,
+	const TMap<FName, FTransform>& BoneWorldTransforms,
+	const FName BoneName)
+{
+	const FTransform* BoneTransform = BoneWorldTransforms.Find(BoneName);
+	if (!bHasSource || !BoneTransform)
+	{
+		return;
+	}
+	Object->SetNumberField(Name, FVector::Distance(Source, BoneTransform->GetLocation()));
+}
+
+TSharedRef<FJsonObject> JsonDatasetResiduals(
+	const FEmbodiedFusionFrame* FusionFrame,
+	const TMap<FName, FTransform>& BoneWorldTransforms)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	if (!FusionFrame)
+	{
+		Result->SetBoolField(TEXT("available"), false);
+		return Result;
+	}
+
+	Result->SetBoolField(TEXT("available"), true);
+	AddDistanceResidual(Result, TEXT("quest_hmd_to_avatar_head_cm"), FusionFrame->SourceFrame.bHasHmdPose, FusionFrame->SourceFrame.HmdLocationWorld, BoneWorldTransforms, FName(TEXT("head")));
+	AddDistanceResidual(Result, TEXT("fused_head_to_avatar_head_cm"), FusionFrame->Pose.Head.bValid, FusionFrame->Pose.Head.LocationWorld, BoneWorldTransforms, FName(TEXT("head")));
+	AddDistanceResidual(Result, TEXT("fused_chest_to_avatar_spine05_cm"), FusionFrame->Pose.Chest.bValid, FusionFrame->Pose.Chest.LocationWorld, BoneWorldTransforms, FName(TEXT("spine_05")));
+	AddDistanceResidual(Result, TEXT("fused_pelvis_to_avatar_pelvis_cm"), FusionFrame->Pose.Pelvis.bValid, FusionFrame->Pose.Pelvis.LocationWorld, BoneWorldTransforms, FName(TEXT("pelvis")));
+	AddDistanceResidual(Result, TEXT("quest_left_hand_to_avatar_hand_l_cm"), FusionFrame->SourceFrame.bHasLeftHand, FusionFrame->SourceFrame.LeftHandWorld, BoneWorldTransforms, FName(TEXT("hand_l")));
+	AddDistanceResidual(Result, TEXT("quest_right_hand_to_avatar_hand_r_cm"), FusionFrame->SourceFrame.bHasRightHand, FusionFrame->SourceFrame.RightHandWorld, BoneWorldTransforms, FName(TEXT("hand_r")));
+	AddDistanceResidual(Result, TEXT("fused_left_wrist_to_avatar_hand_l_cm"), FusionFrame->Pose.LeftWrist.bValid, FusionFrame->Pose.LeftWrist.LocationWorld, BoneWorldTransforms, FName(TEXT("hand_l")));
+	AddDistanceResidual(Result, TEXT("fused_right_wrist_to_avatar_hand_r_cm"), FusionFrame->Pose.RightWrist.bValid, FusionFrame->Pose.RightWrist.LocationWorld, BoneWorldTransforms, FName(TEXT("hand_r")));
+
+	FVector MediaPipePoint = FVector::ZeroVector;
+	float Reliability = 0.0f;
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, MediaPipePoint, &Reliability))
+	{
+		AddDistanceResidual(Result, TEXT("mediapipe_left_shoulder_to_avatar_clavicle_l_cm"), true, MediaPipePoint, BoneWorldTransforms, FName(TEXT("clavicle_l")));
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, MediaPipePoint, &Reliability))
+	{
+		AddDistanceResidual(Result, TEXT("mediapipe_right_shoulder_to_avatar_clavicle_r_cm"), true, MediaPipePoint, BoneWorldTransforms, FName(TEXT("clavicle_r")));
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, MediaPipePoint, &Reliability))
+	{
+		AddDistanceResidual(Result, TEXT("mediapipe_left_wrist_to_avatar_hand_l_cm"), true, MediaPipePoint, BoneWorldTransforms, FName(TEXT("hand_l")));
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::RightWrist, MediaPipePoint, &Reliability))
+	{
+		AddDistanceResidual(Result, TEXT("mediapipe_right_wrist_to_avatar_hand_r_cm"), true, MediaPipePoint, BoneWorldTransforms, FName(TEXT("hand_r")));
+	}
+	return Result;
+}
+
+void SetDistanceResidualValue(
+	const bool bHasSource,
+	const FVector& Source,
+	const bool bHasTarget,
+	const FVector& Target,
+	bool& bOutHasResidual,
+	float& OutResidualCm)
+{
+	if (!bHasSource || !bHasTarget)
+	{
+		bOutHasResidual = false;
+		OutResidualCm = 0.0f;
+		return;
+	}
+
+	bOutHasResidual = true;
+	OutResidualCm = static_cast<float>(FVector::Distance(Source, Target));
+}
+
+FTrackingFusionDatasetResidualRecord CaptureDatasetResiduals(
+	const FEmbodiedFusionFrame* FusionFrame,
+	const FTrackingFusionDatasetAvatarKeypoints& Keypoints)
+{
+	FTrackingFusionDatasetResidualRecord Result;
+	if (!FusionFrame)
+	{
+		return Result;
+	}
+
+	Result.bAvailable = true;
+	SetDistanceResidualValue(
+		FusionFrame->SourceFrame.bHasHmdPose,
+		FusionFrame->SourceFrame.HmdLocationWorld,
+		Keypoints.bHasHead,
+		Keypoints.HeadWorld,
+		Result.bHasQuestHmdToAvatarHead,
+		Result.QuestHmdToAvatarHeadCm);
+	SetDistanceResidualValue(
+		FusionFrame->Pose.Head.bValid,
+		FusionFrame->Pose.Head.LocationWorld,
+		Keypoints.bHasHead,
+		Keypoints.HeadWorld,
+		Result.bHasFusedHeadToAvatarHead,
+		Result.FusedHeadToAvatarHeadCm);
+	SetDistanceResidualValue(
+		FusionFrame->Pose.Chest.bValid,
+		FusionFrame->Pose.Chest.LocationWorld,
+		Keypoints.bHasSpine05,
+		Keypoints.Spine05World,
+		Result.bHasFusedChestToAvatarSpine05,
+		Result.FusedChestToAvatarSpine05Cm);
+	SetDistanceResidualValue(
+		FusionFrame->Pose.Pelvis.bValid,
+		FusionFrame->Pose.Pelvis.LocationWorld,
+		Keypoints.bHasPelvis,
+		Keypoints.PelvisWorld,
+		Result.bHasFusedPelvisToAvatarPelvis,
+		Result.FusedPelvisToAvatarPelvisCm);
+	SetDistanceResidualValue(
+		FusionFrame->SourceFrame.bHasLeftHand,
+		FusionFrame->SourceFrame.LeftHandWorld,
+		Keypoints.bHasHandL,
+		Keypoints.HandLWorld,
+		Result.bHasQuestLeftHandToAvatarHandL,
+		Result.QuestLeftHandToAvatarHandLCm);
+	SetDistanceResidualValue(
+		FusionFrame->SourceFrame.bHasRightHand,
+		FusionFrame->SourceFrame.RightHandWorld,
+		Keypoints.bHasHandR,
+		Keypoints.HandRWorld,
+		Result.bHasQuestRightHandToAvatarHandR,
+		Result.QuestRightHandToAvatarHandRCm);
+	SetDistanceResidualValue(
+		FusionFrame->Pose.LeftWrist.bValid,
+		FusionFrame->Pose.LeftWrist.LocationWorld,
+		Keypoints.bHasHandL,
+		Keypoints.HandLWorld,
+		Result.bHasFusedLeftWristToAvatarHandL,
+		Result.FusedLeftWristToAvatarHandLCm);
+	SetDistanceResidualValue(
+		FusionFrame->Pose.RightWrist.bValid,
+		FusionFrame->Pose.RightWrist.LocationWorld,
+		Keypoints.bHasHandR,
+		Keypoints.HandRWorld,
+		Result.bHasFusedRightWristToAvatarHandR,
+		Result.FusedRightWristToAvatarHandRCm);
+
+	FVector MediaPipePoint = FVector::ZeroVector;
+	float Reliability = 0.0f;
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, MediaPipePoint, &Reliability))
+	{
+		SetDistanceResidualValue(
+			true,
+			MediaPipePoint,
+			Keypoints.bHasClavicleL,
+			Keypoints.ClavicleLWorld,
+			Result.bHasMediaPipeLeftShoulderToAvatarClavicleL,
+			Result.MediaPipeLeftShoulderToAvatarClavicleLCm);
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, MediaPipePoint, &Reliability))
+	{
+		SetDistanceResidualValue(
+			true,
+			MediaPipePoint,
+			Keypoints.bHasClavicleR,
+			Keypoints.ClavicleRWorld,
+			Result.bHasMediaPipeRightShoulderToAvatarClavicleR,
+			Result.MediaPipeRightShoulderToAvatarClavicleRCm);
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, MediaPipePoint, &Reliability))
+	{
+		SetDistanceResidualValue(
+			true,
+			MediaPipePoint,
+			Keypoints.bHasHandL,
+			Keypoints.HandLWorld,
+			Result.bHasMediaPipeLeftWristToAvatarHandL,
+			Result.MediaPipeLeftWristToAvatarHandLCm);
+	}
+	if (FusionFrame->SourceFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::RightWrist, MediaPipePoint, &Reliability))
+	{
+		SetDistanceResidualValue(
+			true,
+			MediaPipePoint,
+			Keypoints.bHasHandR,
+			Keypoints.HandRWorld,
+			Result.bHasMediaPipeRightWristToAvatarHandR,
+			Result.MediaPipeRightWristToAvatarHandRCm);
+	}
+	return Result;
+}
+
+TSharedRef<FJsonObject> JsonDatasetResiduals(const FTrackingFusionDatasetResidualRecord& Residuals)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetBoolField(TEXT("available"), Residuals.bAvailable);
+	if (!Residuals.bAvailable)
+	{
+		return Result;
+	}
+
+	auto SetOptionalResidual = [&Result](const TCHAR* Name, const bool bHasResidual, const float ResidualCm)
+	{
+		if (bHasResidual)
+		{
+			Result->SetNumberField(Name, ResidualCm);
+		}
+	};
+	SetOptionalResidual(TEXT("quest_hmd_to_avatar_head_cm"), Residuals.bHasQuestHmdToAvatarHead, Residuals.QuestHmdToAvatarHeadCm);
+	SetOptionalResidual(TEXT("fused_head_to_avatar_head_cm"), Residuals.bHasFusedHeadToAvatarHead, Residuals.FusedHeadToAvatarHeadCm);
+	SetOptionalResidual(TEXT("fused_chest_to_avatar_spine05_cm"), Residuals.bHasFusedChestToAvatarSpine05, Residuals.FusedChestToAvatarSpine05Cm);
+	SetOptionalResidual(TEXT("fused_pelvis_to_avatar_pelvis_cm"), Residuals.bHasFusedPelvisToAvatarPelvis, Residuals.FusedPelvisToAvatarPelvisCm);
+	SetOptionalResidual(TEXT("quest_left_hand_to_avatar_hand_l_cm"), Residuals.bHasQuestLeftHandToAvatarHandL, Residuals.QuestLeftHandToAvatarHandLCm);
+	SetOptionalResidual(TEXT("quest_right_hand_to_avatar_hand_r_cm"), Residuals.bHasQuestRightHandToAvatarHandR, Residuals.QuestRightHandToAvatarHandRCm);
+	SetOptionalResidual(TEXT("fused_left_wrist_to_avatar_hand_l_cm"), Residuals.bHasFusedLeftWristToAvatarHandL, Residuals.FusedLeftWristToAvatarHandLCm);
+	SetOptionalResidual(TEXT("fused_right_wrist_to_avatar_hand_r_cm"), Residuals.bHasFusedRightWristToAvatarHandR, Residuals.FusedRightWristToAvatarHandRCm);
+	SetOptionalResidual(TEXT("mediapipe_left_shoulder_to_avatar_clavicle_l_cm"), Residuals.bHasMediaPipeLeftShoulderToAvatarClavicleL, Residuals.MediaPipeLeftShoulderToAvatarClavicleLCm);
+	SetOptionalResidual(TEXT("mediapipe_right_shoulder_to_avatar_clavicle_r_cm"), Residuals.bHasMediaPipeRightShoulderToAvatarClavicleR, Residuals.MediaPipeRightShoulderToAvatarClavicleRCm);
+	SetOptionalResidual(TEXT("mediapipe_left_wrist_to_avatar_hand_l_cm"), Residuals.bHasMediaPipeLeftWristToAvatarHandL, Residuals.MediaPipeLeftWristToAvatarHandLCm);
+	SetOptionalResidual(TEXT("mediapipe_right_wrist_to_avatar_hand_r_cm"), Residuals.bHasMediaPipeRightWristToAvatarHandR, Residuals.MediaPipeRightWristToAvatarHandRCm);
+	return Result;
+}
+
+const TArray<FString>& TrackingFusionDatasetCaptureCVarNames()
+{
+	static const TArray<FString> Names = {
+		TEXT("mp.RecordTrackingFusionDatasetOnPlay"),
+		TEXT("mp.RecordTrackingFusionDatasetDuration"),
+		TEXT("mp.RecordTrackingFusionDatasetSampleRate"),
+		TEXT("mp.RecordTrackingFusionDatasetBoneMode"),
+		TEXT("mp.RecordTrackingFusionDatasetPhasePreset"),
+		TEXT("mp.RecordTrackingFusionDatasetChunkMegabytes"),
+		TEXT("mp.RecordTrackingFusionDatasetLabel"),
+		TEXT("mp.RecordTrackingFusionDatasetPath"),
+		TEXT("mp.RecordTrackingFusionDatasetAnalyzeAfterWrite"),
+		TEXT("t.MaxFPS"),
+		TEXT("t.IdleWhenNotForeground"),
+		TEXT("Slate.bAllowThrottling"),
+		TEXT("r.VSync"),
+		TEXT("mp.BodyFusion.Enable"),
+		TEXT("mp.BodyFusion.Debug"),
+		TEXT("mp.BodyFusion.WritePose"),
+		TEXT("mp.BodyFusion.MediaPipeAuthority"),
+		TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"),
+		TEXT("mp.MediaPipeDriveSpine"),
+		TEXT("mp.MediaPipeDrivePelvisTranslation"),
+		TEXT("mp.MediaPipeDriveLegs"),
+		TEXT("mp.MediaPipeUseLegIK"),
+		TEXT("mp.MediaPipeUseLegIKFootPlant"),
+		TEXT("mp.MediaPipeUseFkRootGrounding"),
+		TEXT("mp.MediaPipeDriveFootRotation"),
+		TEXT("mp.QuestHandTracking"),
+		TEXT("mp.QuestHandDriveFingerBones"),
+		TEXT("mp.QuestArmDropoutDownFallback"),
+		TEXT("mp.QuestConstrainedArmBodyFallback"),
+		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
+		TEXT("mp.QuestFingerDebug"),
+		TEXT("mp.QuestHandDebug"),
+		TEXT("mp.QuestWristDebug"),
+		TEXT("mp.QuestWristTrace"),
+		TEXT("mp.QuestWristTraceLogIntervalSeconds"),
+		TEXT("mp.QuestWristCalibrationHud"),
+		TEXT("mp.QuestArmLengthCalibrationHud"),
+		TEXT("mp.QuestArmLengthCalibrationStartup"),
+		TEXT("mp.MetaHumanArmSanity"),
+		TEXT("mp.MetaHumanArmSanityLogIntervalSeconds"),
+		TEXT("mp.MetaHumanFullArmChainTrace"),
+		TEXT("mp.MetaHumanFullArmChainTraceLogIntervalSeconds")
+	};
+	return Names;
+}
+
+const TArray<FString>& AvatarLockedCalibrationPolicyCVarNames()
+{
+	static const TArray<FString> Names = {
+		TEXT("mp.BodyFusion.Enable"),
+		TEXT("mp.BodyFusion.Debug"),
+		TEXT("mp.BodyFusion.WritePose"),
+		TEXT("mp.BodyFusion.MediaPipeAuthority"),
+		TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"),
+		TEXT("mp.MediaPipeDriveSpine"),
+		TEXT("mp.MediaPipeDrivePelvisTranslation"),
+		TEXT("mp.MediaPipeDriveLegs"),
+		TEXT("mp.MediaPipeUseLegIK"),
+		TEXT("mp.MediaPipeUseLegIKFootPlant"),
+		TEXT("mp.MediaPipeUseFkRootGrounding"),
+		TEXT("mp.MediaPipeDriveFootRotation")
+	};
+	return Names;
+}
+
+TSharedRef<FJsonObject> JsonCaptureCVarSnapshot(const TMap<FString, FString>& Snapshot)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	for (const FString& Name : TrackingFusionDatasetCaptureCVarNames())
+	{
+		if (const FString* Value = Snapshot.Find(Name))
+		{
+			Result->SetStringField(Name, *Value);
+		}
+	}
+	return Result;
+}
+
+int32 GetTrackingDatasetConsoleInt(const TCHAR* Name, const int32 DefaultValue)
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		return Variable->GetInt();
+	}
+	return DefaultValue;
+}
+
+TSharedRef<FJsonObject> JsonAvatarOutputPolicySnapshot()
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	const int32 BodyFusionEnable = GetTrackingDatasetConsoleInt(TEXT("mp.BodyFusion.Enable"), 0);
+	const int32 BodyFusionWritePose = GetTrackingDatasetConsoleInt(TEXT("mp.BodyFusion.WritePose"), 1);
+	const int32 BodyFusionMediaPipeAuthority = GetTrackingDatasetConsoleInt(TEXT("mp.BodyFusion.MediaPipeAuthority"), 0);
+	const int32 BodyFusionFullBodyMediaPipeAuthority =
+		GetTrackingDatasetConsoleInt(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"), 0);
+	const int32 DriveSpine = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeDriveSpine"), 1);
+	const int32 DrivePelvisTranslation = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeDrivePelvisTranslation"), 0);
+	const int32 DriveLegs = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeDriveLegs"), 0);
+	const int32 UseLegIK = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeUseLegIK"), 0);
+	const int32 UseLegIKFootPlant = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeUseLegIKFootPlant"), 1);
+	const int32 DriveFootRotation = GetTrackingDatasetConsoleInt(TEXT("mp.MediaPipeDriveFootRotation"), 0);
+
+	Result->SetBoolField(TEXT("avatar_authoritative"), true);
+	Result->SetStringField(
+		TEXT("policy"),
+		TEXT("avatar_locked_visible_full_body_calibration_write_policy_no_avatar_scaling_or_deformation"));
+	Result->SetNumberField(TEXT("mp.BodyFusion.Enable"), BodyFusionEnable);
+	Result->SetNumberField(TEXT("mp.BodyFusion.WritePose"), BodyFusionWritePose);
+	Result->SetNumberField(TEXT("mp.BodyFusion.MediaPipeAuthority"), BodyFusionMediaPipeAuthority);
+	Result->SetNumberField(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"), BodyFusionFullBodyMediaPipeAuthority);
+	Result->SetNumberField(TEXT("mp.MediaPipeDriveSpine"), DriveSpine);
+	Result->SetNumberField(TEXT("mp.MediaPipeDrivePelvisTranslation"), DrivePelvisTranslation);
+	Result->SetNumberField(TEXT("mp.MediaPipeDriveLegs"), DriveLegs);
+	Result->SetNumberField(TEXT("mp.MediaPipeUseLegIK"), UseLegIK);
+	Result->SetNumberField(TEXT("mp.MediaPipeUseLegIKFootPlant"), UseLegIKFootPlant);
+	Result->SetNumberField(TEXT("mp.MediaPipeDriveFootRotation"), DriveFootRotation);
+	Result->SetBoolField(TEXT("torso_output_policy_constrained"),
+		DriveSpine == 0 || (BodyFusionEnable != 0 && (BodyFusionWritePose == 0 || BodyFusionMediaPipeAuthority == 0)));
+	Result->SetBoolField(TEXT("hips_output_policy_constrained"),
+		DrivePelvisTranslation == 0 || BodyFusionWritePose == 0 || BodyFusionFullBodyMediaPipeAuthority == 0);
+	Result->SetBoolField(TEXT("legs_output_policy_constrained"),
+		DriveLegs == 0 || BodyFusionWritePose == 0 || BodyFusionFullBodyMediaPipeAuthority == 0);
+	const bool bHasFootOutputPolicy =
+		(UseLegIK != 0 && UseLegIKFootPlant != 0) ||
+		DriveFootRotation != 0;
+	Result->SetBoolField(TEXT("feet_output_policy_constrained"),
+		DriveLegs == 0 || !bHasFootOutputPolicy || BodyFusionWritePose == 0 ||
+		BodyFusionFullBodyMediaPipeAuthority == 0);
+	return Result;
+}
+
+void SetConsoleVariableForTrackingDataset(const TCHAR* Name, const int32 Value)
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		Variable->Set(Value, ECVF_SetByConsole);
+	}
+}
+
+void SuppressTrackingFusionDatasetDiagnosticLogCVars()
+{
+	if (!GTrackingFusionDatasetHasSuppressedDiagnosticLogCVars)
+	{
+		GTrackingFusionDatasetSuppressedDiagnosticLogCVarSnapshot =
+			FMediaPipeTrackingFusionDataset::SnapshotCVars(
+				FMediaPipeTrackingFusionDataset::GetHighVolumeDiagnosticLogCVarNames());
+		GTrackingFusionDatasetHasSuppressedDiagnosticLogCVars = true;
+	}
+	FMediaPipeTrackingFusionDataset::SuppressHighVolumeDiagnosticLogCVarsForCapture();
+}
+
+void RestoreTrackingFusionDatasetDiagnosticLogCVars()
+{
+	if (!GTrackingFusionDatasetHasSuppressedDiagnosticLogCVars)
+	{
+		return;
+	}
+
+	FMediaPipeTrackingFusionDataset::RestoreCVars(GTrackingFusionDatasetSuppressedDiagnosticLogCVarSnapshot);
+	GTrackingFusionDatasetSuppressedDiagnosticLogCVarSnapshot.Reset();
+	GTrackingFusionDatasetHasSuppressedDiagnosticLogCVars = false;
+}
+
+void ApplyTrackingFusionDatasetCaptureCVars()
+{
+	SuppressTrackingFusionDatasetDiagnosticLogCVars();
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.Enable"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.Debug"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.QuestHandTracking"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.QuestHandDriveFingerBones"), 1);
+	if (IsAvatarLockedSyncCalibrationPhasePreset(CVarRecordTrackingFusionDatasetPhasePreset.GetValueOnAnyThread()))
+	{
+		SetConsoleVariableForTrackingDataset(TEXT("mp.QuestWristCalibrationHud"), 0);
+		SetConsoleVariableForTrackingDataset(TEXT("mp.QuestArmLengthCalibrationHud"), 0);
+		SetConsoleVariableForTrackingDataset(TEXT("mp.QuestArmLengthCalibrationStartup"), 0);
+	}
+	FMediaPipeTrackingFusionDataset::DisableArmFallbackCVarsForCapture();
+}
+
+void ApplyAvatarLockedSyncCalibrationVisiblePolicy()
+{
+	if (!GAvatarLockedCalibrationHasPolicyCVarSnapshot)
+	{
+		GAvatarLockedCalibrationPolicyCVarSnapshot =
+			FMediaPipeTrackingFusionDataset::SnapshotCVars(AvatarLockedCalibrationPolicyCVarNames());
+		GAvatarLockedCalibrationHasPolicyCVarSnapshot = true;
+	}
+
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.Enable"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.Debug"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.WritePose"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.MediaPipeAuthority"), 2);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeDriveSpine"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeDrivePelvisTranslation"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeDriveLegs"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeUseLegIK"), 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeUseLegIKFootPlant"), 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeUseFkRootGrounding"), 1);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.MediaPipeDriveFootRotation"), 1);
+}
+
+void RestoreAvatarLockedSyncCalibrationVisiblePolicy()
+{
+	if (!GAvatarLockedCalibrationHasPolicyCVarSnapshot)
+	{
+		return;
+	}
+
+	FMediaPipeTrackingFusionDataset::RestoreCVars(GAvatarLockedCalibrationPolicyCVarSnapshot);
+	GAvatarLockedCalibrationPolicyCVarSnapshot.Reset();
+	GAvatarLockedCalibrationHasPolicyCVarSnapshot = false;
+}
+
+void DisplayTrackingFusionDatasetHud(UWorld* World, const double ElapsedSeconds, const double DurationSeconds)
+{
+	if (!World || !GTrackingFusionDatasetRecorder.bActive)
+	{
+		return;
+	}
+
+	FString Prompt = TEXT("Dataset routine complete.");
+	FColor Color = FColor::Cyan;
+	FString State = TEXT("complete");
+	int32 PhaseIndex = INDEX_NONE;
+	FString PhaseName(TEXT("complete"));
+	const bool bAvatarLockedCalibration =
+		IsAvatarLockedSyncCalibrationPhasePreset(GTrackingFusionDatasetRecorder.PhasePreset);
+	if (const FMediaPipeTrackingFusionDatasetPhase* SettlePhase =
+		FMediaPipeTrackingFusionDataset::FindSettlePhaseAtElapsedSeconds(GTrackingFusionDatasetRecorder.Phases, ElapsedSeconds))
+	{
+		const double Remaining = FMath::Max(0.0, SettlePhase->SettleEndTimeSeconds - ElapsedSeconds);
+		Prompt = FString::Printf(TEXT("Settle neutral  %.1fs"), Remaining);
+		Color = FColor::Yellow;
+		State = TEXT("neutral_settle");
+		PhaseIndex = SettlePhase->PhaseIndex;
+		PhaseName = SettlePhase->PhaseName;
+	}
+	else if (const FMediaPipeTrackingFusionDatasetPhase* Phase =
+		FMediaPipeTrackingFusionDataset::FindMovementPhaseAtElapsedSeconds(GTrackingFusionDatasetRecorder.Phases, ElapsedSeconds))
+	{
+		const double Remaining = FMath::Max(0.0, Phase->EndTimeSeconds - ElapsedSeconds);
+		if (bAvatarLockedCalibration)
+		{
+			Prompt = FString::Printf(TEXT("AVATAR SYNC CALIBRATION\nBlock %02d/%02d  %s  %.0fs left\n%s"),
+				Phase->PhaseIndex + 1,
+				GTrackingFusionDatasetRecorder.Phases.Num(),
+				*Phase->Region.ToUpper(),
+				Remaining,
+				*Phase->Prompt);
+			Color = FColor::Green;
+		}
+		else
+		{
+			Prompt = FString::Printf(TEXT("%02d/%02d  %s  %.1fs"),
+				Phase->PhaseIndex + 1,
+				GTrackingFusionDatasetRecorder.Phases.Num(),
+				*Phase->Prompt,
+				Remaining);
+		}
+		State = TEXT("movement");
+		PhaseIndex = Phase->PhaseIndex;
+		PhaseName = Phase->PhaseName;
+	}
+
+	if (bAvatarLockedCalibration &&
+		(GTrackingFusionDatasetRecorder.LastLoggedPromptPhaseIndex != PhaseIndex ||
+		 !GTrackingFusionDatasetRecorder.LastLoggedPromptState.Equals(State, ESearchCase::CaseSensitive)))
+	{
+		GTrackingFusionDatasetRecorder.LastLoggedPromptPhaseIndex = PhaseIndex;
+		GTrackingFusionDatasetRecorder.LastLoggedPromptState = State;
+		UE_LOG(
+			LogMediaPipePose,
+			Log,
+			TEXT("mp.AvatarLockedSyncCalibrationCapture.Phase: state=%s block=%d/%d name=%s prompt=\"%s\" elapsed=%.1f duration=%.1f color=green"),
+			*State,
+			PhaseIndex + 1,
+			GTrackingFusionDatasetRecorder.Phases.Num(),
+			*PhaseName,
+			*Prompt.Replace(TEXT("\n"), TEXT(" | ")),
+			ElapsedSeconds,
+			DurationSeconds);
+	}
+
+	Prompt += FString::Printf(TEXT("\nRecording %s  %.1f/%.1fs"),
+		*GTrackingFusionDatasetRecorder.Label,
+		ElapsedSeconds,
+		DurationSeconds);
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(909240, 0.20f, Color, Prompt);
+	}
+
+	if (APlayerController* PlayerController = World->GetFirstPlayerController())
+	{
+		FVector ViewLocation = FVector::ZeroVector;
+		FRotator ViewRotation = FRotator::ZeroRotator;
+		PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
+		const FVector TextLocation =
+			ViewLocation +
+			ViewRotation.Vector() * 180.0f +
+			ViewRotation.Quaternion().GetUpVector() * -22.0f;
+		DrawDebugString(World, TextLocation, Prompt, nullptr, Color, 0.05f, true, 1.5f);
+	}
+}
+
+void AnalyzeTrackingFusionDataset(const FString& JsonPath, const FString& AnalyzerPathOverride = FString());
+
+bool SaveJsonStringToFileUtf8(const FString& Json, const FString& OutputPath)
+{
+	TUniquePtr<FArchive> File(IFileManager::Get().CreateFileWriter(*OutputPath));
+	if (!File)
+	{
+		return false;
+	}
+
+	FTCHARToUTF8 Utf8(*Json);
+	if (Utf8.Length() > 0)
+	{
+		File->Serialize(const_cast<ANSICHAR*>(Utf8.Get()), Utf8.Length());
+	}
+	File->Close();
+	return !File->IsError();
+}
+
+bool WriteUtf8ToArchive(FArchive* Archive, const FString& Text, int64* OutBytesWritten = nullptr)
+{
+	if (!Archive)
+	{
+		return false;
+	}
+
+	FTCHARToUTF8 Utf8(*Text);
+	const int64 BytesToWrite = Utf8.Length();
+	if (BytesToWrite > 0)
+	{
+		Archive->Serialize(const_cast<ANSICHAR*>(Utf8.Get()), BytesToWrite);
+	}
+	if (OutBytesWritten)
+	{
+		*OutBytesWritten = BytesToWrite;
+	}
+	return !Archive->IsError();
+}
+
+FString TrackingFusionDatasetSampleChunkPath(const int32 ChunkIndex)
+{
+	const FString Directory = FPaths::GetPath(GTrackingFusionDatasetRecorder.OutputPath);
+	const FString BaseName = FPaths::GetBaseFilename(GTrackingFusionDatasetRecorder.OutputPath);
+	return FPaths::Combine(
+		Directory,
+		FString::Printf(TEXT("%s_samples_%03d.jsonl"), *BaseName, ChunkIndex));
+}
+
+FString TrackingFusionDatasetBoneBinaryChunkPath(const int32 ChunkIndex)
+{
+	const FString Directory = FPaths::GetPath(GTrackingFusionDatasetRecorder.OutputPath);
+	const FString BaseName = FPaths::GetBaseFilename(GTrackingFusionDatasetRecorder.OutputPath);
+	return FPaths::Combine(
+		Directory,
+		FString::Printf(TEXT("%s_bones_%03d.bin"), *BaseName, ChunkIndex));
+}
+
+void CloseTrackingFusionDatasetSampleChunk()
+{
+	if (GTrackingFusionDatasetRecorder.SampleArchive)
+	{
+		const double CloseStartSeconds = FPlatformTime::Seconds();
+		GTrackingFusionDatasetRecorder.SampleArchive->Close();
+		GTrackingFusionDatasetRecorder.FileFlushTotalSeconds +=
+			FMath::Max(0.0, FPlatformTime::Seconds() - CloseStartSeconds);
+		delete GTrackingFusionDatasetRecorder.SampleArchive;
+		GTrackingFusionDatasetRecorder.SampleArchive = nullptr;
+	}
+}
+
+void CloseTrackingFusionDatasetBoneBinaryChunk()
+{
+	if (GTrackingFusionDatasetRecorder.BoneBinaryArchive)
+	{
+		const double CloseStartSeconds = FPlatformTime::Seconds();
+		GTrackingFusionDatasetRecorder.BoneBinaryArchive->Close();
+		GTrackingFusionDatasetRecorder.FileFlushTotalSeconds +=
+			FMath::Max(0.0, FPlatformTime::Seconds() - CloseStartSeconds);
+		delete GTrackingFusionDatasetRecorder.BoneBinaryArchive;
+		GTrackingFusionDatasetRecorder.BoneBinaryArchive = nullptr;
+	}
+}
+
+bool OpenTrackingFusionDatasetSampleChunk()
+{
+	CloseTrackingFusionDatasetSampleChunk();
+	++GTrackingFusionDatasetRecorder.CurrentSampleChunkIndex;
+	GTrackingFusionDatasetRecorder.CurrentSampleChunkBytes = 0;
+
+	const FString ChunkPath = TrackingFusionDatasetSampleChunkPath(GTrackingFusionDatasetRecorder.CurrentSampleChunkIndex);
+	const FString Directory = FPaths::GetPath(ChunkPath);
+	if (!Directory.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*Directory, true);
+	}
+
+	GTrackingFusionDatasetRecorder.SampleArchive = IFileManager::Get().CreateFileWriter(*ChunkPath);
+	if (!GTrackingFusionDatasetRecorder.SampleArchive)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed to open sample chunk %s."), *ChunkPath);
+		return false;
+	}
+
+	GTrackingFusionDatasetRecorder.SampleChunkPaths.Add(ChunkPath);
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordTrackingFusionDataset: opened sample chunk index=%d path=%s maxBytes=%lld"),
+		GTrackingFusionDatasetRecorder.CurrentSampleChunkIndex,
+		*ChunkPath,
+		GTrackingFusionDatasetRecorder.MaxSampleChunkBytes);
+	return true;
+}
+
+bool OpenTrackingFusionDatasetBoneBinaryChunk(const int32 FirstSampleIndex)
+{
+	CloseTrackingFusionDatasetBoneBinaryChunk();
+	++GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex;
+	GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes = 0;
+
+	const FString ChunkPath = TrackingFusionDatasetBoneBinaryChunkPath(GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex);
+	const FString Directory = FPaths::GetPath(ChunkPath);
+	if (!Directory.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*Directory, true);
+	}
+
+	GTrackingFusionDatasetRecorder.BoneBinaryArchive = IFileManager::Get().CreateFileWriter(*ChunkPath);
+	if (!GTrackingFusionDatasetRecorder.BoneBinaryArchive)
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed to open bone binary chunk %s."), *ChunkPath);
+		return false;
+	}
+
+	FTrackingFusionDatasetBoneBinaryChunk Chunk;
+	Chunk.Path = ChunkPath;
+	Chunk.FirstSampleIndex = FirstSampleIndex;
+	GTrackingFusionDatasetBoneBinaryChunks.Add(MoveTemp(Chunk));
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordTrackingFusionDataset: opened bone binary chunk index=%d path=%s maxBytes=%lld"),
+		GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex,
+		*ChunkPath,
+		GTrackingFusionDatasetRecorder.MaxSampleChunkBytes);
+	return true;
+}
+
+bool AppendTrackingFusionDatasetSample(const TSharedRef<FJsonObject>& Sample)
+{
+	FString Line;
+	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+		TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Line);
+	if (!FJsonSerializer::Serialize(Sample, Writer))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed to serialize sample %d."), GTrackingFusionDatasetRecorder.SampleCount);
+		return false;
+	}
+	Line.AppendChar(TEXT('\n'));
+
+	FTCHARToUTF8 Utf8(*Line);
+	const int64 LineBytes = Utf8.Length();
+	if (!GTrackingFusionDatasetRecorder.SampleArchive ||
+		(GTrackingFusionDatasetRecorder.CurrentSampleChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.MaxSampleChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.CurrentSampleChunkBytes + LineBytes > GTrackingFusionDatasetRecorder.MaxSampleChunkBytes))
+	{
+		if (!OpenTrackingFusionDatasetSampleChunk())
+		{
+			return false;
+		}
+	}
+
+	if (LineBytes > 0)
+	{
+		GTrackingFusionDatasetRecorder.SampleArchive->Serialize(const_cast<ANSICHAR*>(Utf8.Get()), LineBytes);
+	}
+	if (GTrackingFusionDatasetRecorder.SampleArchive->IsError())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed while writing sample chunk index=%d."), GTrackingFusionDatasetRecorder.CurrentSampleChunkIndex);
+		return false;
+	}
+	GTrackingFusionDatasetRecorder.CurrentSampleChunkBytes += LineBytes;
+	return true;
+}
+
+void AppendTransformFloat32(TArray<float>& Values, const FTransform& Transform)
+{
+	const FVector Location = Transform.GetLocation();
+	const FQuat Rotation = Transform.GetRotation();
+	const FVector Scale = Transform.GetScale3D();
+	Values.Add(static_cast<float>(Location.X));
+	Values.Add(static_cast<float>(Location.Y));
+	Values.Add(static_cast<float>(Location.Z));
+	Values.Add(static_cast<float>(Rotation.X));
+	Values.Add(static_cast<float>(Rotation.Y));
+	Values.Add(static_cast<float>(Rotation.Z));
+	Values.Add(static_cast<float>(Rotation.W));
+	Values.Add(static_cast<float>(Scale.X));
+	Values.Add(static_cast<float>(Scale.Y));
+	Values.Add(static_cast<float>(Scale.Z));
+}
+
+bool AppendTrackingFusionDatasetBoneBinarySample(const TArray<float>& Values)
+{
+	const int64 LineBytes = static_cast<int64>(Values.Num()) * static_cast<int64>(sizeof(float));
+	if (!GTrackingFusionDatasetRecorder.BoneBinaryArchive ||
+		(GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.MaxSampleChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes + LineBytes > GTrackingFusionDatasetRecorder.MaxSampleChunkBytes))
+	{
+		if (!OpenTrackingFusionDatasetBoneBinaryChunk(GTrackingFusionDatasetRecorder.SampleCount))
+		{
+			return false;
+		}
+	}
+
+	if (LineBytes > 0)
+	{
+		const uint8* Bytes = reinterpret_cast<const uint8*>(Values.GetData());
+		GTrackingFusionDatasetRecorder.BoneBinaryArchive->Serialize(
+			const_cast<uint8*>(Bytes),
+			LineBytes);
+	}
+	if (GTrackingFusionDatasetRecorder.BoneBinaryArchive->IsError())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed while writing bone binary chunk index=%d."), GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex);
+		return false;
+	}
+
+	GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes += LineBytes;
+	if (GTrackingFusionDatasetBoneBinaryChunks.Num() > 0)
+	{
+		FTrackingFusionDatasetBoneBinaryChunk& Chunk = GTrackingFusionDatasetBoneBinaryChunks.Last();
+		++Chunk.SampleCount;
+		Chunk.Bytes += LineBytes;
+	}
+	return true;
+}
+
+TSharedRef<FJsonObject> JsonTrackingFusionDatasetSampleRecord(const FTrackingFusionDatasetSampleRecord& Record)
+{
+	TSharedRef<FJsonObject> Sample = MakeShared<FJsonObject>();
+	Sample->SetNumberField(TEXT("frame_number"), static_cast<double>(Record.FrameNumber));
+	Sample->SetNumberField(TEXT("t"), Record.ElapsedSeconds);
+	Sample->SetNumberField(TEXT("wall_t"), Record.ElapsedSeconds);
+	Sample->SetNumberField(TEXT("scheduled_t"), Record.ScheduledElapsedSeconds);
+	Sample->SetNumberField(TEXT("schedule_late_seconds"), Record.ScheduleLateSeconds);
+	Sample->SetNumberField(TEXT("missed_scheduled_samples_this_tick"), static_cast<double>(Record.MissedScheduledSamplesThisTick));
+	Sample->SetNumberField(TEXT("sample_wall_seconds"), Record.SampleWallSeconds);
+	Sample->SetNumberField(TEXT("delta_time"), Record.DeltaSeconds);
+	Sample->SetNumberField(TEXT("delta"), Record.DeltaSeconds);
+	Sample->SetObjectField(TEXT("phase"), JsonCurrentDatasetPhase(Record.ElapsedSeconds));
+
+	if (Record.bHasRawMediaPipeFrame)
+	{
+		Sample->SetObjectField(TEXT("raw_mediapipe"), JsonRawMediaPipeFrame(Record.RawMediaPipeFrame));
+	}
+	if (Record.bHasPosePipelineStats)
+	{
+		TSharedRef<FJsonObject> PipelineObject = MakeShared<FJsonObject>();
+		PipelineObject->SetNumberField(TEXT("component_process_calls"), static_cast<double>(Record.PosePipelineStats.ComponentProcessCalls));
+		PipelineObject->SetNumberField(TEXT("tracker_publish_count"), static_cast<double>(Record.PosePipelineStats.TrackerPublishCount));
+		PipelineObject->SetNumberField(TEXT("worker_process_count"), static_cast<double>(Record.PosePipelineStats.WorkerProcessCount));
+		PipelineObject->SetNumberField(TEXT("worker_process_fail_count"), static_cast<double>(Record.PosePipelineStats.WorkerProcessFailCount));
+		PipelineObject->SetNumberField(TEXT("worker_landmark_fail_count"), static_cast<double>(Record.PosePipelineStats.WorkerLandmarkFailCount));
+		PipelineObject->SetNumberField(TEXT("last_media_time_seconds"), Record.PosePipelineStats.LastMediaTimeSeconds);
+		PipelineObject->SetNumberField(TEXT("last_media_frame_rate"), Record.PosePipelineStats.LastMediaFrameRate);
+		Sample->SetObjectField(TEXT("mediapipe_pipeline"), PipelineObject);
+	}
+
+	if (Record.bHasFusionFrame)
+	{
+		Sample->SetObjectField(TEXT("fusion"), JsonEmbodiedFusionFrame(Record.FusionFrame));
+		TSharedRef<FJsonObject> RawQuest = MakeShared<FJsonObject>();
+		RawQuest->SetStringField(TEXT("note"), TEXT("Quest/OpenXR observations recorded from the fusion source frame and best-available hand joints; radii are not exposed through this frame."));
+		RawQuest->SetBoolField(TEXT("radii_available"), false);
+		RawQuest->SetObjectField(TEXT("source_frame"), JsonTrackingSourceFrame(Record.FusionFrame.SourceFrame));
+		RawQuest->SetObjectField(TEXT("best_available"), JsonBestAvailablePose(Record.FusionFrame.BestAvailablePose));
+		Sample->SetObjectField(TEXT("raw_quest"), RawQuest);
+	}
+
+	TSharedRef<FJsonObject> Target = MakeShared<FJsonObject>();
+	Target->SetStringField(TEXT("actor_path"), GTrackingFusionDatasetRecorder.ActorPath);
+	Target->SetStringField(TEXT("actor_label"), Record.ActorLabel);
+	Target->SetStringField(TEXT("component_path"), GTrackingFusionDatasetRecorder.ComponentPath);
+	Target->SetStringField(TEXT("component_class"), GTrackingFusionDatasetRecorder.ComponentClassPath);
+	Target->SetStringField(TEXT("skeletal_mesh"), GTrackingFusionDatasetRecorder.SkeletalMeshPath);
+	Target->SetStringField(TEXT("anim_class"), GTrackingFusionDatasetRecorder.AnimClassPath);
+	Target->SetArrayField(TEXT("actor_loc"), JsonVector(Record.ActorLocation));
+	Target->SetArrayField(TEXT("actor_rot"), JsonRotator(Record.ActorRotation));
+	Sample->SetObjectField(TEXT("target"), Target);
+
+	TSharedRef<FJsonObject> RetargetOutput = MakeShared<FJsonObject>();
+	RetargetOutput->SetStringField(TEXT("space"), TEXT("component_local_world_indexed_binary"));
+	RetargetOutput->SetStringField(TEXT("bone_order"), TEXT("bone_selection.recorded"));
+	RetargetOutput->SetStringField(TEXT("bone_sample_storage"), TEXT("float32_binary_chunks"));
+	RetargetOutput->SetNumberField(TEXT("bone_sample_index"), Record.SampleIndex);
+	Sample->SetObjectField(TEXT("retarget_output"), RetargetOutput);
+	Sample->SetObjectField(TEXT("residuals"), JsonDatasetResiduals(Record.Residuals));
+	return Sample;
+}
+
+bool WriteTrackingFusionDatasetSampleSidecars()
+{
+	const double WriteStartSeconds = FPlatformTime::Seconds();
+	CloseTrackingFusionDatasetSampleChunk();
+	GTrackingFusionDatasetRecorder.SampleChunkPaths.Reset();
+	GTrackingFusionDatasetRecorder.CurrentSampleChunkIndex = -1;
+	GTrackingFusionDatasetRecorder.CurrentSampleChunkBytes = 0;
+
+	for (const FTrackingFusionDatasetSampleRecord& Record : GTrackingFusionDatasetRecorder.Samples)
+	{
+		if (!AppendTrackingFusionDatasetSample(JsonTrackingFusionDatasetSampleRecord(Record)))
+		{
+			CloseTrackingFusionDatasetSampleChunk();
+			GTrackingFusionDatasetRecorder.SampleSidecarWriteSeconds +=
+				FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+			return false;
+		}
+	}
+
+	CloseTrackingFusionDatasetSampleChunk();
+	GTrackingFusionDatasetRecorder.SampleSidecarWriteSeconds +=
+		FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+	return true;
+}
+
+bool AppendTrackingFusionDatasetBoneBinarySamplePostCapture(
+	const float* Values,
+	const int32 ValueCount,
+	const int32 SampleIndex)
+{
+	const int64 SampleBytes = static_cast<int64>(ValueCount) * static_cast<int64>(sizeof(float));
+	if (SampleBytes < 0)
+	{
+		return false;
+	}
+	if (!GTrackingFusionDatasetRecorder.BoneBinaryArchive ||
+		(GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.MaxSampleChunkBytes > 0 &&
+		 GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes + SampleBytes > GTrackingFusionDatasetRecorder.MaxSampleChunkBytes))
+	{
+		if (!OpenTrackingFusionDatasetBoneBinaryChunk(SampleIndex))
+		{
+			return false;
+		}
+	}
+
+	if (SampleBytes > 0)
+	{
+		const uint8* Bytes = reinterpret_cast<const uint8*>(Values);
+		GTrackingFusionDatasetRecorder.BoneBinaryArchive->Serialize(
+			const_cast<uint8*>(Bytes),
+			SampleBytes);
+	}
+	if (GTrackingFusionDatasetRecorder.BoneBinaryArchive->IsError())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed while writing post-capture bone binary chunk index=%d."), GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex);
+		return false;
+	}
+
+	GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes += SampleBytes;
+	if (GTrackingFusionDatasetBoneBinaryChunks.Num() > 0)
+	{
+		FTrackingFusionDatasetBoneBinaryChunk& Chunk = GTrackingFusionDatasetBoneBinaryChunks.Last();
+		++Chunk.SampleCount;
+		Chunk.Bytes += SampleBytes;
+	}
+	return true;
+}
+
+bool WriteTrackingFusionDatasetBoneBinarySidecars()
+{
+	const double WriteStartSeconds = FPlatformTime::Seconds();
+	CloseTrackingFusionDatasetBoneBinaryChunk();
+	GTrackingFusionDatasetBoneBinaryChunks.Reset();
+	GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkIndex = -1;
+	GTrackingFusionDatasetRecorder.CurrentBoneBinaryChunkBytes = 0;
+
+	const int32 FloatsPerSample = GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num() * 33;
+	if (GTrackingFusionDatasetRecorder.Samples.Num() == 0 || FloatsPerSample <= 0)
+	{
+		GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds +=
+			FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+		return true;
+	}
+
+	const int64 RequiredFloatCount =
+		static_cast<int64>(GTrackingFusionDatasetRecorder.Samples.Num()) * static_cast<int64>(FloatsPerSample);
+	if (RequiredFloatCount > GTrackingFusionDatasetRecorder.BoneSampleFloats.Num())
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Warning,
+			TEXT("mp.RecordTrackingFusionDataset: bone sample buffer is incomplete samples=%d floatsPerSample=%d requiredFloats=%lld actualFloats=%d."),
+			GTrackingFusionDatasetRecorder.Samples.Num(),
+			FloatsPerSample,
+			RequiredFloatCount,
+			GTrackingFusionDatasetRecorder.BoneSampleFloats.Num());
+		GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds +=
+			FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+		return false;
+	}
+
+	const float* BaseValues = GTrackingFusionDatasetRecorder.BoneSampleFloats.GetData();
+	for (int32 SampleIndex = 0; SampleIndex < GTrackingFusionDatasetRecorder.Samples.Num(); ++SampleIndex)
+	{
+		const float* SampleValues = BaseValues + (static_cast<int64>(SampleIndex) * static_cast<int64>(FloatsPerSample));
+		if (!AppendTrackingFusionDatasetBoneBinarySamplePostCapture(SampleValues, FloatsPerSample, SampleIndex))
+		{
+			CloseTrackingFusionDatasetBoneBinaryChunk();
+			GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds +=
+				FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+			return false;
+		}
+	}
+
+	CloseTrackingFusionDatasetBoneBinaryChunk();
+	GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds +=
+		FMath::Max(0.0, FPlatformTime::Seconds() - WriteStartSeconds);
+	return true;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonSampleChunkFiles()
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(GTrackingFusionDatasetRecorder.SampleChunkPaths.Num());
+	const FString ManifestDirectory = FPaths::GetPath(GTrackingFusionDatasetRecorder.OutputPath);
+	for (const FString& ChunkPath : GTrackingFusionDatasetRecorder.SampleChunkPaths)
+	{
+		TSharedRef<FJsonObject> Chunk = MakeShared<FJsonObject>();
+		const FString RelativePath = FPaths::IsUnderDirectory(ChunkPath, ManifestDirectory)
+			? ChunkPath.RightChop(ManifestDirectory.Len() + 1)
+			: ChunkPath;
+		Chunk->SetStringField(TEXT("path"), ChunkPath);
+		Chunk->SetStringField(TEXT("relative_path"), RelativePath);
+		Result.Add(MakeShared<FJsonValueObject>(Chunk));
+	}
+	return Result;
+}
+
+TArray<TSharedPtr<FJsonValue>> JsonBoneBinaryChunkFiles()
+{
+	TArray<TSharedPtr<FJsonValue>> Result;
+	Result.Reserve(GTrackingFusionDatasetBoneBinaryChunks.Num());
+	const FString ManifestDirectory = FPaths::GetPath(GTrackingFusionDatasetRecorder.OutputPath);
+	for (const FTrackingFusionDatasetBoneBinaryChunk& BoneChunk : GTrackingFusionDatasetBoneBinaryChunks)
+	{
+		TSharedRef<FJsonObject> Chunk = MakeShared<FJsonObject>();
+		const FString RelativePath = FPaths::IsUnderDirectory(BoneChunk.Path, ManifestDirectory)
+			? BoneChunk.Path.RightChop(ManifestDirectory.Len() + 1)
+			: BoneChunk.Path;
+		Chunk->SetStringField(TEXT("path"), BoneChunk.Path);
+		Chunk->SetStringField(TEXT("relative_path"), RelativePath);
+		Chunk->SetNumberField(TEXT("first_sample_index"), BoneChunk.FirstSampleIndex);
+		Chunk->SetNumberField(TEXT("sample_count"), BoneChunk.SampleCount);
+		Chunk->SetNumberField(TEXT("bytes"), static_cast<double>(BoneChunk.Bytes));
+		Result.Add(MakeShared<FJsonValueObject>(Chunk));
+	}
+	return Result;
+}
+
+void WriteTrackingFusionDataset()
+{
+	const double WriteStartSeconds = FPlatformTime::Seconds();
+	const bool bSampleSidecarsWritten = WriteTrackingFusionDatasetSampleSidecars();
+	const bool bBoneSidecarsWritten = WriteTrackingFusionDatasetBoneBinarySidecars();
+	const bool bSidecarsWritten = bSampleSidecarsWritten && bBoneSidecarsWritten;
+
+	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("schema"), TEXT("tracking_fusion_dataset"));
+	Root->SetNumberField(TEXT("schema_version"), FMediaPipeTrackingFusionDataset::SchemaVersion);
+	Root->SetStringField(TEXT("status"), bSidecarsWritten ? TEXT("complete") : TEXT("sidecar_write_failed"));
+	Root->SetStringField(TEXT("label"), GTrackingFusionDatasetRecorder.Label);
+	Root->SetBoolField(TEXT("auto_started"), GTrackingFusionDatasetRecorder.bAutoStarted);
+	Root->SetNumberField(TEXT("auto_start_world_id"), static_cast<double>(GTrackingFusionDatasetRecorder.AutoStartWorldId));
+	Root->SetStringField(TEXT("start_utc"), GTrackingFusionDatasetRecorder.StartUtc);
+	Root->SetStringField(TEXT("end_utc"), UtcTimestampString());
+	Root->SetNumberField(TEXT("start_wall_seconds"), GTrackingFusionDatasetRecorder.StartSeconds);
+	Root->SetNumberField(TEXT("end_wall_seconds"), GTrackingFusionDatasetRecorder.EndSeconds);
+	Root->SetNumberField(TEXT("requested_duration_seconds"), GTrackingFusionDatasetRecorder.RequestedDurationSeconds);
+	Root->SetNumberField(TEXT("duration_seconds"), GTrackingFusionDatasetRecorder.DurationSeconds);
+	Root->SetNumberField(TEXT("actual_elapsed_seconds"), GTrackingFusionDatasetRecorder.ActualElapsedSeconds);
+	Root->SetNumberField(TEXT("sample_time_span_seconds"), GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds);
+	Root->SetNumberField(TEXT("sample_count"), GTrackingFusionDatasetRecorder.SampleCount);
+	Root->SetNumberField(TEXT("candidate_frame_count"), GTrackingFusionDatasetRecorder.CandidateFrameCount);
+	Root->SetNumberField(TEXT("skipped_frame_count"), GTrackingFusionDatasetRecorder.SkippedFrameCount);
+	Root->SetNumberField(TEXT("missed_scheduled_sample_count"), GTrackingFusionDatasetRecorder.MissedScheduledSampleCount);
+	Root->SetStringField(TEXT("end_reason"), GTrackingFusionDatasetRecorder.EndReason);
+
+	TSharedRef<FJsonObject> Project = MakeShared<FJsonObject>();
+	Project->SetStringField(TEXT("project_name"), FApp::GetProjectName());
+	Project->SetStringField(TEXT("project_dir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
+	Project->SetStringField(TEXT("map"), GTrackingFusionDatasetRecorder.MapPath);
+	Project->SetStringField(TEXT("expected_mpq_map"), TEXT("/Game/MetaHumanRooms/L_MetaHumanPreviewRoom_MPQSignalCompare_01"));
+	Root->SetObjectField(TEXT("project"), Project);
+
+	TSharedRef<FJsonObject> Target = MakeShared<FJsonObject>();
+	Target->SetStringField(TEXT("actor_path"), GTrackingFusionDatasetRecorder.ActorPath);
+	Target->SetStringField(TEXT("component_path"), GTrackingFusionDatasetRecorder.ComponentPath);
+	Target->SetStringField(TEXT("skeletal_mesh"), GTrackingFusionDatasetRecorder.SkeletalMeshPath);
+	Target->SetStringField(TEXT("anim_class"), GTrackingFusionDatasetRecorder.AnimClassPath);
+	Root->SetObjectField(TEXT("target"), Target);
+
+	TSharedRef<FJsonObject> CaptureSettings = MakeShared<FJsonObject>();
+	CaptureSettings->SetStringField(TEXT("output_path"), GTrackingFusionDatasetRecorder.OutputPath);
+	CaptureSettings->SetBoolField(TEXT("analyze_after_write"), GTrackingFusionDatasetRecorder.bAnalyzeAfterWrite);
+	CaptureSettings->SetNumberField(TEXT("sample_rate_hz"), GTrackingFusionDatasetRecorder.SampleRateHz);
+	CaptureSettings->SetNumberField(TEXT("sample_interval_seconds"), GTrackingFusionDatasetRecorder.SampleIntervalSeconds);
+	CaptureSettings->SetStringField(TEXT("sample_clock"), GTrackingFusionDatasetRecorder.SampleRateHz > KINDA_SMALL_NUMBER
+		? TEXT("fixed_schedule_latest_pose")
+		: TEXT("actor_tick"));
+	CaptureSettings->SetNumberField(TEXT("expected_sample_count"), GTrackingFusionDatasetRecorder.SampleRateHz > KINDA_SMALL_NUMBER
+		? FMath::FloorToInt(GTrackingFusionDatasetRecorder.DurationSeconds * GTrackingFusionDatasetRecorder.SampleRateHz) + 1
+		: 0);
+	CaptureSettings->SetNumberField(TEXT("effective_sample_rate_hz"),
+		GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds > KINDA_SMALL_NUMBER
+			? static_cast<double>(GTrackingFusionDatasetRecorder.SampleCount - 1) / GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds
+			: 0.0);
+	CaptureSettings->SetStringField(TEXT("bone_mode"), GTrackingFusionDatasetRecorder.BoneMode);
+	CaptureSettings->SetStringField(TEXT("phase_preset"), GTrackingFusionDatasetRecorder.PhasePreset);
+	CaptureSettings->SetStringField(TEXT("prompt_color"), GTrackingFusionDatasetRecorder.PromptColorName);
+	CaptureSettings->SetBoolField(
+		TEXT("calibration_debug_huds_suppressed"),
+		GTrackingFusionDatasetRecorder.bCalibrationDebugHudsSuppressedForCapture);
+	CaptureSettings->SetStringField(TEXT("sample_storage"), TEXT("post_capture_jsonl_chunks_with_float32_bone_sidecars"));
+	CaptureSettings->SetStringField(TEXT("hot_path_storage"), TEXT("in_memory_sample_records_and_flat_float32_bone_buffer"));
+	CaptureSettings->SetStringField(TEXT("bone_sample_storage"), TEXT("float32_binary_chunks"));
+	TSharedRef<FJsonObject> BoneSampleFormat = MakeShared<FJsonObject>();
+	BoneSampleFormat->SetStringField(TEXT("byte_order"), TEXT("little_endian"));
+	BoneSampleFormat->SetStringField(TEXT("bone_order"), TEXT("bone_selection.recorded"));
+	BoneSampleFormat->SetArrayField(TEXT("transform_fields"), JsonStringArray({
+		TEXT("component.loc.x"), TEXT("component.loc.y"), TEXT("component.loc.z"),
+		TEXT("component.quat.x"), TEXT("component.quat.y"), TEXT("component.quat.z"), TEXT("component.quat.w"),
+		TEXT("component.scale.x"), TEXT("component.scale.y"), TEXT("component.scale.z"),
+		TEXT("local.loc.x"), TEXT("local.loc.y"), TEXT("local.loc.z"),
+		TEXT("local.quat.x"), TEXT("local.quat.y"), TEXT("local.quat.z"), TEXT("local.quat.w"),
+		TEXT("local.scale.x"), TEXT("local.scale.y"), TEXT("local.scale.z"),
+		TEXT("world.loc.x"), TEXT("world.loc.y"), TEXT("world.loc.z"),
+		TEXT("world.quat.x"), TEXT("world.quat.y"), TEXT("world.quat.z"), TEXT("world.quat.w"),
+		TEXT("world.scale.x"), TEXT("world.scale.y"), TEXT("world.scale.z"),
+		TEXT("linear_speed_cm_s"),
+		TEXT("angular_speed_deg_s"),
+		TEXT("local_angular_speed_deg_s")
+	}));
+	BoneSampleFormat->SetNumberField(TEXT("floats_per_bone"), 33);
+	BoneSampleFormat->SetNumberField(TEXT("bytes_per_float"), static_cast<double>(sizeof(float)));
+	BoneSampleFormat->SetNumberField(TEXT("bytes_per_bone"), 33.0 * static_cast<double>(sizeof(float)));
+	BoneSampleFormat->SetNumberField(
+		TEXT("bytes_per_sample"),
+		static_cast<double>(GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num()) * 33.0 * static_cast<double>(sizeof(float)));
+	CaptureSettings->SetObjectField(TEXT("bone_sample_format"), BoneSampleFormat);
+	CaptureSettings->SetNumberField(TEXT("max_sample_chunk_bytes"), static_cast<double>(GTrackingFusionDatasetRecorder.MaxSampleChunkBytes));
+	CaptureSettings->SetNumberField(TEXT("sample_chunk_count"), GTrackingFusionDatasetRecorder.SampleChunkPaths.Num());
+	CaptureSettings->SetNumberField(TEXT("bone_sample_chunk_count"), GTrackingFusionDatasetBoneBinaryChunks.Num());
+	CaptureSettings->SetNumberField(TEXT("phase_count"), GTrackingFusionDatasetRecorder.Phases.Num());
+	CaptureSettings->SetBoolField(
+		TEXT("high_volume_diagnostic_logs_suppressed"),
+		GTrackingFusionDatasetRecorder.bHighVolumeDiagnosticLogsSuppressedForCapture);
+	CaptureSettings->SetNumberField(TEXT("settle_seconds"), FMediaPipeTrackingFusionDataset::DefaultSettleSeconds);
+	CaptureSettings->SetBoolField(TEXT("arm_fallbacks_disabled"), FMediaPipeTrackingFusionDataset::AreArmFallbackCVarsDisabled());
+	CaptureSettings->SetObjectField(TEXT("cvars"), JsonCaptureCVarSnapshot(GTrackingFusionDatasetRecorder.CaptureCVarSnapshot));
+	CaptureSettings->SetObjectField(TEXT("avatar_output_policy"), JsonAvatarOutputPolicySnapshot());
+
+	TSharedRef<FJsonObject> Timing = MakeShared<FJsonObject>();
+	Timing->SetStringField(TEXT("schema"), TEXT("tracking_fusion_recorder_timing_v1"));
+	Timing->SetNumberField(TEXT("scheduler_miss_count"), GTrackingFusionDatasetRecorder.MissedScheduledSampleCount);
+	Timing->SetNumberField(TEXT("skipped_tick_count"), GTrackingFusionDatasetRecorder.SkippedFrameCount);
+	Timing->SetNumberField(TEXT("sample_build_total_ms"), GTrackingFusionDatasetRecorder.SampleBuildTotalSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("sample_build_max_ms"), GTrackingFusionDatasetRecorder.SampleBuildMaxSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("sample_build_avg_ms"),
+		GTrackingFusionDatasetRecorder.SampleCount > 0
+			? (GTrackingFusionDatasetRecorder.SampleBuildTotalSeconds * 1000.0) / static_cast<double>(GTrackingFusionDatasetRecorder.SampleCount)
+			: 0.0);
+	Timing->SetNumberField(TEXT("bone_build_total_ms"), GTrackingFusionDatasetRecorder.BoneBuildTotalSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("bone_build_max_ms"), GTrackingFusionDatasetRecorder.BoneBuildMaxSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("bone_build_avg_ms"),
+		GTrackingFusionDatasetRecorder.SampleCount > 0
+			? (GTrackingFusionDatasetRecorder.BoneBuildTotalSeconds * 1000.0) / static_cast<double>(GTrackingFusionDatasetRecorder.SampleCount)
+			: 0.0);
+	Timing->SetNumberField(TEXT("enqueue_total_ms"), GTrackingFusionDatasetRecorder.EnqueueTotalSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("enqueue_max_ms"), GTrackingFusionDatasetRecorder.EnqueueMaxSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("schedule_decision_total_ms"), GTrackingFusionDatasetRecorder.ScheduleDecisionTotalSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("schedule_decision_max_ms"), GTrackingFusionDatasetRecorder.ScheduleDecisionMaxSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("async_writer_backlog_max_samples"), 0);
+	Timing->SetNumberField(TEXT("async_writer_backlog_end_samples"), 0);
+	Timing->SetStringField(TEXT("async_writer_policy"), TEXT("no_runtime_file_writer_post_capture_sidecar_flush"));
+	Timing->SetNumberField(TEXT("sample_sidecar_write_ms"), GTrackingFusionDatasetRecorder.SampleSidecarWriteSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("bone_sidecar_write_ms"), GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("file_flush_total_ms"), GTrackingFusionDatasetRecorder.FileFlushTotalSeconds * 1000.0);
+	Timing->SetNumberField(TEXT("analysis_post_capture_ms"), GTrackingFusionDatasetRecorder.AnalyzerSeconds * 1000.0);
+	CaptureSettings->SetObjectField(TEXT("recorder_timing"), Timing);
+	Root->SetObjectField(TEXT("capture_settings"), CaptureSettings);
+
+	TSharedRef<FJsonObject> Bones = MakeShared<FJsonObject>();
+	Bones->SetArrayField(TEXT("recorded"), JsonNameArray(GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones));
+	Bones->SetArrayField(TEXT("main"), JsonNameArray(GTrackingFusionDatasetRecorder.BoneSelection.MainBones));
+	Bones->SetArrayField(TEXT("helpers"), JsonNameArray(GTrackingFusionDatasetRecorder.BoneSelection.HelperBones));
+	Bones->SetArrayField(TEXT("fingers"), JsonNameArray(GTrackingFusionDatasetRecorder.BoneSelection.FingerBones));
+	Bones->SetArrayField(TEXT("other"), JsonNameArray(GTrackingFusionDatasetRecorder.BoneSelection.OtherBones));
+	Root->SetObjectField(TEXT("bone_selection"), Bones);
+	Root->SetArrayField(TEXT("bone_hierarchy"), GTrackingFusionDatasetRecorder.BoneHierarchy);
+
+	Root->SetArrayField(TEXT("movement_phases"), JsonDatasetPhaseMarkers(GTrackingFusionDatasetRecorder.Phases));
+	Root->SetArrayField(TEXT("sample_files"), JsonSampleChunkFiles());
+	Root->SetArrayField(TEXT("bone_sample_files"), JsonBoneBinaryChunkFiles());
+
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Json);
+	if (!FJsonSerializer::Serialize(Root, Writer))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed to serialize %d samples."), GTrackingFusionDatasetRecorder.SampleCount);
+		return;
+	}
+
+	const FString Directory = FPaths::GetPath(GTrackingFusionDatasetRecorder.OutputPath);
+	if (!Directory.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*Directory, true);
+	}
+	const double ManifestWriteStartSeconds = FPlatformTime::Seconds();
+	if (!SaveJsonStringToFileUtf8(Json, GTrackingFusionDatasetRecorder.OutputPath))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: failed to write %s."), *GTrackingFusionDatasetRecorder.OutputPath);
+		return;
+	}
+	GTrackingFusionDatasetRecorder.ManifestWriteSeconds +=
+		FMath::Max(0.0, FPlatformTime::Seconds() - ManifestWriteStartSeconds);
+
+	if (bSidecarsWritten)
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Log,
+			TEXT("mp.RecordTrackingFusionDataset: wrote %d/%d samples skipped=%d missedScheduled=%d sampleRate=%.3fHz boneMode=%s recordedBones=%d helperBones=%d otherBones=%d jsonChunks=%d boneChunks=%d sidecarsOk=1 requested=%.3fs actualElapsed=%.3fs sampleSpan=%.3fs reason=%s path=%s armFallbacksDisabled=%d sampleBuildAvgMs=%.3f boneBuildAvgMs=%.3f enqueueMaxMs=%.3f postCaptureWriteMs=%.3f flushMs=%.3f"),
+			GTrackingFusionDatasetRecorder.SampleCount,
+			GTrackingFusionDatasetRecorder.CandidateFrameCount,
+			GTrackingFusionDatasetRecorder.SkippedFrameCount,
+			GTrackingFusionDatasetRecorder.MissedScheduledSampleCount,
+			GTrackingFusionDatasetRecorder.SampleRateHz,
+			*GTrackingFusionDatasetRecorder.BoneMode,
+			GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num(),
+			GTrackingFusionDatasetRecorder.BoneSelection.HelperBones.Num(),
+			GTrackingFusionDatasetRecorder.BoneSelection.OtherBones.Num(),
+			GTrackingFusionDatasetRecorder.SampleChunkPaths.Num(),
+			GTrackingFusionDatasetBoneBinaryChunks.Num(),
+			GTrackingFusionDatasetRecorder.RequestedDurationSeconds,
+			GTrackingFusionDatasetRecorder.ActualElapsedSeconds,
+			GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds,
+			*GTrackingFusionDatasetRecorder.EndReason,
+			*GTrackingFusionDatasetRecorder.OutputPath,
+			FMediaPipeTrackingFusionDataset::AreArmFallbackCVarsDisabled() ? 1 : 0,
+			GTrackingFusionDatasetRecorder.SampleCount > 0
+				? (GTrackingFusionDatasetRecorder.SampleBuildTotalSeconds * 1000.0) / static_cast<double>(GTrackingFusionDatasetRecorder.SampleCount)
+				: 0.0,
+			GTrackingFusionDatasetRecorder.SampleCount > 0
+				? (GTrackingFusionDatasetRecorder.BoneBuildTotalSeconds * 1000.0) / static_cast<double>(GTrackingFusionDatasetRecorder.SampleCount)
+				: 0.0,
+			GTrackingFusionDatasetRecorder.EnqueueMaxSeconds * 1000.0,
+			(GTrackingFusionDatasetRecorder.SampleSidecarWriteSeconds + GTrackingFusionDatasetRecorder.BoneSidecarWriteSeconds + GTrackingFusionDatasetRecorder.ManifestWriteSeconds) * 1000.0,
+			GTrackingFusionDatasetRecorder.FileFlushTotalSeconds * 1000.0);
+	}
+	else
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Warning,
+			TEXT("mp.RecordTrackingFusionDataset: wrote %d/%d samples skipped=%d missedScheduled=%d sampleRate=%.3fHz boneMode=%s recordedBones=%d helperBones=%d otherBones=%d jsonChunks=%d boneChunks=%d sidecarsOk=0 requested=%.3fs actualElapsed=%.3fs sampleSpan=%.3fs reason=%s path=%s armFallbacksDisabled=%d"),
+			GTrackingFusionDatasetRecorder.SampleCount,
+			GTrackingFusionDatasetRecorder.CandidateFrameCount,
+			GTrackingFusionDatasetRecorder.SkippedFrameCount,
+			GTrackingFusionDatasetRecorder.MissedScheduledSampleCount,
+			GTrackingFusionDatasetRecorder.SampleRateHz,
+			*GTrackingFusionDatasetRecorder.BoneMode,
+			GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num(),
+			GTrackingFusionDatasetRecorder.BoneSelection.HelperBones.Num(),
+			GTrackingFusionDatasetRecorder.BoneSelection.OtherBones.Num(),
+			GTrackingFusionDatasetRecorder.SampleChunkPaths.Num(),
+			GTrackingFusionDatasetBoneBinaryChunks.Num(),
+			GTrackingFusionDatasetRecorder.RequestedDurationSeconds,
+			GTrackingFusionDatasetRecorder.ActualElapsedSeconds,
+			GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds,
+			*GTrackingFusionDatasetRecorder.EndReason,
+			*GTrackingFusionDatasetRecorder.OutputPath,
+			FMediaPipeTrackingFusionDataset::AreArmFallbackCVarsDisabled() ? 1 : 0);
+	}
+
+	if (GTrackingFusionDatasetRecorder.bAnalyzeAfterWrite && bSidecarsWritten)
+	{
+		const double AnalyzeStartSeconds = FPlatformTime::Seconds();
+		AnalyzeTrackingFusionDataset(
+			GTrackingFusionDatasetRecorder.OutputPath,
+			GTrackingFusionDatasetRecorder.AnalyzerPathOverride);
+		GTrackingFusionDatasetRecorder.AnalyzerSeconds +=
+			FMath::Max(0.0, FPlatformTime::Seconds() - AnalyzeStartSeconds);
+	}
+}
+
+void StopTrackingFusionDataset(const ETrackingFusionDatasetEndReason Reason = ETrackingFusionDatasetEndReason::ManualStop)
+{
+	if (!GTrackingFusionDatasetRecorder.bActive)
+	{
+		return;
+	}
+
+	GTrackingFusionDatasetRecorder.EndSeconds = FPlatformTime::Seconds();
+	GTrackingFusionDatasetRecorder.ActualElapsedSeconds = FMath::Max(
+		0.0,
+		GTrackingFusionDatasetRecorder.EndSeconds - GTrackingFusionDatasetRecorder.StartSeconds);
+	GTrackingFusionDatasetRecorder.SampleTimeSpanSeconds = GTrackingFusionDatasetRecorder.bHasSampleWallSeconds
+		? FMath::Max(0.0, GTrackingFusionDatasetRecorder.LastSampleWallSeconds - GTrackingFusionDatasetRecorder.FirstSampleWallSeconds)
+		: 0.0;
+	GTrackingFusionDatasetRecorder.EndReason = TrackingFusionDatasetEndReasonText(Reason);
+	GTrackingFusionDatasetRecorder.bActive = false;
+	WriteTrackingFusionDataset();
+	if (IsAvatarLockedSyncCalibrationPhasePreset(GTrackingFusionDatasetRecorder.PhasePreset))
+	{
+		RestoreAvatarLockedSyncCalibrationVisiblePolicy();
+	}
+	RestoreTrackingFusionDatasetDiagnosticLogCVars();
+}
+
+void StartTrackingFusionDatasetRecording(
+	const AMediaPipePoseDrivenSkeletalActor* Actor,
+	USkeletalMeshComponent* DrivenMesh,
+	const double RequestedDurationSeconds,
+	const FString& RawLabel,
+	const FString& RawOutputPath,
+	const bool bAutoStarted,
+	const uint32 AutoStartWorldId,
+	const bool bAnalyzeAfterWrite)
+{
+	if (!Actor || !DrivenMesh || !DrivenMesh->GetSkeletalMeshAsset())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: start failed because actor or driven mesh is missing."));
+		return;
+	}
+
+	if (GTrackingFusionDatasetRecorder.bActive)
+	{
+		StopTrackingFusionDataset(ETrackingFusionDatasetEndReason::ManualStop);
+	}
+
+	GTrackingFusionDatasetRecorder = FTrackingFusionDatasetRecorder();
+	GTrackingFusionDatasetBoneBinaryChunks.Reset();
+	ApplyTrackingFusionDatasetCaptureCVars();
+	GTrackingFusionDatasetRecorder.PhasePreset = NormalizeTrackingDatasetPhasePreset(
+		CVarRecordTrackingFusionDatasetPhasePreset.GetValueOnAnyThread());
+	const bool bAvatarLockedSyncCalibration =
+		IsAvatarLockedSyncCalibrationPhasePreset(GTrackingFusionDatasetRecorder.PhasePreset);
+	if (bAvatarLockedSyncCalibration)
+	{
+		ApplyAvatarLockedSyncCalibrationVisiblePolicy();
+	}
+	GTrackingFusionDatasetRecorder.bHighVolumeDiagnosticLogsSuppressedForCapture =
+		FMediaPipeTrackingFusionDataset::AreHighVolumeDiagnosticLogCVarsSuppressed();
+	GTrackingFusionDatasetRecorder.bCalibrationDebugHudsSuppressedForCapture =
+		bAvatarLockedSyncCalibration &&
+		(!IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestWristCalibrationHud")) ||
+		 IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestWristCalibrationHud"))->GetInt() == 0) &&
+		(!IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmLengthCalibrationHud")) ||
+		 IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmLengthCalibrationHud"))->GetInt() == 0);
+	GTrackingFusionDatasetRecorder.CaptureCVarSnapshot =
+		FMediaPipeTrackingFusionDataset::SnapshotCVars(TrackingFusionDatasetCaptureCVarNames());
+	GTrackingFusionDatasetRecorder.bActive = true;
+	GTrackingFusionDatasetRecorder.bAutoStarted = bAutoStarted;
+	GTrackingFusionDatasetRecorder.bAnalyzeAfterWrite = bAnalyzeAfterWrite;
+	GTrackingFusionDatasetRecorder.AutoStartWorldId = AutoStartWorldId;
+	GTrackingFusionDatasetRecorder.Label = FMediaPipeTrackingFusionDataset::SanitizeLabel(RawLabel);
+	GTrackingFusionDatasetRecorder.OutputPath = FMediaPipeTrackingFusionDataset::ResolveOutputPath(
+		RawOutputPath,
+		GTrackingFusionDatasetRecorder.Label);
+	GTrackingFusionDatasetRecorder.AnalyzerPathOverride = CVarRecordTrackingFusionDatasetAnalyzerPath.GetValueOnAnyThread();
+	GTrackingFusionDatasetRecorder.PromptColorName = bAvatarLockedSyncCalibration ? TEXT("green") : TEXT("cyan");
+	GTrackingFusionDatasetRecorder.BoneMode = bAvatarLockedSyncCalibration
+		? TEXT("all")
+		: NormalizeTrackingDatasetBoneMode(CVarRecordTrackingFusionDatasetBoneMode.GetValueOnAnyThread());
+	GTrackingFusionDatasetRecorder.StartUtc = UtcTimestampString();
+	GTrackingFusionDatasetRecorder.RequestedDurationSeconds = FMath::Clamp(RequestedDurationSeconds, 0.1, 240.0);
+	if (bAvatarLockedSyncCalibration)
+	{
+		FMediaPipeTrackingFusionDataset::BuildAvatarLockedSyncCalibrationPhases(
+			GTrackingFusionDatasetRecorder.Phases);
+	}
+	else
+	{
+		FMediaPipeTrackingFusionDataset::BuildDefaultMovementPhases(
+			GTrackingFusionDatasetRecorder.RequestedDurationSeconds,
+			GTrackingFusionDatasetRecorder.Phases);
+	}
+	GTrackingFusionDatasetRecorder.DurationSeconds = FMath::Max(
+		GTrackingFusionDatasetRecorder.RequestedDurationSeconds,
+		FMediaPipeTrackingFusionDataset::GetTimelineDurationSeconds(GTrackingFusionDatasetRecorder.Phases));
+	const double RequestedSampleRateHz = static_cast<double>(CVarRecordTrackingFusionDatasetSampleRate.GetValueOnAnyThread());
+	GTrackingFusionDatasetRecorder.SampleRateHz = bAvatarLockedSyncCalibration
+		? 30.0
+		: (RequestedSampleRateHz > 0.0
+		? FMath::Clamp(RequestedSampleRateHz, 1.0, 120.0)
+		: 0.0);
+	GTrackingFusionDatasetRecorder.SampleIntervalSeconds = GTrackingFusionDatasetRecorder.SampleRateHz > KINDA_SMALL_NUMBER
+		? 1.0 / GTrackingFusionDatasetRecorder.SampleRateHz
+		: 0.0;
+	const double ChunkMegabytes = static_cast<double>(CVarRecordTrackingFusionDatasetChunkMegabytes.GetValueOnAnyThread());
+	GTrackingFusionDatasetRecorder.MaxSampleChunkBytes =
+		static_cast<int64>(FMath::Clamp(ChunkMegabytes, 8.0, 1024.0) * 1024.0 * 1024.0);
+	GTrackingFusionDatasetRecorder.StartSeconds = FPlatformTime::Seconds();
+	GTrackingFusionDatasetRecorder.MapPath = ResolveWorldMapPath(Actor->GetWorld());
+	GTrackingFusionDatasetRecorder.ActorPath = Actor->GetPathName();
+	GTrackingFusionDatasetRecorder.ComponentPath = DrivenMesh->GetPathName();
+	GTrackingFusionDatasetRecorder.ComponentClassPath = DrivenMesh->GetClass()->GetPathName();
+	GTrackingFusionDatasetRecorder.SkeletalMeshPath = GetPathNameSafe(DrivenMesh->GetSkeletalMeshAsset());
+	GTrackingFusionDatasetRecorder.AnimClassPath = GetPathNameSafe(DrivenMesh->GetAnimClass());
+	if (GTrackingFusionDatasetRecorder.BoneMode == TEXT("all"))
+	{
+		FMediaPipeTrackingFusionDataset::DiscoverAllBones(
+			DrivenMesh->GetSkeletalMeshAsset(),
+			GTrackingFusionDatasetRecorder.BoneSelection);
+	}
+	else
+	{
+		FMediaPipeTrackingFusionDataset::DiscoverRecordedBones(
+			DrivenMesh->GetSkeletalMeshAsset(),
+			GTrackingFusionDatasetRecorder.BoneSelection);
+	}
+
+	if (GTrackingFusionDatasetRecorder.BoneMode == TEXT("selected"))
+	{
+		for (const TCHAR* BoneNameText : MannyRecorderBones)
+		{
+			const FName BoneName(BoneNameText);
+			if (DrivenMesh->GetBoneIndex(BoneName) != INDEX_NONE)
+			{
+				GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.AddUnique(BoneName);
+				if (FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(BoneName))
+				{
+					GTrackingFusionDatasetRecorder.BoneSelection.HelperBones.AddUnique(BoneName);
+				}
+				else if (FMediaPipeTrackingFusionDataset::IsFingerBoneName(BoneName))
+				{
+					GTrackingFusionDatasetRecorder.BoneSelection.FingerBones.AddUnique(BoneName);
+				}
+				else if (FMediaPipeTrackingFusionDataset::IsMainBodyBoneName(BoneName))
+				{
+					GTrackingFusionDatasetRecorder.BoneSelection.MainBones.AddUnique(BoneName);
+				}
+				else
+				{
+					GTrackingFusionDatasetRecorder.BoneSelection.OtherBones.AddUnique(BoneName);
+				}
+			}
+		}
+	}
+	GTrackingFusionDatasetRecorder.BoneHierarchy = JsonRecordedBoneHierarchy(
+		DrivenMesh->GetSkeletalMeshAsset(),
+		GTrackingFusionDatasetRecorder.BoneSelection);
+
+	GTrackingFusionDatasetRecorder.RecordedBoneIndices.Reset();
+	GTrackingFusionDatasetRecorder.RecordedBoneIndices.Reserve(GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num());
+	for (const FName& BoneName : GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones)
+	{
+		GTrackingFusionDatasetRecorder.RecordedBoneIndices.Add(DrivenMesh->GetBoneIndex(BoneName));
+	}
+	GTrackingFusionDatasetRecorder.LastComponentTransformsByBone.SetNum(GTrackingFusionDatasetRecorder.RecordedBoneIndices.Num());
+	GTrackingFusionDatasetRecorder.LastLocalTransformsByBone.SetNum(GTrackingFusionDatasetRecorder.RecordedBoneIndices.Num());
+	GTrackingFusionDatasetRecorder.bHasLastTransformsByBone.Init(false, GTrackingFusionDatasetRecorder.RecordedBoneIndices.Num());
+
+	const int32 ExpectedSampleCount = GTrackingFusionDatasetRecorder.SampleRateHz > KINDA_SMALL_NUMBER
+		? FMath::FloorToInt(GTrackingFusionDatasetRecorder.DurationSeconds * GTrackingFusionDatasetRecorder.SampleRateHz) + 2
+		: FMath::CeilToInt(GTrackingFusionDatasetRecorder.DurationSeconds * 90.0) + 2;
+	GTrackingFusionDatasetRecorder.Samples.Reserve(FMath::Max(0, ExpectedSampleCount));
+	const int64 ExpectedFloatCount =
+		static_cast<int64>(FMath::Max(0, ExpectedSampleCount)) *
+		static_cast<int64>(GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num()) *
+		33;
+	const int64 MaxReserveFloatCount = (512ll * 1024ll * 1024ll) / static_cast<int64>(sizeof(float));
+	if (ExpectedFloatCount > 0 && ExpectedFloatCount <= static_cast<int64>(TNumericLimits<int32>::Max()))
+	{
+		GTrackingFusionDatasetRecorder.BoneSampleFloats.Reserve(static_cast<int32>(FMath::Min(ExpectedFloatCount, MaxReserveFloatCount)));
+	}
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.RecordTrackingFusionDataset: recording label=%s preset=%s promptColor=%s requested=%.3fs resolved=%.3fs sampleRate=%.3fHz sampleInterval=%.3fs boneMode=%s recordedBones=%d helperBones=%d otherBones=%d chunksMaxMB=%.1f phases=%d path=%s auto=%d worldId=%u mesh=%s armFallbacksDisabled=%d highVolumeDiagnosticLogsSuppressed=%d calibrationDebugHudsSuppressed=%d"),
+		*GTrackingFusionDatasetRecorder.Label,
+		*GTrackingFusionDatasetRecorder.PhasePreset,
+		*GTrackingFusionDatasetRecorder.PromptColorName,
+		GTrackingFusionDatasetRecorder.RequestedDurationSeconds,
+		GTrackingFusionDatasetRecorder.DurationSeconds,
+		GTrackingFusionDatasetRecorder.SampleRateHz,
+		GTrackingFusionDatasetRecorder.SampleIntervalSeconds,
+		*GTrackingFusionDatasetRecorder.BoneMode,
+		GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num(),
+		GTrackingFusionDatasetRecorder.BoneSelection.HelperBones.Num(),
+		GTrackingFusionDatasetRecorder.BoneSelection.OtherBones.Num(),
+		static_cast<double>(GTrackingFusionDatasetRecorder.MaxSampleChunkBytes) / (1024.0 * 1024.0),
+		GTrackingFusionDatasetRecorder.Phases.Num(),
+		*GTrackingFusionDatasetRecorder.OutputPath,
+		bAutoStarted ? 1 : 0,
+		AutoStartWorldId,
+		*GetNameSafe(DrivenMesh->GetSkeletalMeshAsset()),
+		FMediaPipeTrackingFusionDataset::AreArmFallbackCVarsDisabled() ? 1 : 0,
+		GTrackingFusionDatasetRecorder.bHighVolumeDiagnosticLogsSuppressedForCapture ? 1 : 0,
+		GTrackingFusionDatasetRecorder.bCalibrationDebugHudsSuppressedForCapture ? 1 : 0);
+}
+
+void TryAutoStartTrackingFusionDataset(
+	const AMediaPipePoseDrivenSkeletalActor* Actor,
+	USkeletalMeshComponent* DrivenMesh)
+{
+	if (GTrackingFusionDatasetRecorder.bActive ||
+		CVarRecordTrackingFusionDatasetOnPlay.GetValueOnAnyThread() == 0 ||
+		!Actor ||
+		!DrivenMesh)
+	{
+		return;
+	}
+
+	const UWorld* World = Actor->GetWorld();
+	if (!World || (World->WorldType != EWorldType::PIE && World->WorldType != EWorldType::Game))
+	{
+		return;
+	}
+
+	const uint32 WorldId = World->GetUniqueID();
+	if (WorldId != 0 && GTrackingFusionDatasetRecorder.LastAutoStartWorldId == WorldId)
+	{
+		return;
+	}
+
+	StartTrackingFusionDatasetRecording(
+		Actor,
+		DrivenMesh,
+		static_cast<double>(CVarRecordTrackingFusionDatasetDuration.GetValueOnAnyThread()),
+		CVarRecordTrackingFusionDatasetLabel.GetValueOnAnyThread(),
+		CVarRecordTrackingFusionDatasetPath.GetValueOnAnyThread(),
+		true,
+		WorldId,
+		CVarRecordTrackingFusionDatasetAnalyzeAfterWrite.GetValueOnAnyThread() != 0);
+	GTrackingFusionDatasetRecorder.LastAutoStartWorldId = WorldId;
+	SetConsoleVariableForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetOnPlay"), 0);
+}
+
+void RecordTrackingFusionDatasetSample(
+	const AMediaPipePoseDrivenSkeletalActor* Actor,
+	USkeletalMeshComponent* DrivenMesh,
+	const float DeltaSeconds,
+	const FMediaPipePoseFrame* LatestPoseFrame,
+	const FMediaPipePosePipelineStats* PosePipelineStats)
+{
+	if (!GTrackingFusionDatasetRecorder.bActive || !Actor || !DrivenMesh)
+	{
+		return;
+	}
+	SuppressTrackingFusionDatasetDiagnosticLogCVars();
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	const double ElapsedSeconds = FMath::Max(0.0, NowSeconds - GTrackingFusionDatasetRecorder.StartSeconds);
+	if (ElapsedSeconds > GTrackingFusionDatasetRecorder.DurationSeconds)
+	{
+		StopTrackingFusionDataset(ETrackingFusionDatasetEndReason::DurationReached);
+		return;
+	}
+
+	DisplayTrackingFusionDatasetHud(Actor->GetWorld(), ElapsedSeconds, GTrackingFusionDatasetRecorder.DurationSeconds);
+
+	++GTrackingFusionDatasetRecorder.CandidateFrameCount;
+	double ScheduledElapsedSeconds = ElapsedSeconds;
+	int32 MissedScheduledSamplesThisTick = 0;
+	const double ScheduleStartSeconds = FPlatformTime::Seconds();
+	if (!FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+		ElapsedSeconds,
+		GTrackingFusionDatasetRecorder.SampleIntervalSeconds,
+		GTrackingFusionDatasetRecorder.NextSampleScheduleIndex,
+		ScheduledElapsedSeconds,
+		MissedScheduledSamplesThisTick))
+	{
+		const double ScheduleSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - ScheduleStartSeconds);
+		GTrackingFusionDatasetRecorder.ScheduleDecisionTotalSeconds += ScheduleSeconds;
+		GTrackingFusionDatasetRecorder.ScheduleDecisionMaxSeconds =
+			FMath::Max(GTrackingFusionDatasetRecorder.ScheduleDecisionMaxSeconds, ScheduleSeconds);
+		++GTrackingFusionDatasetRecorder.SkippedFrameCount;
+		return;
+	}
+	const double ScheduleSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - ScheduleStartSeconds);
+	GTrackingFusionDatasetRecorder.ScheduleDecisionTotalSeconds += ScheduleSeconds;
+	GTrackingFusionDatasetRecorder.ScheduleDecisionMaxSeconds =
+		FMath::Max(GTrackingFusionDatasetRecorder.ScheduleDecisionMaxSeconds, ScheduleSeconds);
+	GTrackingFusionDatasetRecorder.MissedScheduledSampleCount += MissedScheduledSamplesThisTick;
+
+	const double SampleBuildStartSeconds = FPlatformTime::Seconds();
+	FTrackingFusionDatasetSampleRecord SampleRecord;
+	SampleRecord.SampleIndex = GTrackingFusionDatasetRecorder.SampleCount;
+	SampleRecord.FrameNumber = static_cast<uint64>(GFrameCounter);
+	SampleRecord.ElapsedSeconds = ElapsedSeconds;
+	SampleRecord.ScheduledElapsedSeconds = ScheduledElapsedSeconds;
+	SampleRecord.ScheduleLateSeconds = FMath::Max(0.0, ElapsedSeconds - ScheduledElapsedSeconds);
+	SampleRecord.MissedScheduledSamplesThisTick = MissedScheduledSamplesThisTick;
+	SampleRecord.SampleWallSeconds = NowSeconds;
+	SampleRecord.DeltaSeconds = DeltaSeconds;
+	SampleRecord.ActorLabel = Actor->GetActorLabel();
+	SampleRecord.ActorLocation = Actor->GetActorLocation();
+	SampleRecord.ActorRotation = Actor->GetActorRotation();
+	if (LatestPoseFrame && LatestPoseFrame->bValid)
+	{
+		SampleRecord.bHasRawMediaPipeFrame = true;
+		SampleRecord.RawMediaPipeFrame = *LatestPoseFrame;
+	}
+	if (PosePipelineStats)
+	{
+		SampleRecord.bHasPosePipelineStats = true;
+		SampleRecord.PosePipelineStats = *PosePipelineStats;
+	}
+
+	const UEmbodiedFusionComponent* FusionComponent = Actor->GetActiveEmbodiedFusionComponent();
+	if (const FEmbodiedFusionFrame* FusionFrame = FusionComponent ? &FusionComponent->GetLatestFusionFrame() : nullptr)
+	{
+		SampleRecord.bHasFusionFrame = true;
+		SampleRecord.FusionFrame = *FusionFrame;
+	}
+
+	FTrackingFusionDatasetAvatarKeypoints AvatarKeypoints;
+	const double BoneBuildStartSeconds = FPlatformTime::Seconds();
+	const double BoneDeltaSeconds = GTrackingFusionDatasetRecorder.LastBoneSampleWallSeconds > 0.0
+		? FMath::Max(0.0, NowSeconds - GTrackingFusionDatasetRecorder.LastBoneSampleWallSeconds)
+		: 0.0;
+	TArray<float>& BoneSampleFloats = GTrackingFusionDatasetRecorder.BoneSampleFloats;
+	const int32 FloatsPerSample = GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num() * 33;
+	const int64 DesiredFloatCount = static_cast<int64>(BoneSampleFloats.Num()) + static_cast<int64>(FloatsPerSample);
+	if (DesiredFloatCount > static_cast<int64>(BoneSampleFloats.Max()) &&
+		DesiredFloatCount <= static_cast<int64>(TNumericLimits<int32>::Max()))
+	{
+		const int64 GrowToFloatCount = FMath::Min(
+			static_cast<int64>(TNumericLimits<int32>::Max()),
+			DesiredFloatCount + static_cast<int64>(FloatsPerSample) * 128ll);
+		BoneSampleFloats.Reserve(static_cast<int32>(GrowToFloatCount));
+	}
+
+	static const FName HeadBoneName(TEXT("head"));
+	static const FName Spine05BoneName(TEXT("spine_05"));
+	static const FName PelvisBoneName(TEXT("pelvis"));
+	static const FName HandLBoneName(TEXT("hand_l"));
+	static const FName HandRBoneName(TEXT("hand_r"));
+	static const FName ClavicleLBoneName(TEXT("clavicle_l"));
+	static const FName ClavicleRBoneName(TEXT("clavicle_r"));
+
+	for (int32 BoneOrdinal = 0; BoneOrdinal < GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones.Num(); ++BoneOrdinal)
+	{
+		const FName& BoneName = GTrackingFusionDatasetRecorder.BoneSelection.RecordedBones[BoneOrdinal];
+		const bool bHasBone = GTrackingFusionDatasetRecorder.RecordedBoneIndices.IsValidIndex(BoneOrdinal)
+			? GTrackingFusionDatasetRecorder.RecordedBoneIndices[BoneOrdinal] != INDEX_NONE
+			: DrivenMesh->GetBoneIndex(BoneName) != INDEX_NONE;
+		if (!bHasBone)
+		{
+			const FTransform Identity = FTransform::Identity;
+			AppendTransformFloat32(BoneSampleFloats, Identity);
+			AppendTransformFloat32(BoneSampleFloats, Identity);
+			AppendTransformFloat32(BoneSampleFloats, Identity);
+			BoneSampleFloats.Add(0.0f);
+			BoneSampleFloats.Add(0.0f);
+			BoneSampleFloats.Add(0.0f);
+			continue;
+		}
+
+		const FTransform ComponentTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_Component);
+		const FTransform LocalTransform = DrivenMesh->GetBoneTransform(BoneName, RTS_ParentBoneSpace);
+		const FTransform WorldTransform = ComponentTransform * DrivenMesh->GetComponentTransform();
+		const FVector WorldLocation = WorldTransform.GetLocation();
+		if (BoneName == HeadBoneName)
+		{
+			AvatarKeypoints.bHasHead = true;
+			AvatarKeypoints.HeadWorld = WorldLocation;
+		}
+		else if (BoneName == Spine05BoneName)
+		{
+			AvatarKeypoints.bHasSpine05 = true;
+			AvatarKeypoints.Spine05World = WorldLocation;
+		}
+		else if (BoneName == PelvisBoneName)
+		{
+			AvatarKeypoints.bHasPelvis = true;
+			AvatarKeypoints.PelvisWorld = WorldLocation;
+		}
+		else if (BoneName == HandLBoneName)
+		{
+			AvatarKeypoints.bHasHandL = true;
+			AvatarKeypoints.HandLWorld = WorldLocation;
+		}
+		else if (BoneName == HandRBoneName)
+		{
+			AvatarKeypoints.bHasHandR = true;
+			AvatarKeypoints.HandRWorld = WorldLocation;
+		}
+		else if (BoneName == ClavicleLBoneName)
+		{
+			AvatarKeypoints.bHasClavicleL = true;
+			AvatarKeypoints.ClavicleLWorld = WorldLocation;
+		}
+		else if (BoneName == ClavicleRBoneName)
+		{
+			AvatarKeypoints.bHasClavicleR = true;
+			AvatarKeypoints.ClavicleRWorld = WorldLocation;
+		}
+
+		const bool bHasPreviousTransform =
+			GTrackingFusionDatasetRecorder.bHasLastTransformsByBone.IsValidIndex(BoneOrdinal) &&
+			GTrackingFusionDatasetRecorder.bHasLastTransformsByBone[BoneOrdinal];
+		const FTransform& PreviousComponentTransform = GTrackingFusionDatasetRecorder.LastComponentTransformsByBone[BoneOrdinal];
+		const FTransform& PreviousLocalTransform = GTrackingFusionDatasetRecorder.LastLocalTransformsByBone[BoneOrdinal];
+		const float LinearSpeed = bHasPreviousTransform && BoneDeltaSeconds > KINDA_SMALL_NUMBER
+			? static_cast<float>(FVector::Distance(ComponentTransform.GetLocation(), PreviousComponentTransform.GetLocation()) / BoneDeltaSeconds)
+			: 0.0f;
+		const float AngularSpeed = bHasPreviousTransform
+			? AngularSpeedDegreesPerSecond(ComponentTransform.GetRotation(), PreviousComponentTransform.GetRotation(), BoneDeltaSeconds)
+			: 0.0f;
+		const float LocalAngularSpeed = bHasPreviousTransform
+			? AngularSpeedDegreesPerSecond(LocalTransform.GetRotation(), PreviousLocalTransform.GetRotation(), BoneDeltaSeconds)
+			: 0.0f;
+		AppendTransformFloat32(BoneSampleFloats, ComponentTransform);
+		AppendTransformFloat32(BoneSampleFloats, LocalTransform);
+		AppendTransformFloat32(BoneSampleFloats, WorldTransform);
+		BoneSampleFloats.Add(LinearSpeed);
+		BoneSampleFloats.Add(AngularSpeed);
+		BoneSampleFloats.Add(LocalAngularSpeed);
+
+		GTrackingFusionDatasetRecorder.LastComponentTransformsByBone[BoneOrdinal] = ComponentTransform;
+		GTrackingFusionDatasetRecorder.LastLocalTransformsByBone[BoneOrdinal] = LocalTransform;
+		GTrackingFusionDatasetRecorder.bHasLastTransformsByBone[BoneOrdinal] = true;
+	}
+	const double BoneBuildSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - BoneBuildStartSeconds);
+	GTrackingFusionDatasetRecorder.BoneBuildTotalSeconds += BoneBuildSeconds;
+	GTrackingFusionDatasetRecorder.BoneBuildMaxSeconds =
+		FMath::Max(GTrackingFusionDatasetRecorder.BoneBuildMaxSeconds, BoneBuildSeconds);
+	GTrackingFusionDatasetRecorder.LastBoneSampleWallSeconds = NowSeconds;
+	SampleRecord.Residuals = CaptureDatasetResiduals(
+		SampleRecord.bHasFusionFrame ? &SampleRecord.FusionFrame : nullptr,
+		AvatarKeypoints);
+	const double EnqueueStartSeconds = FPlatformTime::Seconds();
+	GTrackingFusionDatasetRecorder.Samples.Add(MoveTemp(SampleRecord));
+	const double EnqueueSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - EnqueueStartSeconds);
+	GTrackingFusionDatasetRecorder.EnqueueTotalSeconds += EnqueueSeconds;
+	GTrackingFusionDatasetRecorder.EnqueueMaxSeconds =
+		FMath::Max(GTrackingFusionDatasetRecorder.EnqueueMaxSeconds, EnqueueSeconds);
+	++GTrackingFusionDatasetRecorder.SampleCount;
+	if (!GTrackingFusionDatasetRecorder.bHasSampleWallSeconds)
+	{
+		GTrackingFusionDatasetRecorder.FirstSampleWallSeconds = NowSeconds;
+		GTrackingFusionDatasetRecorder.bHasSampleWallSeconds = true;
+	}
+	GTrackingFusionDatasetRecorder.LastSampleWallSeconds = NowSeconds;
+	const double SampleBuildSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - SampleBuildStartSeconds);
+	GTrackingFusionDatasetRecorder.SampleBuildTotalSeconds += SampleBuildSeconds;
+	GTrackingFusionDatasetRecorder.SampleBuildMaxSeconds =
+		FMath::Max(GTrackingFusionDatasetRecorder.SampleBuildMaxSeconds, SampleBuildSeconds);
+}
+
 void AnalyzeMannyHeadTimeseries(const FString& JsonPath, const FString& AnalyzerPathOverride = FString());
 
 void WriteMannyBoneTimeseries()
@@ -1192,6 +3496,10 @@ void WriteMannyBoneTimeseries()
 	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"));
 	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"));
 	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderShrugStartCm"));
+	AddRuntimeFloatCVar(TEXT("mp.BodyFusion.Stage2ShoulderShrugFullCm"));
 	Root->SetObjectField(TEXT("runtime_cvars"), RuntimeCVars);
 	Root->SetArrayField(TEXT("samples"), GMannyBoneTimeseriesRecorder.Samples);
 
@@ -1288,6 +3596,49 @@ FString ResolveRecorderPath(const FString& Path)
 	}
 	return FPaths::ConvertRelativePathToFull(
 		FPaths::IsRelative(Path) ? FPaths::Combine(FPaths::ProjectDir(), Path) : Path);
+}
+
+void AnalyzeTrackingFusionDataset(const FString& JsonPath, const FString& AnalyzerPathOverride)
+{
+	const FString PythonExe = CVarRecordMannyHeadPythonExe.GetValueOnAnyThread();
+	const FString AnalyzerPath = AnalyzerPathOverride.IsEmpty()
+		? CVarRecordTrackingFusionDatasetAnalyzerPath.GetValueOnAnyThread()
+		: AnalyzerPathOverride;
+	const FString ScriptPath = ResolveRecorderPath(AnalyzerPath);
+	if (!FPaths::FileExists(ScriptPath))
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: analyzer script not found: %s"), *ScriptPath);
+		return;
+	}
+
+	const FString OutputDirectory = FPaths::GetPath(JsonPath);
+	const FString Params = FString::Printf(
+		TEXT("\"%s\" \"%s\" --out-dir \"%s\""),
+		*ScriptPath,
+		*JsonPath,
+		*OutputDirectory);
+	int32 ReturnCode = -1;
+	FString StdOut;
+	FString StdErr;
+	const bool bExecuted = FPlatformProcess::ExecProcess(*PythonExe, *Params, &ReturnCode, &StdOut, &StdErr);
+	if (!bExecuted || ReturnCode != 0)
+	{
+		UE_LOG(
+			LogMediaPipePose,
+			Warning,
+			TEXT("mp.RecordTrackingFusionDataset: analyzer failed executed=%d returnCode=%d stdout=%s stderr=%s"),
+			bExecuted ? 1 : 0,
+			ReturnCode,
+			*StdOut,
+			*StdErr);
+		return;
+	}
+
+	UE_LOG(LogMediaPipePose, Log, TEXT("mp.RecordTrackingFusionDataset: analyzer completed stdout=%s"), *StdOut);
+	if (!StdErr.IsEmpty())
+	{
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.RecordTrackingFusionDataset: analyzer stderr=%s"), *StdErr);
+	}
 }
 
 void AnalyzeMannyHeadTimeseries(const FString& JsonPath, const FString& AnalyzerPathOverride)
@@ -1407,6 +3758,161 @@ void StartMannyBoneTimeseries(const TArray<FString>& Args)
 	StartMannyBoneTimeseriesRecording(DurationSeconds, OutputPath, false, 0);
 }
 
+void SetConsoleVariableStringForTrackingDataset(const TCHAR* Name, const FString& Value)
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		Variable->Set(*Value, ECVF_SetByConsole);
+	}
+}
+
+void SetConsoleVariableFloatForTrackingDataset(const TCHAR* Name, const float Value)
+{
+	if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		Variable->Set(Value, ECVF_SetByConsole);
+	}
+}
+
+void PrepareTrackingFusionDatasetCapture(const TArray<FString>& Args)
+{
+	double DurationSeconds = 90.0;
+	double SampleRateHz = 30.0;
+	double ChunkMegabytes = 128.0;
+	FString BoneMode(TEXT("all"));
+	FString Label(TEXT("correlation_full_body"));
+	FString OutputPath;
+	bool bAnalyzeAfterWrite = true;
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+
+		if (Key.Equals(TEXT("duration"), ESearchCase::IgnoreCase))
+		{
+			DurationSeconds = FMath::Clamp(FCString::Atod(*Value), 0.1, 240.0);
+		}
+		else if (Key.Equals(TEXT("sampleRate"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("sample_rate"), ESearchCase::IgnoreCase))
+		{
+			const double ParsedSampleRateHz = FCString::Atod(*Value);
+			SampleRateHz = ParsedSampleRateHz > 0.0 ? FMath::Clamp(ParsedSampleRateHz, 1.0, 120.0) : 0.0;
+		}
+		else if (Key.Equals(TEXT("boneMode"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("bone_mode"), ESearchCase::IgnoreCase))
+		{
+			BoneMode = NormalizeTrackingDatasetBoneMode(Value);
+		}
+		else if (Key.Equals(TEXT("chunkMB"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("chunk_mb"), ESearchCase::IgnoreCase))
+		{
+			ChunkMegabytes = FMath::Clamp(FCString::Atod(*Value), 8.0, 1024.0);
+		}
+		else if (Key.Equals(TEXT("label"), ESearchCase::IgnoreCase))
+		{
+			Label = FMediaPipeTrackingFusionDataset::SanitizeLabel(Value);
+		}
+		else if (Key.Equals(TEXT("path"), ESearchCase::IgnoreCase))
+		{
+			OutputPath = Value;
+		}
+		else if (Key.Equals(TEXT("analyze"), ESearchCase::IgnoreCase))
+		{
+			bAnalyzeAfterWrite = FCString::Atoi(*Value) != 0;
+		}
+	}
+
+	ApplyTrackingFusionDatasetCaptureCVars();
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetDuration"), static_cast<float>(DurationSeconds));
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetSampleRate"), static_cast<float>(SampleRateHz));
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetBoneMode"), BoneMode);
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetPhasePreset"), TEXT("default"));
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetChunkMegabytes"), static_cast<float>(ChunkMegabytes));
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetLabel"), Label);
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetPath"), OutputPath);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetAnalyzeAfterWrite"), bAnalyzeAfterWrite ? 1 : 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetOnPlay"), 1);
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.PrepareTrackingFusionDatasetCapture: armed duration=%.3fs sampleRate=%.3fHz boneMode=%s chunkMB=%.1f label=%s path=%s analyze=%d BodyFusion=(Enable=1 Debug=1 WritePose=unchanged MediaPipeAuthority=unchanged) armFallbacks=off highVolumeDiagnosticLogs=off"),
+		DurationSeconds,
+		SampleRateHz,
+		*BoneMode,
+		ChunkMegabytes,
+		*Label,
+		OutputPath.IsEmpty() ? TEXT("<auto>") : *OutputPath,
+		bAnalyzeAfterWrite ? 1 : 0);
+}
+
+void PrepareAvatarLockedSyncCalibrationCapture(const TArray<FString>& Args)
+{
+	const double DurationSeconds =
+		FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationBlockSeconds * 7.0;
+	const double SampleRateHz = 30.0;
+	double ChunkMegabytes = 128.0;
+	FString Label(TEXT("avatar_locked_sync_calibration"));
+	FString OutputPath;
+	bool bAnalyzeAfterWrite = true;
+	for (const FString& Arg : Args)
+	{
+		FString Key;
+		FString Value;
+		if (!Arg.Split(TEXT("="), &Key, &Value))
+		{
+			continue;
+		}
+
+		if (Key.Equals(TEXT("chunkMB"), ESearchCase::IgnoreCase) || Key.Equals(TEXT("chunk_mb"), ESearchCase::IgnoreCase))
+		{
+			ChunkMegabytes = FMath::Clamp(FCString::Atod(*Value), 8.0, 1024.0);
+		}
+		else if (Key.Equals(TEXT("label"), ESearchCase::IgnoreCase))
+		{
+			Label = FMediaPipeTrackingFusionDataset::SanitizeLabel(Value);
+		}
+		else if (Key.Equals(TEXT("path"), ESearchCase::IgnoreCase))
+		{
+			OutputPath = Value;
+		}
+		else if (Key.Equals(TEXT("analyze"), ESearchCase::IgnoreCase))
+		{
+			bAnalyzeAfterWrite = FCString::Atoi(*Value) != 0;
+		}
+	}
+
+	ApplyTrackingFusionDatasetCaptureCVars();
+	ApplyAvatarLockedSyncCalibrationVisiblePolicy();
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetDuration"), static_cast<float>(DurationSeconds));
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetSampleRate"), static_cast<float>(SampleRateHz));
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetBoneMode"), TEXT("all"));
+	SetConsoleVariableStringForTrackingDataset(
+		TEXT("mp.RecordTrackingFusionDatasetPhasePreset"),
+		FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset);
+	SetConsoleVariableFloatForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetChunkMegabytes"), static_cast<float>(ChunkMegabytes));
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetLabel"), Label);
+	SetConsoleVariableStringForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetPath"), OutputPath);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetAnalyzeAfterWrite"), bAnalyzeAfterWrite ? 1 : 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.QuestWristCalibrationHud"), 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.QuestArmLengthCalibrationHud"), 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.QuestArmLengthCalibrationStartup"), 0);
+	SetConsoleVariableForTrackingDataset(TEXT("mp.RecordTrackingFusionDatasetOnPlay"), 1);
+
+	UE_LOG(
+		LogMediaPipePose,
+		Log,
+		TEXT("mp.PrepareAvatarLockedSyncCalibrationCapture: armed duration=%.3fs sampleRate=%.3fHz boneMode=all phasePreset=%s blockSeconds=30 blocks=7 promptColor=green calibrationDebugHuds=off chunkMB=%.1f label=%s path=%s analyze=%d visiblePolicy=(BodyFusion.Enable=1 BodyFusion.Debug=1 BodyFusion.WritePose=1 BodyFusion.MediaPipeAuthority=2 BodyFusion.FullBodyMediaPipeAuthority=1 MediaPipeDriveSpine=1 MediaPipeDrivePelvisTranslation=1 MediaPipeDriveLegs=1 MediaPipeUseLegIK=0 MediaPipeUseLegIKFootPlant=0 MediaPipeUseFkRootGrounding=1 directSegmentLegs=1 MediaPipeDriveFootRotation=1 avatarScale=unchanged metahumanDeformation=off) armFallbacks=off highVolumeDiagnosticLogs=off"),
+		DurationSeconds,
+		SampleRateHz,
+		FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset,
+		ChunkMegabytes,
+		*Label,
+		OutputPath.IsEmpty() ? TEXT("<auto>") : *OutputPath,
+		bAnalyzeAfterWrite ? 1 : 0);
+}
+
 void SetConsoleVariableIntForShadowCapture(const TCHAR* Name, const int32 Value)
 {
 	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
@@ -1480,6 +3986,10 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 	float Stage2ShoulderClavicleResponseScale = DefaultMPQStage2ShoulderClavicleResponseScale;
 	float Stage2ShoulderClavicleMaxLiftCm = DefaultMPQStage2ShoulderClavicleMaxLiftCm;
 	float Stage2ShoulderClavicleHalfLifeSeconds = DefaultMPQStage2ShoulderClavicleHalfLifeSeconds;
+	float Stage2ShoulderArmRaiseFadeStartCm = DefaultMPQStage2ShoulderArmRaiseFadeStartCm;
+	float Stage2ShoulderArmRaiseFadeFullCm = DefaultMPQStage2ShoulderArmRaiseFadeFullCm;
+	float Stage2ShoulderShrugStartCm = DefaultMPQStage2ShoulderShrugStartCm;
+	float Stage2ShoulderShrugFullCm = DefaultMPQStage2ShoulderShrugFullCm;
 	FString Label;
 	for (const FString& Arg : Args)
 	{
@@ -1582,6 +4092,38 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 		{
 			Stage2ShoulderClavicleHalfLifeSeconds = FMath::Clamp(FCString::Atof(*Value) * 0.001f, 0.0f, 1.0f);
 		}
+		else if (Key.Equals(TEXT("stage2ArmRaiseFadeStartCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderArmRaiseFadeStartCm"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderArmRaiseFadeStartCm = FMath::Clamp(FCString::Atof(*Value), 0.0f, 200.0f);
+			Stage2ShoulderArmRaiseFadeFullCm = FMath::Max(
+				Stage2ShoulderArmRaiseFadeStartCm + 0.5f,
+				Stage2ShoulderArmRaiseFadeFullCm);
+		}
+		else if (Key.Equals(TEXT("stage2ArmRaiseFadeFullCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderArmRaiseFadeFullCm"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderArmRaiseFadeFullCm = FMath::Clamp(
+				FCString::Atof(*Value),
+				Stage2ShoulderArmRaiseFadeStartCm + 0.5f,
+				250.0f);
+		}
+		else if (Key.Equals(TEXT("stage2ShrugStartCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderShrugStartCm"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderShrugStartCm = FMath::Clamp(FCString::Atof(*Value), 0.0f, 50.0f);
+			Stage2ShoulderShrugFullCm = FMath::Max(
+				Stage2ShoulderShrugStartCm + 0.5f,
+				Stage2ShoulderShrugFullCm);
+		}
+		else if (Key.Equals(TEXT("stage2ShrugFullCm"), ESearchCase::IgnoreCase) ||
+			Key.Equals(TEXT("stage2ShoulderShrugFullCm"), ESearchCase::IgnoreCase))
+		{
+			Stage2ShoulderShrugFullCm = FMath::Clamp(
+				FCString::Atof(*Value),
+				Stage2ShoulderShrugStartCm + 0.5f,
+				100.0f);
+		}
 	}
 
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.RecordMPQShadowFusionStage1TorsoPelvisHintOnPlay"), bStage1TorsoPelvisHint ? 1 : 0);
@@ -1594,6 +4136,10 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"), Stage2ShoulderClavicleResponseScale);
 	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"), Stage2ShoulderClavicleMaxLiftCm);
 	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"), Stage2ShoulderClavicleHalfLifeSeconds);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm"), Stage2ShoulderArmRaiseFadeStartCm);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm"), Stage2ShoulderArmRaiseFadeFullCm);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderShrugStartCm"), Stage2ShoulderShrugStartCm);
+	SetConsoleVariableFloatForShadowCapture(TEXT("mp.BodyFusion.Stage2ShoulderShrugFullCm"), Stage2ShoulderShrugFullCm);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamHandsCameraIndex"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamDirectWmfCapture"), 1);
 	SetConsoleVariableIntForShadowCapture(TEXT("mp.AutoQuestWebcamPreview"), 1);
@@ -1631,7 +4177,7 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 	UE_LOG(
 		LogMediaPipePose,
 		Log,
-		TEXT("mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=%d duration=%.3fs prediction=%d maxPredictionMs=%.1f analyze=%d path=%s BodyFusion shadow-only stage1TorsoPelvisHint=%d blend=%.3f maxVerticalCm=%.1f halfLife=%.3fs stage2ShoulderClavicleHint=%d stage2Blend=%.3f stage2Scale=%.2f stage2MaxLiftCm=%.1f stage2HalfLife=%.3fs armFallbacks=off"),
+		TEXT("mp.PrepareMPQShadowLatencyTrial: Camo index=1 maxdim=%d duration=%.3fs prediction=%d maxPredictionMs=%.1f analyze=%d path=%s BodyFusion shadow-only stage1TorsoPelvisHint=%d blend=%.3f maxVerticalCm=%.1f halfLife=%.3fs stage2ShoulderClavicleHint=%d stage2Blend=%.3f stage2Scale=%.2f stage2MaxLiftCm=%.1f stage2HalfLife=%.3fs stage2ArmRaiseFadeStartCm=%.1f stage2ArmRaiseFadeFullCm=%.1f stage2ShrugStartCm=%.1f stage2ShrugFullCm=%.1f armFallbacks=off"),
 		InputMaxDimension,
 		DurationSeconds,
 		bPredictionEnabled ? 1 : 0,
@@ -1646,7 +4192,11 @@ void PrepareMPQShadowLatencyTrial(const TArray<FString>& Args)
 		Stage2ShoulderClavicleHintBlend,
 		Stage2ShoulderClavicleResponseScale,
 		Stage2ShoulderClavicleMaxLiftCm,
-		Stage2ShoulderClavicleHalfLifeSeconds);
+		Stage2ShoulderClavicleHalfLifeSeconds,
+		Stage2ShoulderArmRaiseFadeStartCm,
+		Stage2ShoulderArmRaiseFadeFullCm,
+		Stage2ShoulderShrugStartCm,
+		Stage2ShoulderShrugFullCm);
 }
 
 void StartMPQShadowFusionCapture(const TArray<FString>& Args)
@@ -1879,6 +4429,33 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 
 	TryAutoStartMPQShadowFusionTimeseries(Actor, DrivenMesh);
 	TryAutoStartMannyHeadTimeseries(Actor);
+	TryAutoStartTrackingFusionDataset(Actor, DrivenMesh);
+	if (GTrackingFusionDatasetRecorder.bActive)
+	{
+		SuppressTrackingFusionDatasetDiagnosticLogCVars();
+	}
+
+	FMediaPipePoseFrame LatestPoseFrame;
+	bool bHasLatestPoseFrame = false;
+	FMediaPipePosePipelineStats PosePipelineStats;
+	bool bHasPosePipelineStats = false;
+	if (const AActor* TrackingSourceActor = ResolveTrackingSourceActor(Actor->Source))
+	{
+		if (const UMediaPipePoseTrackerComponent* Tracker = TrackingSourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>())
+		{
+			bHasLatestPoseFrame = Tracker->GetLatestFrame(LatestPoseFrame) && LatestPoseFrame.bValid;
+			Tracker->GetRuntimeStats(PosePipelineStats);
+			bHasPosePipelineStats = true;
+		}
+	}
+
+	RecordTrackingFusionDatasetSample(
+		Actor,
+		DrivenMesh,
+		DeltaSeconds,
+		bHasLatestPoseFrame ? &LatestPoseFrame : nullptr,
+		bHasPosePipelineStats ? &PosePipelineStats : nullptr);
+
 	if (!GMannyBoneTimeseriesRecorder.bActive)
 	{
 		return;
@@ -1902,19 +4479,6 @@ void RecordMannyBoneTimeseriesSample(const AMediaPipePoseDrivenSkeletalActor* Ac
 		}
 	}
 
-	FMediaPipePoseFrame LatestPoseFrame;
-	bool bHasLatestPoseFrame = false;
-	FMediaPipePosePipelineStats PosePipelineStats;
-	bool bHasPosePipelineStats = false;
-	if (const AActor* TrackingSourceActor = ResolveTrackingSourceActor(Actor->Source))
-	{
-		if (const UMediaPipePoseTrackerComponent* Tracker = TrackingSourceActor->FindComponentByClass<UMediaPipePoseTrackerComponent>())
-		{
-			bHasLatestPoseFrame = Tracker->GetLatestFrame(LatestPoseFrame) && LatestPoseFrame.bValid;
-			Tracker->GetRuntimeStats(PosePipelineStats);
-			bHasPosePipelineStats = true;
-		}
-	}
 	const double PoseSeconds = bHasLatestPoseFrame
 		? static_cast<double>(LatestPoseFrame.TimestampUs) * 1.0e-6
 		: MediaSeconds;
@@ -2191,8 +4755,18 @@ FAutoConsoleCommand GMPQShadowFusionCaptureCommand(
 
 FAutoConsoleCommand GMPQShadowLatencyTrialCommand(
 	TEXT("mp.PrepareMPQShadowLatencyTrial"),
-	TEXT("Prepare the next VR Preview for a MediaPipe/Quest latency trial. Usage: mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=camo384 stage1=0 blend=0.25 halfLife=0.04 stage2=0 stage2Blend=0.2 stage2MaxLiftCm=5 stage2HalfLife=0.04 analyze=1"),
+	TEXT("Prepare the next VR Preview for a MediaPipe/Quest latency trial. Usage: mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=camo384 stage1=0 blend=0.25 halfLife=0.04 stage2=0 stage2Blend=1.0 stage2Scale=1.0 stage2MaxLiftCm=5 stage2HalfLife=0.04 stage2ShrugStartCm=2 stage2ShrugFullCm=8 analyze=1"),
 	FConsoleCommandWithArgsDelegate::CreateStatic(&PrepareMPQShadowLatencyTrial));
+
+FAutoConsoleCommand GTrackingFusionDatasetCaptureCommand(
+	TEXT("mp.PrepareTrackingFusionDatasetCapture"),
+	TEXT("Arm the next PIE/VR Preview for a guided Quest/MediaPipe/BodyFusion/MetaHuman dataset. Usage: mp.PrepareTrackingFusionDatasetCapture duration=90 sampleRate=30 boneMode=all chunkMB=128 label=correlation_full_body analyze=1"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&PrepareTrackingFusionDatasetCapture));
+
+FAutoConsoleCommand GAvatarLockedSyncCalibrationCaptureCommand(
+	TEXT("mp.PrepareAvatarLockedSyncCalibrationCapture"),
+	TEXT("Arm the next VR Preview for a 30 Hz all-bone avatar-locked sync calibration capture with seven green 30-second movement blocks. Usage: mp.PrepareAvatarLockedSyncCalibrationCapture label=avatar_locked_sync_calibration analyze=1"),
+	FConsoleCommandWithArgsDelegate::CreateStatic(&PrepareAvatarLockedSyncCalibrationCapture));
 
 int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeletalMeshComponent* PresentationMesh)
 {
@@ -2435,6 +5009,7 @@ void AMediaPipePoseDrivenSkeletalActor::EndPlay(const EEndPlayReason::Type EndPl
 	if (Tags.Contains(LiveMannyTag))
 	{
 		StopMannyBoneTimeseries(EMannyBoneTimeseriesEndReason::EndPlay);
+		StopTrackingFusionDataset(ETrackingFusionDatasetEndReason::EndPlay);
 	}
 
 	Super::EndPlay(EndPlayReason);

@@ -1,6 +1,7 @@
 #include "MediaPipeQuestHandTrackingSource.h"
 
 #include "Features/IModularFeatures.h"
+#include "HAL/PlatformTime.h"
 #include "IHandTracker.h"
 
 bool FMediaPipeQuestHandTrackingSource::TryReadHandSide(
@@ -29,6 +30,7 @@ bool FMediaPipeQuestHandTrackingSource::TryReadHandSide(
 		{
 			continue;
 		}
+		const double ReadTimestampSeconds = FPlatformTime::Seconds();
 
 		const bool bIsLeft = Hand == EControllerHand::Left;
 		TStaticArray<FVector, QuestHandKeypointCount>& OutPositions =
@@ -48,11 +50,13 @@ bool FMediaPipeQuestHandTrackingSource::TryReadHandSide(
 		{
 			OutSnapshot.bHasLeft = 1;
 			OutSnapshot.bLeftTracked = bTracked ? 1 : 0;
+			OutSnapshot.LeftTimestampSeconds = ReadTimestampSeconds;
 		}
 		else
 		{
 			OutSnapshot.bHasRight = 1;
 			OutSnapshot.bRightTracked = bTracked ? 1 : 0;
+			OutSnapshot.RightTimestampSeconds = ReadTimestampSeconds;
 		}
 		return true;
 	}

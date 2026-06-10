@@ -1,5 +1,6 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 
+#include "MediaPipeAvatarCalibrationProfile.h"
 #include "MediaPipeAvatarRigProfile.h"
 #include "MediaPipeMetaHumanProfile.h"
 
@@ -204,6 +205,46 @@ FVector ResolveMediaPipeAvatarProfileEyeLocalInHead(const FMediaPipeAvatarEmbodi
 	}
 
 	return Profile.DefaultEyeLocalOffset - ResolveMediaPipeAvatarProfileHeadLocal(Profile);
+}
+
+FVector ResolveMediaPipeAvatarProfileCameraAnchorLocal(const FMediaPipeAvatarEmbodimentProfile& Profile)
+{
+	FVector AnchorLocal = Profile.DefaultEyeLocalOffset;
+	if (Profile.bHasAvatarLockedCalibrationProfile &&
+		!Profile.AvatarLockedHeadCameraAnchorOffsetCm.ContainsNaN())
+	{
+		AnchorLocal += Profile.AvatarLockedHeadCameraAnchorOffsetCm;
+	}
+	return AnchorLocal;
+}
+
+void AppendMediaPipeAvatarProfileDrivenUpperBodyBones(
+	const FMediaPipeAvatarEmbodimentProfile& Profile,
+	TArray<FName>& OutBoneNames,
+	const bool bIncludeSecondaryNeck)
+{
+	auto AddBone = [&OutBoneNames](const FName BoneName)
+	{
+		if (BoneName != NAME_None)
+		{
+			OutBoneNames.AddUnique(BoneName);
+		}
+	};
+
+	AddBone(Profile.BoneMap.Neck);
+	if (bIncludeSecondaryNeck)
+	{
+		AddBone(FName(TEXT("neck_02")));
+	}
+	AddBone(Profile.BoneMap.Head);
+	AddBone(Profile.BoneMap.LeftShoulder);
+	AddBone(Profile.BoneMap.LeftUpperArm);
+	AddBone(Profile.BoneMap.LeftLowerArm);
+	AddBone(Profile.BoneMap.LeftHand);
+	AddBone(Profile.BoneMap.RightShoulder);
+	AddBone(Profile.BoneMap.RightUpperArm);
+	AddBone(Profile.BoneMap.RightLowerArm);
+	AddBone(Profile.BoneMap.RightHand);
 }
 
 float FMediaPipeAvatarProfileReferenceCalibration::ResolveUpperBodyFollowAlpha(
@@ -558,14 +599,14 @@ bool FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(
 
 	FVector AvatarWorld = Input.DesiredCameraWorld -
 		AvatarForwardWorld * CameraForwardOffsetCm -
-		InitialAvatarTransform.TransformVectorNoScale(Input.Profile.DefaultEyeLocalOffset);
+		InitialAvatarTransform.TransformVectorNoScale(ResolveMediaPipeAvatarProfileCameraAnchorLocal(Input.Profile));
 	if (Input.bSnapAvatarToGround)
 	{
 		AvatarWorld.Z = Input.GroundZ + Input.GroundClearanceCm;
 	}
 
 	const FTransform AvatarTransform(AvatarYawWorld, AvatarWorld);
-	const FVector AvatarEyeWorld = AvatarTransform.TransformPosition(Input.Profile.DefaultEyeLocalOffset);
+	const FVector AvatarEyeWorld = AvatarTransform.TransformPosition(ResolveMediaPipeAvatarProfileCameraAnchorLocal(Input.Profile));
 
 	OutResult.AvatarWorld = AvatarWorld;
 	OutResult.AvatarYawWorld = AvatarYawWorld;
@@ -574,7 +615,7 @@ bool FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(
 	OutResult.CameraWorld = AvatarEyeWorld + AvatarForwardWorld * CameraForwardOffsetCm;
 	OutResult.ViewerWorld = OutResult.CameraWorld - FVector(0.0f, 0.0f, 64.0f);
 	OutResult.CameraForwardOffsetCm = CameraForwardOffsetCm;
-	OutResult.AvatarEyeHeightCm = FMath::Abs(Input.Profile.DefaultEyeLocalOffset.Z);
+	OutResult.AvatarEyeHeightCm = FMath::Abs(ResolveMediaPipeAvatarProfileCameraAnchorLocal(Input.Profile).Z);
 	return !OutResult.CameraWorld.ContainsNaN() && !OutResult.AvatarWorld.ContainsNaN();
 }
 
@@ -620,7 +661,7 @@ bool FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(
 	}
 
 	const FVector AvatarEyeWorld = Input.bHasProfileEyeLocalOffset
-		? Input.TargetCompTransform.TransformPosition(Input.Profile.DefaultEyeLocalOffset)
+		? Input.TargetCompTransform.TransformPosition(ResolveMediaPipeAvatarProfileCameraAnchorLocal(Input.Profile))
 		: Input.FallbackEyeWorld;
 	if (AvatarEyeWorld.ContainsNaN())
 	{
@@ -634,8 +675,9 @@ bool FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(
 	const FQuat AvatarYawWorld = MakeQuatFromForwardUp(AvatarForwardWorld, AvatarUpWorld);
 
 	OutResult.AvatarCameraWorld = AvatarCameraWorld;
-	OutResult.MappedWristWorld = AvatarCameraWorld + AvatarYawWorld.RotateVector(WristInHmdYawSpace);
-	OutResult.HmdRelativeWrist = WristInHmdYawSpace;
+	const FVector AvatarLockedWristInYawSpace = WristInHmdYawSpace + Input.WristArmChainOffsetCm;
+	OutResult.MappedWristWorld = AvatarCameraWorld + AvatarYawWorld.RotateVector(AvatarLockedWristInYawSpace);
+	OutResult.HmdRelativeWrist = AvatarLockedWristInYawSpace;
 	OutResult.AvatarForwardWorld = AvatarForwardWorld;
 	OutResult.CameraForwardOffsetCm = CameraForwardOffsetCm;
 	return !OutResult.MappedWristWorld.ContainsNaN();
@@ -657,6 +699,7 @@ FMediaPipeAvatarEmbodimentProfile BuildMediaPipeAvatarEmbodimentProfileFromRigPr
 	Profile.BoneMap = FMediaPipeAvatarBoneMap::StandardHumanoid();
 	Profile.LocalViewPolicy = FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid();
 	PopulateDerivedBodyFusionProportions(Profile);
+	ApplyMediaPipeAvatarCalibrationProfileFromCVar(Profile);
 	return Profile;
 }
 
@@ -676,5 +719,6 @@ FMediaPipeAvatarEmbodimentProfile BuildMediaPipeAvatarEmbodimentProfileFromMetaH
 	Profile.BoneMap = FMediaPipeAvatarBoneMap::StandardHumanoid();
 	Profile.LocalViewPolicy = FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid();
 	PopulateDerivedBodyFusionProportions(Profile);
+	ApplyMediaPipeAvatarCalibrationProfileFromCVar(Profile);
 	return Profile;
 }

@@ -1015,18 +1015,9 @@ void AMediaPipeEmbodiedAvatarPawn::CacheMovementReplicaReferencePose()
 		Profile = FMediaPipeAvatarEmbodimentProfile();
 	}
 
-	for (const FName BoneName : {
-		Profile.BoneMap.Neck,
-		FName(TEXT("neck_02")),
-		Profile.BoneMap.Head,
-		Profile.BoneMap.LeftShoulder,
-		Profile.BoneMap.LeftUpperArm,
-		Profile.BoneMap.LeftLowerArm,
-		Profile.BoneMap.LeftHand,
-		Profile.BoneMap.RightShoulder,
-		Profile.BoneMap.RightUpperArm,
-		Profile.BoneMap.RightLowerArm,
-		Profile.BoneMap.RightHand})
+	TArray<FName> ProfileDrivenBones;
+	AppendMediaPipeAvatarProfileDrivenUpperBodyBones(Profile, ProfileDrivenBones);
+	for (const FName BoneName : ProfileDrivenBones)
 	{
 		if (PoseableMeshHasBone(AvatarMesh, BoneName))
 		{
@@ -1058,18 +1049,7 @@ void AMediaPipeEmbodiedAvatarPawn::CacheMovementReplicaReferencePose()
 	MovementReplicaNeck02RefCS = PoseableMeshHasBone(AvatarMesh, FName(TEXT("neck_02")))
 		? AvatarMesh->GetBoneTransformByName(FName(TEXT("neck_02")), EBoneSpaces::ComponentSpace)
 		: MovementReplicaNeckRefCS;
-	for (const FName BoneName : {
-		Profile.BoneMap.Head,
-		Profile.BoneMap.Neck,
-		FName(TEXT("neck_02")),
-		Profile.BoneMap.LeftShoulder,
-		Profile.BoneMap.LeftUpperArm,
-		Profile.BoneMap.LeftLowerArm,
-		Profile.BoneMap.LeftHand,
-		Profile.BoneMap.RightShoulder,
-		Profile.BoneMap.RightUpperArm,
-		Profile.BoneMap.RightLowerArm,
-		Profile.BoneMap.RightHand})
+	for (const FName BoneName : ProfileDrivenBones)
 	{
 		if (PoseableMeshHasBone(AvatarMesh, BoneName))
 		{

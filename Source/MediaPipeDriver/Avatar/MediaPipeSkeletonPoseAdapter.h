@@ -60,7 +60,9 @@ struct MEDIAPIPEDRIVER_API FMediaPipeFusedLowerBodySide
 	FVector HipWorld = FVector::ZeroVector;
 	FVector KneeWorld = FVector::ZeroVector;
 	FVector AnkleWorld = FVector::ZeroVector;
+	FVector HeelWorld = FVector::ZeroVector;
 	FVector FootWorld = FVector::ZeroVector;
+	bool bHasHeel = false;
 	bool bHasFoot = false;
 };
 

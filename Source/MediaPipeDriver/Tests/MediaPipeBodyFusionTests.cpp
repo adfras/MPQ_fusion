@@ -6,6 +6,7 @@
 #include "MediaPipeBodyFusionAuthorityPolicy.h"
 #include "MediaPipeBodyFusionPoseWriteContext.h"
 #include "MediaPipeBodyFusionRuntime.h"
+#include "MediaPipeStage2ShoulderEvidence.h"
 #include "MediaPipeTrackingSourceFrameBuilder.h"
 #include "MediaPipeMetaHumanProfile.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
@@ -73,6 +74,8 @@ void AddReliableLowerBodyAt(FMediaPipeTrackingSourceFrame& Frame, const FVector&
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightKnee, HipCenter + FVector(0.0f, 10.0f, -32.0f), 0.9f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftAnkle, HipCenter + FVector(0.0f, -10.0f, -67.0f), 0.9f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightAnkle, HipCenter + FVector(0.0f, 10.0f, -67.0f), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHeel, HipCenter + FVector(-7.0f, -10.0f, -69.0f), 0.85f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightHeel, HipCenter + FVector(-7.0f, 10.0f, -69.0f), 0.85f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftFootIndex, HipCenter + FVector(10.0f, -10.0f, -69.0f), 0.8f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightFootIndex, HipCenter + FVector(10.0f, 10.0f, -69.0f), 0.8f);
 }
@@ -93,6 +96,8 @@ void AddUnreliableLowerBody(FMediaPipeTrackingSourceFrame& Frame, const float Pe
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightKnee, FVector(0.0f, 10.0f, 40.0f), 0.1f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftAnkle, FVector(0.0f, -10.0f, 5.0f), 0.1f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightAnkle, FVector(0.0f, 10.0f, 5.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftHeel, FVector(-7.0f, -10.0f, 3.0f), 0.1f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightHeel, FVector(-7.0f, 10.0f, 3.0f), 0.1f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftFootIndex, FVector(10.0f, -10.0f, 3.0f), 0.1f);
 	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightFootIndex, FVector(10.0f, 10.0f, 3.0f), 0.1f);
 }
@@ -125,6 +130,135 @@ void AddFreshQuestFullArmChain(FMediaPipeTrackingSourceFrame& Frame)
 	Frame.RightArmWristWorld = FVector(18.0f, 52.0f, 82.0f);
 	Frame.RightArmChainTimestampSeconds = 9.95;
 	Frame.RightArmChainConfidence = 1.0f;
+}
+
+void AddFreshQuestHands(
+	FMediaPipeTrackingSourceFrame& Frame,
+	const FVector& LeftHandWorld = FVector(18.0f, -52.0f, 82.0f),
+	const FVector& RightHandWorld = FVector(18.0f, 52.0f, 82.0f))
+{
+	Frame.bHasLeftHand = true;
+	Frame.LeftHandWorld = LeftHandWorld;
+	Frame.LeftHandTimestampSeconds = 9.95;
+	Frame.LeftHandConfidence = 1.0f;
+
+	Frame.bHasRightHand = true;
+	Frame.RightHandWorld = RightHandWorld;
+	Frame.RightHandTimestampSeconds = 9.95;
+	Frame.RightHandConfidence = 1.0f;
+}
+
+void ClearQuestArmChain(FMediaPipeTrackingSourceFrame& Frame, const bool bIsLeft)
+{
+	if (bIsLeft)
+	{
+		Frame.bHasLeftArmChain = false;
+		Frame.LeftArmShoulderWorld = FVector::ZeroVector;
+		Frame.LeftArmElbowWorld = FVector::ZeroVector;
+		Frame.LeftArmWristWorld = FVector::ZeroVector;
+		Frame.LeftArmChainTimestampSeconds = -1.0;
+		Frame.LeftArmChainConfidence = 0.0f;
+		return;
+	}
+
+	Frame.bHasRightArmChain = false;
+	Frame.RightArmShoulderWorld = FVector::ZeroVector;
+	Frame.RightArmElbowWorld = FVector::ZeroVector;
+	Frame.RightArmWristWorld = FVector::ZeroVector;
+	Frame.RightArmChainTimestampSeconds = -1.0;
+	Frame.RightArmChainConfidence = 0.0f;
+}
+
+void ClearQuestFullArmChain(FMediaPipeTrackingSourceFrame& Frame)
+{
+	ClearQuestArmChain(Frame, true);
+	ClearQuestArmChain(Frame, false);
+}
+
+FMediaPipeStage2ShoulderEvidenceSettings MakeStage2TestSettings()
+{
+	FMediaPipeStage2ShoulderEvidenceSettings Settings;
+	Settings.Blend = 1.0f;
+	Settings.ResponseScale = 1.0f;
+	Settings.MaxLiftCm = 5.0f;
+	Settings.HalfLifeSeconds = 0.0f;
+	Settings.ShrugStartCm = 2.0f;
+	Settings.ShrugFullCm = 8.0f;
+	Settings.NeutralHoldSeconds = 0.25f;
+	Settings.NeutralHoldFrames = 8;
+	return Settings;
+}
+
+FMediaPipeTrackingSourceFrame MakeStage2ShoulderFrame(
+	const float LeftShoulderLiftCm = 0.0f,
+	const float RightShoulderLiftCm = 0.0f,
+	const bool bRaiseLeftQuestArm = false,
+	const bool bRaiseRightQuestArm = false,
+	const float LeftHeadLiftCm = 0.0f,
+	const float RightHeadLiftCm = 0.0f)
+{
+	FMediaPipeTrackingSourceFrame Frame = MakeFreshHmdFrame(FVector(0.0f, 0.0f, 170.0f));
+	AddReliableLowerBody(Frame, 90.0f);
+	AddReliableUpperBody(Frame);
+	AddFreshQuestFullArmChain(Frame);
+
+	constexpr float NeutralShoulderZ = 132.0f;
+	constexpr float NeutralHeadZ = 160.0f;
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(40.0f, -25.0f, NeutralShoulderZ + LeftShoulderLiftCm), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, FVector(40.0f, 25.0f, NeutralShoulderZ + RightShoulderLiftCm), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::LeftEar, FVector(35.0f, -12.0f, NeutralHeadZ + LeftHeadLiftCm), 0.9f);
+	Frame.SetBodyLandmark(EMediaPipePoseLandmark::RightEar, FVector(35.0f, 12.0f, NeutralHeadZ + RightHeadLiftCm), 0.9f);
+
+	if (bRaiseLeftQuestArm)
+	{
+		Frame.LeftArmElbowWorld = FVector(10.0f, -42.0f, 145.0f);
+		Frame.LeftArmWristWorld = FVector(18.0f, -52.0f, 150.0f);
+	}
+	if (bRaiseRightQuestArm)
+	{
+		Frame.RightArmElbowWorld = FVector(10.0f, 42.0f, 145.0f);
+		Frame.RightArmWristWorld = FVector(18.0f, 52.0f, 150.0f);
+	}
+
+	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+	return Frame;
+}
+
+bool BuildStage2SideForTest(
+	const FMediaPipeTrackingSourceFrame& Frame,
+	const bool bIsLeft,
+	const FMediaPipeStage2ShoulderEvidenceSettings& Settings,
+	FMediaPipeStage2ShoulderEvidenceSideState& InOutState,
+	FMediaPipeStage2ShoulderEvidenceResult& OutResult,
+	const float DeltaSeconds = 0.05f)
+{
+	return FMediaPipeStage2ShoulderEvidence::BuildSideEvidence(
+		Frame,
+		MakeIdentityCalibration(),
+		bIsLeft,
+		FTransform::Identity,
+		Settings,
+		DeltaSeconds,
+		InOutState,
+		OutResult);
+}
+
+FMediaPipeStage2ShoulderEvidenceResult PrimeStage2NeutralForTest(
+	const bool bIsLeft,
+	const FMediaPipeStage2ShoulderEvidenceSettings& Settings,
+	FMediaPipeStage2ShoulderEvidenceSideState& InOutState)
+{
+	const FMediaPipeTrackingSourceFrame NeutralFrame = MakeStage2ShoulderFrame();
+	FMediaPipeStage2ShoulderEvidenceResult Result;
+	const float DeltaSeconds = 0.05f;
+	const int32 PrimeFrames = FMath::Max(
+		Settings.NeutralHoldFrames,
+		FMath::CeilToInt(Settings.NeutralHoldSeconds / DeltaSeconds) + 1);
+	for (int32 Index = 0; Index < PrimeFrames; ++Index)
+	{
+		BuildStage2SideForTest(NeutralFrame, bIsLeft, Settings, InOutState, Result, DeltaSeconds);
+	}
+	return Result;
 }
 }
 
@@ -174,11 +308,14 @@ bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString&
 	const FMediaPipeBodyFusionAuthority Authority = FMediaPipeBodyFusionAuthority::DefaultHybrid();
 	TestTrue(TEXT("Head owner defaults to HMD"), Authority.GetOwner(EMediaPipeBodyFusionRegion::Head) == EMediaPipeBodyFusionOwner::Hmd);
 	TestTrue(TEXT("Chest owner defaults to fused bridge"), Authority.GetOwner(EMediaPipeBodyFusionRegion::Chest) == EMediaPipeBodyFusionOwner::Fused);
-	TestTrue(TEXT("Quest owns upper limbs by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftWrist) == EMediaPipeBodyFusionOwner::Quest);
+	TestTrue(TEXT("MediaPipe owns observed shoulders by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftShoulder) == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("Fused solve owns inferred elbows by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftElbow) == EMediaPipeBodyFusionOwner::Fused);
+	TestTrue(TEXT("Quest owns wrist/hand endpoints by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftWrist) == EMediaPipeBodyFusionOwner::Quest);
 	TestTrue(TEXT("MediaPipe owns lower body by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftFoot) == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("MediaPipe owns lower-body heels by default"), Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftHeel) == EMediaPipeBodyFusionOwner::MediaPipe);
 
 	TestTrue(
-		TEXT("Fresh Quest arm blocks MediaPipe arm overwrite"),
+		TEXT("Fresh Quest wrist endpoint blocks MediaPipe wrist fallback"),
 		FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(
 			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh),
 			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh)) == EMediaPipeBodyFusionOwner::Quest);
@@ -188,10 +325,10 @@ bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString&
 			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh),
 			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh)) == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestTrue(
-		TEXT("MediaPipe arm can be fallback when Quest is stale"),
+		TEXT("MediaPipe arm fallback stays disabled when Quest is stale"),
 		FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(
 			MakeStatus(EMediaPipeBodyFusionSourceState::Stale),
-			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh)) == EMediaPipeBodyFusionOwner::MediaPipe);
+			MakeStatus(EMediaPipeBodyFusionSourceState::Fresh)) == EMediaPipeBodyFusionOwner::None);
 
 	const FMediaPipeBodyFusionAuthority EmbodiedUpperBodyAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedUpperBody();
 	TestTrue(TEXT("Embodied upper-body authority keeps Quest arms"),
@@ -200,6 +337,8 @@ bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString&
 		EmbodiedUpperBodyAuthority.GetOwner(EMediaPipeBodyFusionRegion::Pelvis) == EMediaPipeBodyFusionOwner::AvatarProfile);
 	TestTrue(TEXT("Embodied upper-body authority keeps legs profile-owned"),
 		EmbodiedUpperBodyAuthority.GetOwner(EMediaPipeBodyFusionRegion::LeftFoot) == EMediaPipeBodyFusionOwner::AvatarProfile);
+	TestTrue(TEXT("Embodied upper-body authority keeps heels profile-owned"),
+		EmbodiedUpperBodyAuthority.GetOwner(EMediaPipeBodyFusionRegion::LeftHeel) == EMediaPipeBodyFusionOwner::AvatarProfile);
 	const FMediaPipeBodyFusionAuthority EmbodiedHipsOnlyAuthority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	TestTrue(TEXT("Embodied hips-only authority keeps pelvis MediaPipe-owned"),
 		EmbodiedHipsOnlyAuthority.GetOwner(EMediaPipeBodyFusionRegion::Pelvis) == EMediaPipeBodyFusionOwner::MediaPipe);
@@ -209,6 +348,8 @@ bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString&
 	TestTrue(TEXT("Embodied hips-only authority keeps knees and feet profile-owned"),
 		EmbodiedHipsOnlyAuthority.GetOwner(EMediaPipeBodyFusionRegion::LeftKnee) == EMediaPipeBodyFusionOwner::AvatarProfile &&
 		EmbodiedHipsOnlyAuthority.GetOwner(EMediaPipeBodyFusionRegion::LeftFoot) == EMediaPipeBodyFusionOwner::AvatarProfile);
+	TestTrue(TEXT("Embodied hips-only authority keeps heels profile-owned"),
+		EmbodiedHipsOnlyAuthority.GetOwner(EMediaPipeBodyFusionRegion::LeftHeel) == EMediaPipeBodyFusionOwner::AvatarProfile);
 	return true;
 }
 
@@ -240,7 +381,9 @@ bool FMediaPipeBodyFusionTraceOnlyAuthorityAutomationTest::RunTest(const FString
 		Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestFalse(TEXT("Trace-only mode does not promote MediaPipe hips into fused pose"),
 		Pose.LeftHip.bValid && Pose.LeftHip.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
-	TestFalse(TEXT("Trace-only mode does not promote MediaPipe arm fallback into fused pose"),
+	TestTrue(TEXT("Trace-only mode still records MediaPipe shoulder observations for fusion correlation"),
+		Pose.LeftShoulder.bValid && Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestFalse(TEXT("Trace-only mode does not promote MediaPipe elbow/wrist arm fallback into fused pose"),
 		Pose.LeftElbow.bValid && Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	return true;
 }
@@ -660,6 +803,10 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	Frame.LeftArmWristWorld = FVector(15.0f, -50.0f, 80.0f);
 	Frame.LeftArmChainTimestampSeconds = 9.95;
 	Frame.LeftArmChainConfidence = 1.0f;
+	Frame.bHasLeftHand = true;
+	Frame.LeftHandWorld = FVector(15.0f, -50.0f, 80.0f);
+	Frame.LeftHandTimestampSeconds = 9.95;
+	Frame.LeftHandConfidence = 1.0f;
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	FMediaPipeBodyFusionSolveInput Input;
@@ -670,8 +817,12 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 
 	FMediaPipeFusedAvatarPose Pose;
 	TestTrue(TEXT("Fusion solve succeeds with mixed Quest and MediaPipe sources"), FMediaPipeBodyFusionSolver::Solve(Input, Pose));
-	TestTrue(TEXT("Quest full-arm chain owner tag is preserved over MediaPipe arm data"),
-		Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
+	TestTrue(TEXT("MediaPipe shoulder owner tag is preserved over inferred Quest shoulder data"),
+		Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("Fresh inferred elbow is tagged as fused, not Quest-owned shoulder authority"),
+		Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Fused);
+	TestTrue(TEXT("Quest wrist endpoint owner tag is preserved"),
+		Pose.LeftWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
 	TestTrue(TEXT("MediaPipe lower-body owner tag is preserved"),
 		Pose.LeftHip.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	TestTrue(TEXT("Chest owner tag is fused"),
@@ -695,6 +846,7 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	HmdOnlyMetaHumanInput.Profile = MetaHumanProfile;
 	HmdOnlyMetaHumanInput.Profile.DefaultPelvisLocalOffset = FVector(0.0f, 0.0f, 58.0f);
 	HmdOnlyMetaHumanInput.Profile.DefaultChestLocalOffset = FVector(0.0f, 0.0f, 116.0f);
+	HmdOnlyMetaHumanInput.Calibration = MakeIdentityCalibration();
 	HmdOnlyMetaHumanInput.Authority = FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	HmdOnlyMetaHumanInput.BodyAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
 	HmdOnlyMetaHumanInput.AvatarWorldTransform = FTransform::Identity;
@@ -769,17 +921,17 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeFusedAvatarPose ArmDrivenMetaHumanPose;
 	TestTrue(TEXT("Arm-driven MetaHuman embodied solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, ArmDrivenMetaHumanPose));
-	TestTrue(TEXT("Opposing Quest shoulder chain cannot damp HMD-owned chest planar motion"),
+	TestTrue(TEXT("Inferred Quest shoulder chain cannot damp HMD-owned chest planar motion"),
 		FMath::IsNearlyEqual(
 			ArmDrivenMetaHumanPose.Chest.LocationWorld.X,
 			LeanHmdOnlyMetaHumanPose.Chest.LocationWorld.X,
 			0.1f));
-	TestTrue(TEXT("Opposing Quest shoulder chain cannot collapse HMD-owned chest height"),
+	TestTrue(TEXT("Inferred Quest shoulder chain cannot collapse HMD-owned chest height"),
 		FMath::IsNearlyEqual(
 			ArmDrivenMetaHumanPose.Chest.LocationWorld.Z,
 			LeanHmdOnlyMetaHumanPose.Chest.LocationWorld.Z,
 			0.1f));
-	TestTrue(TEXT("Fresh Quest shoulder chain keeps pelvis following the HMD/profile upper-body basis"),
+	TestTrue(TEXT("Fresh inferred Quest shoulder chain keeps pelvis following the HMD/profile upper-body basis"),
 		ArmDrivenMetaHumanPose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused &&
 		FMath::IsNearlyEqual(
 			ArmDrivenMetaHumanPose.Pelvis.LocationWorld.X,
@@ -787,6 +939,9 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 			0.1f));
 
 	HmdOnlyMetaHumanInput.SourceFrame = MakeFreshHmdFrame(FVector(-60.0f, 0.0f, 170.0f));
+	AddReliableUpperBody(HmdOnlyMetaHumanInput.SourceFrame);
+	HmdOnlyMetaHumanInput.SourceFrame.SetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(-96.0f, -28.0f, 116.0f), 0.9f);
+	HmdOnlyMetaHumanInput.SourceFrame.SetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, FVector(-96.0f, 28.0f, 116.0f), 0.9f);
 	HmdOnlyMetaHumanInput.SourceFrame.bHasLeftArmChain = true;
 	HmdOnlyMetaHumanInput.SourceFrame.LeftArmShoulderWorld = FVector(-96.0f, -28.0f, 116.0f);
 	HmdOnlyMetaHumanInput.SourceFrame.LeftArmElbowWorld = FVector(-104.0f, -42.0f, 104.0f);
@@ -801,9 +956,9 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	HmdOnlyMetaHumanInput.SourceFrame.RightArmChainConfidence = 1.0f;
 	HmdOnlyMetaHumanInput.SourceFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 	FMediaPipeFusedAvatarPose AgreeingArmDrivenMetaHumanPose;
-	TestTrue(TEXT("Agreeing Quest shoulder chain MetaHuman embodied solve succeeds"),
+	TestTrue(TEXT("Agreeing MediaPipe shoulder observation MetaHuman embodied solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, AgreeingArmDrivenMetaHumanPose));
-	TestTrue(TEXT("Quest shoulder chain that agrees with HMD strengthens the shared upper-body basis"),
+	TestTrue(TEXT("MediaPipe shoulder observation that agrees with HMD strengthens the shared upper-body basis"),
 		AgreeingArmDrivenMetaHumanPose.Chest.LocationWorld.X < LeanHmdOnlyMetaHumanPose.Chest.LocationWorld.X - 1.0f &&
 		AgreeingArmDrivenMetaHumanPose.Pelvis.LocationWorld.X < LeanHmdOnlyMetaHumanPose.Pelvis.LocationWorld.X - 1.0f);
 
@@ -811,6 +966,9 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeFusedAvatarPose CenteredHmdOnlyMetaHumanPose;
 	TestTrue(TEXT("Centered HMD-only MetaHuman embodied solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, CenteredHmdOnlyMetaHumanPose));
+	AddReliableUpperBody(HmdOnlyMetaHumanInput.SourceFrame);
+	HmdOnlyMetaHumanInput.SourceFrame.SetBodyLandmark(EMediaPipePoseLandmark::LeftShoulder, FVector(60.0f, -28.0f, 116.0f), 0.9f);
+	HmdOnlyMetaHumanInput.SourceFrame.SetBodyLandmark(EMediaPipePoseLandmark::RightShoulder, FVector(60.0f, 28.0f, 116.0f), 0.9f);
 	HmdOnlyMetaHumanInput.SourceFrame.bHasLeftArmChain = true;
 	HmdOnlyMetaHumanInput.SourceFrame.LeftArmShoulderWorld = FVector(60.0f, -28.0f, 116.0f);
 	HmdOnlyMetaHumanInput.SourceFrame.LeftArmElbowWorld = FVector(80.0f, -42.0f, 104.0f);
@@ -827,7 +985,7 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 	FMediaPipeFusedAvatarPose ArmOnlyMetaHumanPose;
 	TestTrue(TEXT("Arm-only shared upper-body MetaHuman solve succeeds"),
 		FMediaPipeBodyFusionSolver::Solve(HmdOnlyMetaHumanInput, ArmOnlyMetaHumanPose));
-	TestTrue(TEXT("Quest shoulder chain can bias the shared upper-body basis when the HMD is centered"),
+	TestTrue(TEXT("MediaPipe shoulder observation can bias the shared upper-body basis when the HMD is centered"),
 		ArmOnlyMetaHumanPose.Chest.LocationWorld.X > CenteredHmdOnlyMetaHumanPose.Chest.LocationWorld.X + 0.5f ||
 		ArmOnlyMetaHumanPose.Pelvis.LocationWorld.X > CenteredHmdOnlyMetaHumanPose.Pelvis.LocationWorld.X + 0.5f);
 
@@ -845,7 +1003,7 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.QuestUpperBodyAuthority",
+	"TestingKit3.MediaPipe.BodyFusion.FusedUpperBodyAuthority",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FString& Parameters)
@@ -853,6 +1011,7 @@ bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FS
 	FMediaPipeTrackingSourceFrame Frame = MakeFreshHmdFrame(FVector(0.0f, 0.0f, 170.0f));
 	AddReliableUpperBody(Frame);
 	AddFreshQuestFullArmChain(Frame);
+	AddFreshQuestHands(Frame);
 	Frame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 
 	FMediaPipeBodyFusionSolveInput Input;
@@ -863,16 +1022,16 @@ bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FS
 
 	FMediaPipeFusedAvatarPose Pose;
 	TestTrue(TEXT("Fusion solve succeeds with fresh Quest full-arm chain and MediaPipe arm landmarks"), FMediaPipeBodyFusionSolver::Solve(Input, Pose));
-	TestTrue(TEXT("Quest left shoulder remains authoritative over MediaPipe"), Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Quest left elbow remains authoritative over MediaPipe"), Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Quest left wrist remains authoritative over MediaPipe"), Pose.LeftWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Quest right shoulder remains authoritative over MediaPipe"), Pose.RightShoulder.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Quest right elbow remains authoritative over MediaPipe"), Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Quest right wrist remains authoritative over MediaPipe"), Pose.RightWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
-	TestTrue(TEXT("Left Quest wrist position is not overwritten by MediaPipe"),
-		Pose.LeftWrist.LocationWorld.Equals(Frame.LeftArmWristWorld, 0.001f));
-	TestTrue(TEXT("Right Quest wrist position is not overwritten by MediaPipe"),
-		Pose.RightWrist.LocationWorld.Equals(Frame.RightArmWristWorld, 0.001f));
+	TestTrue(TEXT("MediaPipe left shoulder remains the observed shoulder authority"), Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("Fresh left elbow is a fused inference"), Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Fused);
+	TestTrue(TEXT("Quest left wrist remains endpoint authority"), Pose.LeftWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
+	TestTrue(TEXT("MediaPipe right shoulder remains the observed shoulder authority"), Pose.RightShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestTrue(TEXT("Fresh right elbow is a fused inference"), Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Fused);
+	TestTrue(TEXT("Quest right wrist remains endpoint authority"), Pose.RightWrist.Owner == EMediaPipeBodyFusionOwner::Quest);
+	TestTrue(TEXT("Left Quest hand endpoint position is not overwritten by MediaPipe or inferred arm chain"),
+		Pose.LeftWrist.LocationWorld.Equals(Frame.LeftHandWorld, 0.001f));
+	TestTrue(TEXT("Right Quest hand endpoint position is not overwritten by MediaPipe or inferred arm chain"),
+		Pose.RightWrist.LocationWorld.Equals(Frame.RightHandWorld, 0.001f));
 	return true;
 }
 
@@ -904,8 +1063,8 @@ bool FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest::RunTest(const FSt
 		Pose.LeftWrist.LocationWorld.Equals(Frame.LeftHandWorld, 0.001f));
 	TestTrue(TEXT("MediaPipe left shoulder is retained as an arm hint when Quest has wrist authority"),
 		Pose.LeftShoulder.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
-	TestTrue(TEXT("MediaPipe left elbow is retained as an arm hint when Quest has wrist authority"),
-		Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
+	TestFalse(TEXT("MediaPipe elbow is not used as a wrist/arm fallback when only Quest hand is fresh"),
+		Pose.LeftElbow.bValid && Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::MediaPipe);
 	return true;
 }
 
@@ -934,6 +1093,7 @@ bool FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest::RunTest(con
 		Input.SourceFrame = MakeFreshHmdFrame(FVector(0.0f, 8.92f, 170.0f));
 		AddReliableUpperBody(Input.SourceFrame);
 		AddFreshQuestFullArmChain(Input.SourceFrame);
+		AddFreshQuestHands(Input.SourceFrame);
 		Input.SourceFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
 		Input.Calibration = MakeIdentityCalibration();
 		Input.Profile = BuildMediaPipeAvatarEmbodimentProfileFromMetaHumanProfile(MetaHumanProfile);
@@ -942,15 +1102,399 @@ bool FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest::RunTest(con
 		FMediaPipeFusedAvatarPose Pose;
 		TestTrue(*FString::Printf(TEXT("Fusion solve succeeds for %s profile"), *ProfileId.ToString()),
 			FMediaPipeBodyFusionSolver::Solve(Input, Pose));
-		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain left elbow authority"), *ProfileId.ToString()),
-			Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
-		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain right elbow authority"), *ProfileId.ToString()),
-			Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Quest);
-		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain left wrist position"), *ProfileId.ToString()),
-			Pose.LeftWrist.LocationWorld.Equals(Input.SourceFrame.LeftArmWristWorld, 0.001f));
-		TestTrue(*FString::Printf(TEXT("%s keeps Quest full-arm-chain right wrist position"), *ProfileId.ToString()),
-			Pose.RightWrist.LocationWorld.Equals(Input.SourceFrame.RightArmWristWorld, 0.001f));
+		TestTrue(*FString::Printf(TEXT("%s fuses left elbow from inferred chain plus MediaPipe shoulder"), *ProfileId.ToString()),
+			Pose.LeftElbow.Owner == EMediaPipeBodyFusionOwner::Fused);
+		TestTrue(*FString::Printf(TEXT("%s fuses right elbow from inferred chain plus MediaPipe shoulder"), *ProfileId.ToString()),
+			Pose.RightElbow.Owner == EMediaPipeBodyFusionOwner::Fused);
+		TestTrue(*FString::Printf(TEXT("%s keeps Quest hand left wrist endpoint"), *ProfileId.ToString()),
+			Pose.LeftWrist.LocationWorld.Equals(Input.SourceFrame.LeftHandWorld, 0.001f));
+		TestTrue(*FString::Printf(TEXT("%s keeps Quest hand right wrist endpoint"), *ProfileId.ToString()),
+			Pose.RightWrist.LocationWorld.Equals(Input.SourceFrame.RightHandWorld, 0.001f));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2ShoulderNeutralGateAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2ShoulderNeutralGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2ShoulderNeutralGateAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	const FMediaPipeTrackingSourceFrame NeutralFrame = MakeStage2ShoulderFrame();
+	FMediaPipeStage2ShoulderEvidenceSideState State;
+	FMediaPipeStage2ShoulderEvidenceResult Result;
+
+	TestTrue(TEXT("Stage 2 neutral sample solves"),
+		BuildStage2SideForTest(NeutralFrame, true, Settings, State, Result));
+	TestTrue(TEXT("Stage 2 accepts initial neutral sample"), Result.bNeutralSampleAccepted);
+	TestFalse(TEXT("Stage 2 does not write before neutral hold is ready"), Result.bNeutralReferenceReady);
+	TestTrue(TEXT("Stage 2 smoothed lift stays zero before neutral is ready"),
+		FMath::IsNearlyZero(Result.SmoothedLiftCm, 0.001f));
+
+	Result = PrimeStage2NeutralForTest(true, Settings, State);
+	TestTrue(TEXT("Stage 2 neutral reference becomes ready only after held neutral observations"),
+		Result.bNeutralReferenceReady);
+	TestTrue(TEXT("Stage 2 neutral reference tracks the observed shoulder height"),
+		FMath::IsNearlyEqual(Result.ReferenceShoulderLiftFromPelvisCm, 42.0f, 0.01f));
+	TestTrue(TEXT("Stage 2 ready neutral still produces no target while shoulders are down"),
+		FMath::IsNearlyZero(Result.PositiveTargetLiftCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2QuestArmOwnershipAllowsShrugAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2QuestArmOwnershipAllowsShrugWithFreshEndpoints",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2QuestArmOwnershipAllowsShrugAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	FMediaPipeStage2ShoulderEvidenceSideState RightState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+	PrimeStage2NeutralForTest(false, Settings, RightState);
+
+	const FMediaPipeTrackingSourceFrame LeftArmRaisedFrame = MakeStage2ShoulderFrame(
+		6.0f,
+		0.0f,
+		true,
+		false);
+	FMediaPipeStage2ShoulderEvidenceResult LeftResult;
+	FMediaPipeStage2ShoulderEvidenceResult RightResult;
+	TestTrue(TEXT("Stage 2 solves left side with a raised Quest left arm"),
+		BuildStage2SideForTest(LeftArmRaisedFrame, true, Settings, LeftState, LeftResult));
+	TestTrue(TEXT("Stage 2 solves right side with a raised Quest left arm"),
+		BuildStage2SideForTest(LeftArmRaisedFrame, false, Settings, RightState, RightResult));
+
+	TestTrue(TEXT("Raised Quest arm source remains present for diagnostics"),
+		LeftResult.bHadQuestArmRaiseSource && RightResult.bHadQuestArmRaiseSource);
+	TestTrue(TEXT("Raised Quest arm does not suppress a confirmed same-side shrug when endpoints are fresh"),
+		!LeftResult.bSuppressedByArmOwnership &&
+		LeftResult.QuestArmRaiseOwnershipFade > KINDA_SMALL_NUMBER &&
+		LeftResult.PositiveTargetLiftCm > 0.0f &&
+		LeftResult.SmoothedLiftCm > 0.0f);
+	TestTrue(TEXT("Raised Quest arm blocks neutral updates so arm-up posture cannot become the baseline"),
+		!LeftResult.bNeutralSampleAccepted && !RightResult.bNeutralSampleAccepted);
+	TestTrue(TEXT("Opposite shoulder remains quiet during raised-arm same-side shrug"),
+		!RightResult.bSuppressedByArmOwnership &&
+		FMath::IsNearlyZero(RightResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(RightResult.SmoothedLiftCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2ContradictionFailsClosedAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2ContradictionFailsClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2ContradictionFailsClosedAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	Settings.ContradictionCm = 10.0f;
+
+	FMediaPipeStage2ShoulderEvidenceSideState UnprimedState;
+	FMediaPipeTrackingSourceFrame ContradictedNeutralFrame = MakeStage2ShoulderFrame();
+	ContradictedNeutralFrame.LeftArmShoulderWorld = FVector(0.0f, -28.0f, 180.0f);
+	ContradictedNeutralFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult ContradictedNeutralResult;
+	TestTrue(TEXT("Stage 2 reports diagnostics for contradicted neutral input"),
+		BuildStage2SideForTest(ContradictedNeutralFrame, true, Settings, UnprimedState, ContradictedNeutralResult));
+	TestTrue(TEXT("Contradicted Quest shoulder suppresses Stage 2"),
+		ContradictedNeutralResult.bHadContradictionSource &&
+		ContradictedNeutralResult.bSuppressedByContradiction);
+	TestFalse(TEXT("Contradiction cannot seed the neutral reference"),
+		ContradictedNeutralResult.bNeutralSampleAccepted ||
+		UnprimedState.bHasNeutralReference ||
+		ContradictedNeutralResult.bNeutralReferenceReady);
+
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+
+	const FMediaPipeTrackingSourceFrame FreshShrugFrame = MakeStage2ShoulderFrame(6.0f, 0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult FreshShrugResult;
+	TestTrue(TEXT("Stage 2 applies before a contradiction when inputs agree"),
+		BuildStage2SideForTest(FreshShrugFrame, true, Settings, LeftState, FreshShrugResult));
+	TestTrue(TEXT("Fresh shrug produces a nonzero Stage 2 lift before contradiction"),
+		FreshShrugResult.SmoothedLiftCm > 0.0f);
+
+	const float ReferenceBeforeContradictionCm = LeftState.NeutralShoulderLiftFromPelvisCm;
+	FMediaPipeTrackingSourceFrame ContradictedLowShoulderFrame = MakeStage2ShoulderFrame(-6.0f, 0.0f);
+	ContradictedLowShoulderFrame.LeftArmShoulderWorld = FVector(0.0f, -28.0f, 180.0f);
+	ContradictedLowShoulderFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult ContradictedLowResult;
+	TestTrue(TEXT("Stage 2 reports diagnostics for contradicted lower MediaPipe shoulder"),
+		BuildStage2SideForTest(ContradictedLowShoulderFrame, true, Settings, LeftState, ContradictedLowResult));
+	TestTrue(TEXT("Contradiction suppresses and clears smoothed Stage 2 lift"),
+		ContradictedLowResult.bSuppressedByContradiction &&
+		FMath::IsNearlyZero(ContradictedLowResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(ContradictedLowResult.SmoothedLiftCm, 0.001f) &&
+		!ContradictedLowResult.bClampHit);
+	TestFalse(TEXT("Contradiction cannot update an existing neutral reference"),
+		ContradictedLowResult.bNeutralSampleAccepted);
+	TestTrue(TEXT("Contradiction leaves the neutral shoulder reference unchanged"),
+		FMath::IsNearlyEqual(LeftState.NeutralShoulderLiftFromPelvisCm, ReferenceBeforeContradictionCm, 0.001f) &&
+		FMath::IsNearlyEqual(ContradictedLowResult.ReferenceShoulderLiftFromPelvisCm, ReferenceBeforeContradictionCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2MissingQuestArmFailsClosedAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2MissingQuestArmFailsClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2MissingQuestArmFailsClosedAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+
+	const FMediaPipeTrackingSourceFrame LeftShrugFrame = MakeStage2ShoulderFrame(6.0f, 0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult ShrugResult;
+	TestTrue(TEXT("Stage 2 solves a left shrug while Quest full-arm data is fresh"),
+		BuildStage2SideForTest(LeftShrugFrame, true, Settings, LeftState, ShrugResult));
+	TestTrue(TEXT("Fresh Quest arm source allows bounded Stage 2 lift"),
+		ShrugResult.bHadQuestArmRaiseSource &&
+		!ShrugResult.bSuppressedByArmOwnership &&
+		ShrugResult.SmoothedLiftCm > 0.0f);
+
+	FMediaPipeTrackingSourceFrame MissingQuestArmFrame = MakeStage2ShoulderFrame(6.0f, 0.0f);
+	ClearQuestFullArmChain(MissingQuestArmFrame);
+	MissingQuestArmFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult MissingQuestResult;
+	TestTrue(TEXT("Stage 2 still produces diagnostics with missing Quest full-arm source"),
+		BuildStage2SideForTest(MissingQuestArmFrame, true, Settings, LeftState, MissingQuestResult));
+	TestFalse(TEXT("Missing Quest full-arm source is not treated as an authority source"),
+		MissingQuestResult.bHadQuestArmRaiseSource);
+	TestTrue(TEXT("Missing Quest full-arm source suppresses Stage 2 application"),
+		MissingQuestResult.bSuppressedByArmOwnership);
+	TestTrue(TEXT("Missing Quest full-arm source resets smoothed Stage 2 lift to zero"),
+		FMath::IsNearlyZero(MissingQuestResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(MissingQuestResult.SmoothedLiftCm, 0.001f) &&
+		!MissingQuestResult.bClampHit);
+
+	FMediaPipeStage2ShoulderEvidenceSideState UnprimedState;
+	FMediaPipeTrackingSourceFrame MissingQuestNeutralFrame = MakeStage2ShoulderFrame();
+	ClearQuestFullArmChain(MissingQuestNeutralFrame);
+	MissingQuestNeutralFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult MissingQuestNeutralResult;
+	TestTrue(TEXT("Stage 2 still reports diagnostics for missing Quest source before neutral calibration"),
+		BuildStage2SideForTest(MissingQuestNeutralFrame, true, Settings, UnprimedState, MissingQuestNeutralResult));
+	TestFalse(TEXT("Missing Quest source cannot seed the neutral reference"),
+		MissingQuestNeutralResult.bNeutralSampleAccepted ||
+		UnprimedState.bHasNeutralReference ||
+		MissingQuestNeutralResult.bNeutralReferenceReady);
+
+	const float ReferenceBeforeMissingQuestCm = LeftState.NeutralShoulderLiftFromPelvisCm;
+	FMediaPipeTrackingSourceFrame MissingQuestLowShoulderFrame = MakeStage2ShoulderFrame(-6.0f, 0.0f);
+	ClearQuestFullArmChain(MissingQuestLowShoulderFrame);
+	MissingQuestLowShoulderFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult MissingQuestLowResult;
+	TestTrue(TEXT("Stage 2 reports diagnostics for missing Quest source with lower MediaPipe shoulder"),
+		BuildStage2SideForTest(MissingQuestLowShoulderFrame, true, Settings, LeftState, MissingQuestLowResult));
+	TestFalse(TEXT("Missing Quest source cannot update an existing neutral reference"),
+		MissingQuestLowResult.bNeutralSampleAccepted);
+	TestTrue(TEXT("Missing Quest source leaves the neutral shoulder reference unchanged"),
+		FMath::IsNearlyEqual(LeftState.NeutralShoulderLiftFromPelvisCm, ReferenceBeforeMissingQuestCm, 0.001f) &&
+		FMath::IsNearlyEqual(MissingQuestLowResult.ReferenceShoulderLiftFromPelvisCm, ReferenceBeforeMissingQuestCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2PartialQuestArmFailsClosedAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2PartialQuestArmFailsClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2PartialQuestArmFailsClosedAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	FMediaPipeStage2ShoulderEvidenceSideState RightState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+	PrimeStage2NeutralForTest(false, Settings, RightState);
+
+	const FMediaPipeTrackingSourceFrame FreshShrugFrame = MakeStage2ShoulderFrame(6.0f, 0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult FreshLeftResult;
+	TestTrue(TEXT("Stage 2 applies with both Quest arm chains fresh and arms down"),
+		BuildStage2SideForTest(FreshShrugFrame, true, Settings, LeftState, FreshLeftResult));
+	TestTrue(TEXT("Fresh bilateral Quest arm sources allow bounded Stage 2 lift"),
+		FreshLeftResult.bHadQuestArmRaiseSource &&
+		!FreshLeftResult.bSuppressedByArmOwnership &&
+		FreshLeftResult.SmoothedLiftCm > 0.0f);
+
+	FMediaPipeTrackingSourceFrame MissingLeftQuestArmFrame = MakeStage2ShoulderFrame(6.0f, 0.0f);
+	ClearQuestArmChain(MissingLeftQuestArmFrame, true);
+	MissingLeftQuestArmFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult MissingLeftResult;
+	FMediaPipeStage2ShoulderEvidenceResult MissingRightResult;
+	TestTrue(TEXT("Stage 2 still reports diagnostics with one missing Quest arm chain on raised side"),
+		BuildStage2SideForTest(MissingLeftQuestArmFrame, true, Settings, LeftState, MissingLeftResult));
+	TestTrue(TEXT("Stage 2 still reports diagnostics with one missing Quest arm chain on opposite side"),
+		BuildStage2SideForTest(MissingLeftQuestArmFrame, false, Settings, RightState, MissingRightResult));
+	TestFalse(TEXT("Partial Quest arm source is not treated as complete ownership input on raised side"),
+		MissingLeftResult.bHadQuestArmRaiseSource);
+	TestFalse(TEXT("Partial Quest arm source is not treated as complete ownership input on opposite side"),
+		MissingRightResult.bHadQuestArmRaiseSource);
+	TestTrue(TEXT("Partial Quest arm source suppresses same-side Stage 2 application"),
+		MissingLeftResult.bSuppressedByArmOwnership &&
+		FMath::IsNearlyZero(MissingLeftResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(MissingLeftResult.SmoothedLiftCm, 0.001f));
+	TestTrue(TEXT("Partial Quest arm source suppresses opposite-side Stage 2 application"),
+		MissingRightResult.bSuppressedByArmOwnership &&
+		FMath::IsNearlyZero(MissingRightResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(MissingRightResult.SmoothedLiftCm, 0.001f));
+
+	const float ReferenceBeforePartialQuestCm = LeftState.NeutralShoulderLiftFromPelvisCm;
+	FMediaPipeTrackingSourceFrame PartialQuestLowShoulderFrame = MakeStage2ShoulderFrame(-6.0f, 0.0f);
+	ClearQuestArmChain(PartialQuestLowShoulderFrame, true);
+	PartialQuestLowShoulderFrame.UpdateFreshness(FMediaPipeBodyFusionFreshnessThresholds());
+
+	FMediaPipeStage2ShoulderEvidenceResult PartialQuestLowResult;
+	TestTrue(TEXT("Stage 2 reports diagnostics for partial Quest source with lower MediaPipe shoulder"),
+		BuildStage2SideForTest(PartialQuestLowShoulderFrame, true, Settings, LeftState, PartialQuestLowResult));
+	TestFalse(TEXT("Partial Quest source cannot update an existing neutral reference"),
+		PartialQuestLowResult.bNeutralSampleAccepted);
+	TestTrue(TEXT("Partial Quest source leaves the neutral shoulder reference unchanged"),
+		FMath::IsNearlyEqual(LeftState.NeutralShoulderLiftFromPelvisCm, ReferenceBeforePartialQuestCm, 0.001f) &&
+		FMath::IsNearlyEqual(PartialQuestLowResult.ReferenceShoulderLiftFromPelvisCm, ReferenceBeforePartialQuestCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2SignedShoulderEvidenceAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2SignedShoulderEvidenceRecorded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2SignedShoulderEvidenceAutomationTest::RunTest(const FString& Parameters)
+{
+	const FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+
+	const FMediaPipeTrackingSourceFrame ShoulderOnlyFrame = MakeStage2ShoulderFrame(
+		4.0f,
+		0.0f,
+		false,
+		false,
+		4.0f,
+		0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult ShoulderOnlyResult;
+	TestTrue(TEXT("Stage 2 solves signed shoulder evidence"),
+		BuildStage2SideForTest(ShoulderOnlyFrame, true, Settings, LeftState, ShoulderOnlyResult));
+	TestTrue(TEXT("Head clearance is diagnostic only; signed shoulder lift remains usable with headset head motion"),
+		ShoulderOnlyResult.bNeutralReferenceReady &&
+		ShoulderOnlyResult.SignedLiftEvidenceCm > 0.0f &&
+		FMath::IsNearlyZero(ShoulderOnlyResult.ShoulderHeadClearanceShrugCm, 0.001f));
+	TestTrue(TEXT("Signed shoulder evidence records a bounded positive shoulder target"),
+		ShoulderOnlyResult.PositiveTargetLiftCm > 3.0f &&
+		ShoulderOnlyResult.PositiveTargetLiftCm < Settings.MaxLiftCm &&
+		ShoulderOnlyResult.SmoothedLiftCm > 3.0f &&
+		!ShoulderOnlyResult.bClampHit);
+
+	const FMediaPipeTrackingSourceFrame HeadOnlyFrame = MakeStage2ShoulderFrame(
+		0.0f,
+		0.0f,
+		false,
+		false,
+		-6.0f,
+		0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult HeadOnlyResult;
+	TestTrue(TEXT("Stage 2 solves head-clearance-only ambiguous evidence"),
+		BuildStage2SideForTest(HeadOnlyFrame, true, Settings, LeftState, HeadOnlyResult));
+	TestTrue(TEXT("Head-clearance-only motion keeps raw lift neutral"),
+		FMath::IsNearlyZero(HeadOnlyResult.RawLiftDeltaCm, 0.001f));
+	TestTrue(TEXT("Head-clearance-only ambiguous evidence fails closed"),
+		FMath::IsNearlyZero(HeadOnlyResult.SignedLiftEvidenceCm, 0.001f) &&
+		FMath::IsNearlyZero(HeadOnlyResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(HeadOnlyResult.SmoothedLiftCm, 0.001f) &&
+		!HeadOnlyResult.bClampHit);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2SideSpecificShrugAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2SideSpecificShrugNoOppositeClamp",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2SideSpecificShrugAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	Settings.ResponseScale = 8.0f;
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	FMediaPipeStage2ShoulderEvidenceSideState RightState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+	PrimeStage2NeutralForTest(false, Settings, RightState);
+
+	const FMediaPipeTrackingSourceFrame LeftShrugFrame = MakeStage2ShoulderFrame(4.0f, 0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult LeftResult;
+	FMediaPipeStage2ShoulderEvidenceResult RightResult;
+	TestTrue(TEXT("Stage 2 solves left shrug evidence"),
+		BuildStage2SideForTest(LeftShrugFrame, true, Settings, LeftState, LeftResult));
+	TestTrue(TEXT("Stage 2 solves opposite side during left shrug"),
+		BuildStage2SideForTest(LeftShrugFrame, false, Settings, RightState, RightResult));
+
+	TestTrue(TEXT("Stage 2 clamps response scale to one for MetaHuman safety"),
+		FMath::IsNearlyEqual(LeftResult.AppliedResponseScale, 1.0f, 0.001f));
+	TestTrue(TEXT("Signed left shrug evidence follows the physical shoulder lift"),
+		FMath::IsNearlyEqual(LeftResult.SignedLiftEvidenceCm, 4.0f, 0.01f));
+	TestTrue(TEXT("Left shrug target records same-side shoulder lift without hitting the cap"),
+		LeftResult.PositiveTargetLiftCm > 3.0f &&
+		LeftResult.PositiveTargetLiftCm < Settings.MaxLiftCm - 0.01f &&
+		!LeftResult.bClampHit);
+	TestTrue(TEXT("Opposite shoulder remains near zero during a one-side shrug"),
+		FMath::IsNearlyZero(RightResult.SignedLiftEvidenceCm, 0.01f) &&
+		FMath::IsNearlyZero(RightResult.PositiveTargetLiftCm, 0.001f) &&
+		FMath::IsNearlyZero(RightResult.SmoothedLiftCm, 0.001f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodyFusionStage2ShrugReleaseAutomationTest,
+	"TestingKit3.MediaPipe.BodyFusion.Stage2ShrugReleaseClearsLift",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodyFusionStage2ShrugReleaseAutomationTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeStage2ShoulderEvidenceSettings Settings = MakeStage2TestSettings();
+	Settings.HalfLifeSeconds = 0.04f;
+	FMediaPipeStage2ShoulderEvidenceSideState LeftState;
+	PrimeStage2NeutralForTest(true, Settings, LeftState);
+
+	const FMediaPipeTrackingSourceFrame LeftShrugFrame = MakeStage2ShoulderFrame(4.0f, 0.0f);
+	FMediaPipeStage2ShoulderEvidenceResult ShrugResult;
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		TestTrue(TEXT("Stage 2 solves left shrug before release"),
+			BuildStage2SideForTest(LeftShrugFrame, true, Settings, LeftState, ShrugResult, 0.04f));
+	}
+	TestTrue(TEXT("Stage 2 records a bounded shoulder target before release"),
+		ShrugResult.SmoothedLiftCm > 3.0f &&
+		ShrugResult.SmoothedLiftCm < Settings.MaxLiftCm &&
+		!ShrugResult.bClampHit);
+
+	const FMediaPipeTrackingSourceFrame NeutralFrame = MakeStage2ShoulderFrame();
+	FMediaPipeStage2ShoulderEvidenceResult ReleaseResult;
+	float PreviousSmoothedLiftCm = ShrugResult.SmoothedLiftCm;
+	for (int32 Index = 0; Index < 6; ++Index)
+	{
+		TestTrue(TEXT("Stage 2 solves neutral release frame"),
+			BuildStage2SideForTest(NeutralFrame, true, Settings, LeftState, ReleaseResult, 0.04f));
+		TestTrue(TEXT("Neutral release frame has zero positive target"),
+			FMath::IsNearlyZero(ReleaseResult.PositiveTargetLiftCm, 0.001f));
+		TestTrue(TEXT("Smoothed lift monotonically releases toward zero"),
+			ReleaseResult.SmoothedLiftCm <= PreviousSmoothedLiftCm + 0.001f);
+		PreviousSmoothedLiftCm = ReleaseResult.SmoothedLiftCm;
+	}
+
+	TestTrue(TEXT("Stage 2 shrug release clears sticky lift within a few frames"),
+		ReleaseResult.SmoothedLiftCm < 0.20f);
 	return true;
 }
 
@@ -1008,6 +1552,8 @@ bool FMediaPipeBodyFusionLowerBodyAuthorityAdapterAutomationTest::RunTest(const 
 	TestTrue(TEXT("Adapter returns the fused left hip"), LeftSide.HipWorld.Equals(Pose.LeftHip.LocationWorld, 0.001f));
 	TestTrue(TEXT("Adapter returns the fused left knee"), LeftSide.KneeWorld.Equals(Pose.LeftKnee.LocationWorld, 0.001f));
 	TestTrue(TEXT("Adapter returns the fused left ankle"), LeftSide.AnkleWorld.Equals(Pose.LeftAnkle.LocationWorld, 0.001f));
+	TestTrue(TEXT("Adapter returns the fused left heel when available"),
+		LeftSide.bHasHeel && LeftSide.HeelWorld.Equals(Pose.LeftHeel.LocationWorld, 0.001f));
 	TestTrue(TEXT("Adapter returns the fused left foot when available"),
 		LeftSide.bHasFoot && LeftSide.FootWorld.Equals(Pose.LeftFoot.LocationWorld, 0.001f));
 
@@ -1104,6 +1650,19 @@ bool FMediaPipeBodyFusionAutoQuestBodyDrivePolicyAutomationTest::RunTest(const F
 		BodyFusionPolicy.bDrivePelvisTranslation);
 	TestFalse(TEXT("BodyFusion embodied keeps legs and leg IK disabled"),
 		BodyFusionPolicy.bDriveLegs || BodyFusionPolicy.bUseLegIK);
+
+	FMediaPipeAutoQuestBodyDrivePolicyInput BodyFusionVisible;
+	BodyFusionVisible.bEmbodiedView = true;
+	BodyFusionVisible.bStableEmbodiedBody = false;
+	BodyFusionVisible.bBodyFusionEnabled = true;
+	const FMediaPipeAutoQuestBodyDrivePolicy BodyFusionVisiblePolicy =
+		FMediaPipeAutoQuestProfilePolicy::ResolveBodyDrivePolicy(BodyFusionVisible);
+	TestFalse(TEXT("BodyFusion enabled blocks raw visible clavicle drive even outside stable-body mode"),
+		BodyFusionVisiblePolicy.bDriveClavicles);
+	TestFalse(TEXT("BodyFusion enabled blocks raw visible spine drive even outside stable-body mode"),
+		BodyFusionVisiblePolicy.bDriveSpine);
+	TestFalse(TEXT("BodyFusion enabled blocks raw visible pelvis translation drive even outside stable-body mode"),
+		BodyFusionVisiblePolicy.bDrivePelvisTranslation);
 
 	FMediaPipeAutoQuestBodyDrivePolicyInput MirrorView;
 	MirrorView.bEmbodiedView = false;
@@ -1327,6 +1886,9 @@ bool FMediaPipeBodyFusionAuthorityGateStableAndStaleTest::RunTest(const FString&
 	TestEqual(TEXT("Stable reason uses normal calibrated wording"),
 		StableDecision.Reason,
 		FString(TEXT("stable calibrated fresh")));
+	TestEqual(TEXT("Stable default authority keeps knees avatar-profile owned"),
+		static_cast<uint8>(StableDecision.Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftKnee)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::AvatarProfile));
 
 	FMediaPipeBodyFusionAuthorityGateInput LegacyInput = StableInput;
 	LegacyInput.MediaPipeAuthorityMode = 2;
@@ -1335,6 +1897,23 @@ bool FMediaPipeBodyFusionAuthorityGateStableAndStaleTest::RunTest(const FString&
 	TestEqual(TEXT("Legacy mode preserves legacy reason"),
 		LegacyDecision.Reason,
 		FString(TEXT("legacy calibrated fresh")));
+
+	FMediaPipeBodyFusionAuthorityGateInput FullBodyInput = LegacyInput;
+	FullBodyInput.bAllowFullBodyMediaPipeAuthority = true;
+	const FMediaPipeBodyFusionAuthorityGateDecision FullBodyDecision =
+		FMediaPipeBodyFusionAuthorityPolicy::ResolveMediaPipePoseAuthorityGate(FullBodyInput);
+	TestEqual(TEXT("Full-body replay authority owns MediaPipe knees"),
+		static_cast<uint8>(FullBodyDecision.Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftKnee)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
+	TestEqual(TEXT("Full-body replay authority owns MediaPipe ankles"),
+		static_cast<uint8>(FullBodyDecision.Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftAnkle)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
+	TestEqual(TEXT("Full-body replay authority owns MediaPipe heels"),
+		static_cast<uint8>(FullBodyDecision.Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftHeel)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
+	TestEqual(TEXT("Full-body replay authority owns MediaPipe feet"),
+		static_cast<uint8>(FullBodyDecision.Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftFoot)),
+		static_cast<uint8>(EMediaPipeBodyFusionOwner::MediaPipe));
 
 	FMediaPipeBodyFusionAuthorityGateInput StaleInput = StableInput;
 	StaleInput.BodyPoseStatus = MakeSourceStatus(EMediaPipeBodyFusionSourceState::Stale);
@@ -1578,6 +2157,47 @@ bool FMediaPipeTrackingSourceFrameBuilderMissingHmdTest::RunTest(const FString& 
 	TestEqual(TEXT("Empty MediaPipe pose is classified invalid"),
 		static_cast<uint8>(Frame.BodyPoseStatus.State),
 		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Invalid));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingSourceFrameBuilderPreservesSourceTimestampsTest,
+	"MediaPipe.TrackingSourceFrameBuilder.PreservesSourceTimestamps",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingSourceFrameBuilderPreservesSourceTimestampsTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeTrackingSourceFrameBuilderInput Input;
+	Input.NowSeconds = 12.0;
+	Input.bHasHmdPose = true;
+	Input.HmdLocationWorld = FVector(1.0f, 2.0f, 180.0f);
+	Input.HmdRotationWorld = FQuat::Identity;
+	Input.HmdTrackingUpWorld = FVector::UpVector;
+	Input.HmdTimestampSeconds = 10.0;
+	Input.Hands.bHasLeft = 1;
+	Input.Hands.bLeftTracked = 1;
+	Input.Hands.LeftTimestampSeconds = 9.5;
+	Input.Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] =
+		FVector(10.0f, -20.0f, 90.0f);
+	Input.Hands.bHasRight = 1;
+	Input.Hands.bRightTracked = 1;
+	Input.Hands.RightTimestampSeconds = 9.75;
+	Input.Hands.RightPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] =
+		FVector(10.0f, 20.0f, 90.0f);
+
+	FMediaPipeTrackingSourceFrame Frame;
+	FMediaPipeBodyFusionFreshnessThresholds Thresholds;
+	FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(Input, Frame, Thresholds);
+
+	TestEqual(TEXT("HMD source timestamp is preserved"), Frame.HmdTimestampSeconds, 10.0);
+	TestEqual(TEXT("Left hand source timestamp is preserved"), Frame.LeftHandTimestampSeconds, 9.5);
+	TestEqual(TEXT("Right hand source timestamp is preserved"), Frame.RightHandTimestampSeconds, 9.75);
+	TestEqual(TEXT("Old HMD source timestamp is stale, not re-stamped current"),
+		static_cast<uint8>(Frame.HmdStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Stale));
+	TestEqual(TEXT("Old hand source timestamp is stale, not re-stamped current"),
+		static_cast<uint8>(Frame.LeftHandStatus.State),
+		static_cast<uint8>(EMediaPipeBodyFusionSourceState::Stale));
 	return true;
 }
 }

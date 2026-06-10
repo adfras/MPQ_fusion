@@ -171,6 +171,30 @@ bool TryGetReliableMediaPipeLandmark(
 	return true;
 }
 
+bool TryGetReliableCalibratedMediaPipeLandmark(
+	const FMediaPipeTrackingSourceFrame& SourceFrame,
+	const FMediaPipeEmbodimentCalibration& Calibration,
+	const EMediaPipePoseLandmark Landmark,
+	FVector& OutLocationWorld,
+	float* OutReliability = nullptr,
+	const float MinReliability = MinReliableMediaPipeBodyLandmark)
+{
+	FVector MediaPipeWorld = FVector::ZeroVector;
+	float Reliability = 0.0f;
+	if (!TryGetReliableMediaPipeLandmark(SourceFrame, Landmark, MediaPipeWorld, &Reliability, MinReliability) ||
+		!Calibration.IsUsable())
+	{
+		return false;
+	}
+
+	OutLocationWorld = Calibration.TransformMediaPipePoint(MediaPipeWorld);
+	if (OutReliability)
+	{
+		*OutReliability = Reliability;
+	}
+	return IsFiniteVector(OutLocationWorld);
+}
+
 bool IsEmbodiedHipsOnlyAuthority(const FMediaPipeBodyFusionAuthority& Authority)
 {
 	return Authority.GetOwner(EMediaPipeBodyFusionRegion::Pelvis) == EMediaPipeBodyFusionOwner::MediaPipe &&
@@ -180,6 +204,8 @@ bool IsEmbodiedHipsOnlyAuthority(const FMediaPipeBodyFusionAuthority& Authority)
 		Authority.GetOwner(EMediaPipeBodyFusionRegion::RightKnee) != EMediaPipeBodyFusionOwner::MediaPipe &&
 		Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftAnkle) != EMediaPipeBodyFusionOwner::MediaPipe &&
 		Authority.GetOwner(EMediaPipeBodyFusionRegion::RightAnkle) != EMediaPipeBodyFusionOwner::MediaPipe &&
+		Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftHeel) != EMediaPipeBodyFusionOwner::MediaPipe &&
+		Authority.GetOwner(EMediaPipeBodyFusionRegion::RightHeel) != EMediaPipeBodyFusionOwner::MediaPipe &&
 		Authority.GetOwner(EMediaPipeBodyFusionRegion::LeftFoot) != EMediaPipeBodyFusionOwner::MediaPipe &&
 		Authority.GetOwner(EMediaPipeBodyFusionRegion::RightFoot) != EMediaPipeBodyFusionOwner::MediaPipe;
 }
@@ -284,7 +310,8 @@ bool FMediaPipeBodyFusionSolver::Solve(
 	const float CameraForwardOffsetCm = ResolveCameraForwardOffsetCm(
 		Input.UserCameraForwardOffsetCm,
 		Input.Profile.EmbodiedCameraForwardOffsetCm);
-	const FVector AvatarEyeAnchorWorld = Input.AvatarWorldTransform.TransformPosition(Input.Profile.DefaultEyeLocalOffset);
+	const FVector AvatarCameraAnchorLocal = ResolveMediaPipeAvatarProfileCameraAnchorLocal(Input.Profile);
+	const FVector AvatarEyeAnchorWorld = Input.AvatarWorldTransform.TransformPosition(AvatarCameraAnchorLocal);
 	const FVector RawCameraWorld = Input.SourceFrame.HmdLocationWorld;
 	const FVector CameraDeltaFromAvatarEye = RawCameraWorld - AvatarEyeAnchorWorld;
 	const FVector CameraPlanarDelta = ProjectOntoPlaneSafe(CameraDeltaFromAvatarEye, AvatarUpWorld);
@@ -294,7 +321,7 @@ bool FMediaPipeBodyFusionSolver::Solve(
 	const FVector EyeLocalInHead = ResolveMediaPipeAvatarProfileEyeLocalInHead(Input.Profile);
 	const FVector HeadWorld = EyeLocalInHead.ContainsNaN()
 		? EyeWorld + Input.AvatarWorldTransform.TransformVectorNoScale(
-			ResolveMediaPipeAvatarProfileHeadLocal(Input.Profile) - Input.Profile.DefaultEyeLocalOffset)
+			ResolveMediaPipeAvatarProfileHeadLocal(Input.Profile) - AvatarCameraAnchorLocal)
 		: EyeWorld - Input.SourceFrame.HmdRotationWorld.RotateVector(EyeLocalInHead);
 
 	const float HeadToChestCm = ResolveExpectedHeadToChestCm(Input);
@@ -355,24 +382,33 @@ bool FMediaPipeBodyFusionSolver::Solve(
 			FVector::DotProduct(HeadDeltaFromProfile, AvatarUpWorld) * AvatarUpWorld;
 
 		FVector UpperBodyPlanarDelta = HeadPlanarDelta;
-		const bool bHasQuestShoulderBasis =
-			Input.SourceFrame.LeftArmChainStatus.IsFresh() &&
-			Input.SourceFrame.RightArmChainStatus.IsFresh() &&
-			IsFiniteVector(Input.SourceFrame.LeftArmShoulderWorld) &&
-			IsFiniteVector(Input.SourceFrame.RightArmShoulderWorld);
-		if (bHasQuestShoulderBasis)
+		FVector MediaPipeLeftShoulderWorld = FVector::ZeroVector;
+		FVector MediaPipeRightShoulderWorld = FVector::ZeroVector;
+		const bool bHasMediaPipeShoulderBasis =
+			Input.SourceFrame.BodyPoseStatus.IsFresh() &&
+			TryGetReliableCalibratedMediaPipeLandmark(
+				Input.SourceFrame,
+				Input.Calibration,
+				EMediaPipePoseLandmark::LeftShoulder,
+				MediaPipeLeftShoulderWorld) &&
+			TryGetReliableCalibratedMediaPipeLandmark(
+				Input.SourceFrame,
+				Input.Calibration,
+				EMediaPipePoseLandmark::RightShoulder,
+				MediaPipeRightShoulderWorld);
+		if (bHasMediaPipeShoulderBasis)
 		{
-			const FVector QuestShoulderMidpointWorld =
-				(Input.SourceFrame.LeftArmShoulderWorld + Input.SourceFrame.RightArmShoulderWorld) * 0.5f;
-			const FVector QuestShoulderPlanarDelta =
-				ProjectOntoPlaneSafe(QuestShoulderMidpointWorld - ProfileChestWorld, AvatarUpWorld);
+			const FVector MediaPipeShoulderMidpointWorld =
+				(MediaPipeLeftShoulderWorld + MediaPipeRightShoulderWorld) * 0.5f;
+			const FVector MediaPipeShoulderPlanarDelta =
+				ProjectOntoPlaneSafe(MediaPipeShoulderMidpointWorld - ProfileChestWorld, AvatarUpWorld);
 			if (HeadPlanarDelta.IsNearlyZero())
 			{
-				UpperBodyPlanarDelta = QuestShoulderPlanarDelta;
+				UpperBodyPlanarDelta = MediaPipeShoulderPlanarDelta;
 			}
-			else if (FVector::DotProduct(QuestShoulderPlanarDelta, HeadPlanarDelta) > 0.0f)
+			else if (FVector::DotProduct(MediaPipeShoulderPlanarDelta, HeadPlanarDelta) > 0.0f)
 			{
-				UpperBodyPlanarDelta = (HeadPlanarDelta + QuestShoulderPlanarDelta) * 0.5f;
+				UpperBodyPlanarDelta = (HeadPlanarDelta + MediaPipeShoulderPlanarDelta) * 0.5f;
 				if (FVector::DotProduct(UpperBodyPlanarDelta, HeadPlanarDelta) < HeadPlanarDelta.SizeSquared())
 				{
 					UpperBodyPlanarDelta = HeadPlanarDelta;
@@ -450,30 +486,52 @@ bool FMediaPipeBodyFusionSolver::Solve(
 		PelvisConfidence,
 		AvatarBasis);
 
+	if (Input.SourceFrame.BodyPoseStatus.IsFresh() && Input.Calibration.IsUsable())
+	{
+		SetBodyLandmarkIfAvailable(
+			Input.SourceFrame,
+			Input.Calibration,
+			OutPose,
+			EMediaPipePoseLandmark::LeftShoulder,
+			EMediaPipeBodyFusionRegion::LeftShoulder);
+		SetBodyLandmarkIfAvailable(
+			Input.SourceFrame,
+			Input.Calibration,
+			OutPose,
+			EMediaPipePoseLandmark::RightShoulder,
+			EMediaPipeBodyFusionRegion::RightShoulder);
+	}
+
 	if (Input.SourceFrame.LeftArmChainStatus.IsFresh())
 	{
-		const EMediaPipeBodyFusionOwner Owner = FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(Input.SourceFrame.LeftArmChainStatus, Input.SourceFrame.BodyPoseStatus);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftShoulder, Input.SourceFrame.LeftArmShoulderWorld, Owner, Input.SourceFrame.LeftArmChainStatus.State, Input.SourceFrame.LeftArmChainStatus.Confidence);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftElbow, Input.SourceFrame.LeftArmElbowWorld, Owner, Input.SourceFrame.LeftArmChainStatus.State, Input.SourceFrame.LeftArmChainStatus.Confidence);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftWrist, Input.SourceFrame.LeftArmWristWorld, Owner, Input.SourceFrame.LeftArmChainStatus.State, Input.SourceFrame.LeftArmChainStatus.Confidence);
+		if (OutPose.LeftShoulder.bValid)
+		{
+			SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftElbow, Input.SourceFrame.LeftArmElbowWorld, EMediaPipeBodyFusionOwner::Fused, Input.SourceFrame.LeftArmChainStatus.State, Input.SourceFrame.LeftArmChainStatus.Confidence);
+		}
+		if (Input.SourceFrame.LeftHandStatus.IsFresh())
+		{
+			SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftWrist, Input.SourceFrame.LeftHandWorld, EMediaPipeBodyFusionOwner::Quest, Input.SourceFrame.LeftHandStatus.State, Input.SourceFrame.LeftHandStatus.Confidence);
+		}
 	}
 	else if (Input.SourceFrame.LeftHandStatus.IsFresh())
 	{
-		const EMediaPipeBodyFusionOwner Owner = FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(Input.SourceFrame.LeftHandStatus, Input.SourceFrame.BodyPoseStatus);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftWrist, Input.SourceFrame.LeftHandWorld, Owner, Input.SourceFrame.LeftHandStatus.State, Input.SourceFrame.LeftHandStatus.Confidence);
+		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::LeftWrist, Input.SourceFrame.LeftHandWorld, EMediaPipeBodyFusionOwner::Quest, Input.SourceFrame.LeftHandStatus.State, Input.SourceFrame.LeftHandStatus.Confidence);
 	}
 
 	if (Input.SourceFrame.RightArmChainStatus.IsFresh())
 	{
-		const EMediaPipeBodyFusionOwner Owner = FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(Input.SourceFrame.RightArmChainStatus, Input.SourceFrame.BodyPoseStatus);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightShoulder, Input.SourceFrame.RightArmShoulderWorld, Owner, Input.SourceFrame.RightArmChainStatus.State, Input.SourceFrame.RightArmChainStatus.Confidence);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightElbow, Input.SourceFrame.RightArmElbowWorld, Owner, Input.SourceFrame.RightArmChainStatus.State, Input.SourceFrame.RightArmChainStatus.Confidence);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightWrist, Input.SourceFrame.RightArmWristWorld, Owner, Input.SourceFrame.RightArmChainStatus.State, Input.SourceFrame.RightArmChainStatus.Confidence);
+		if (OutPose.RightShoulder.bValid)
+		{
+			SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightElbow, Input.SourceFrame.RightArmElbowWorld, EMediaPipeBodyFusionOwner::Fused, Input.SourceFrame.RightArmChainStatus.State, Input.SourceFrame.RightArmChainStatus.Confidence);
+		}
+		if (Input.SourceFrame.RightHandStatus.IsFresh())
+		{
+			SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightWrist, Input.SourceFrame.RightHandWorld, EMediaPipeBodyFusionOwner::Quest, Input.SourceFrame.RightHandStatus.State, Input.SourceFrame.RightHandStatus.Confidence);
+		}
 	}
 	else if (Input.SourceFrame.RightHandStatus.IsFresh())
 	{
-		const EMediaPipeBodyFusionOwner Owner = FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(Input.SourceFrame.RightHandStatus, Input.SourceFrame.BodyPoseStatus);
-		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightWrist, Input.SourceFrame.RightHandWorld, Owner, Input.SourceFrame.RightHandStatus.State, Input.SourceFrame.RightHandStatus.Confidence);
+		SetFusedPoint(OutPose, EMediaPipeBodyFusionRegion::RightWrist, Input.SourceFrame.RightHandWorld, EMediaPipeBodyFusionOwner::Quest, Input.SourceFrame.RightHandStatus.State, Input.SourceFrame.RightHandStatus.Confidence);
 	}
 
 	if (Input.bAllowMediaPipePoseAuthority &&
@@ -490,39 +548,17 @@ bool FMediaPipeBodyFusionSolver::Solve(
 			}
 		};
 
-		if (!OutPose.LeftShoulder.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::LeftShoulder, EMediaPipeBodyFusionRegion::LeftShoulder);
-		}
-		if (!OutPose.LeftElbow.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::LeftElbow, EMediaPipeBodyFusionRegion::LeftElbow);
-		}
-		if (!OutPose.LeftWrist.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::LeftWrist, EMediaPipeBodyFusionRegion::LeftWrist);
-		}
-		if (!OutPose.RightShoulder.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::RightShoulder, EMediaPipeBodyFusionRegion::RightShoulder);
-		}
-		if (!OutPose.RightElbow.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::RightElbow, EMediaPipeBodyFusionRegion::RightElbow);
-		}
-		if (!OutPose.RightWrist.bValid)
-		{
-			SetBodyLandmarkIfAvailable(Input.SourceFrame, Input.Calibration, OutPose, EMediaPipePoseLandmark::RightWrist, EMediaPipeBodyFusionRegion::RightWrist);
-		}
 		if (bMediaPipeOwnsLowerBody)
 		{
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::LeftHip, EMediaPipeBodyFusionRegion::LeftHip);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::LeftKnee, EMediaPipeBodyFusionRegion::LeftKnee);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::LeftAnkle, EMediaPipeBodyFusionRegion::LeftAnkle);
+			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::LeftHeel, EMediaPipeBodyFusionRegion::LeftHeel);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::LeftFootIndex, EMediaPipeBodyFusionRegion::LeftFoot);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::RightHip, EMediaPipeBodyFusionRegion::RightHip);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::RightKnee, EMediaPipeBodyFusionRegion::RightKnee);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::RightAnkle, EMediaPipeBodyFusionRegion::RightAnkle);
+			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::RightHeel, EMediaPipeBodyFusionRegion::RightHeel);
 			SetBodyLandmarkIfRegionOwned(EMediaPipePoseLandmark::RightFootIndex, EMediaPipeBodyFusionRegion::RightFoot);
 		}
 	}
@@ -540,6 +576,8 @@ bool FMediaPipeBodyFusionSolver::Solve(
 		: 0.0f;
 	OutPose.DebugErrors.LeftFootReliability = OutPose.LeftFoot.Confidence;
 	OutPose.DebugErrors.RightFootReliability = OutPose.RightFoot.Confidence;
+	OutPose.DebugErrors.LeftHeelReliability = OutPose.LeftHeel.Confidence;
+	OutPose.DebugErrors.RightHeelReliability = OutPose.RightHeel.Confidence;
 	OutPose.DebugErrors.BodyAuthorityState = Input.BodyAuthorityState;
 	OutPose.DebugErrors.bMediaPipePoseAuthorityAllowed = Input.bAllowMediaPipePoseAuthority ? 1 : 0;
 

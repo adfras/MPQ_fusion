@@ -92,16 +92,42 @@ struct FMediaPipePoseDrivenShoulderSignalSnapshot
 	float ForwardWeight = 0.0f;
 	bool bStage2ShoulderClavicleHintValid = false;
 	bool bStage2ShoulderClavicleSuppressedByContradiction = false;
+	bool bStage2ShoulderClavicleSuppressedByArmOwnership = false;
 	bool bStage2ShoulderClavicleHadContradictionSource = false;
+	bool bStage2ShoulderClavicleHadQuestArmRaiseSource = false;
+	bool bStage2NeutralReferenceReady = false;
+	bool bStage2NeutralSampleAccepted = false;
+	bool bStage2ClampHit = false;
+	float Stage2SignalSourceMode = 0.0f;
+	float Stage2SignalSourceReliability = 0.0f;
+	float Stage2NeutralObservationSeconds = 0.0f;
 	float Stage2CandidateShoulderLiftFromPelvisCm = 0.0f;
 	float Stage2ReferenceShoulderLiftFromPelvisCm = 0.0f;
 	float Stage2RawLiftDeltaCm = 0.0f;
+	float Stage2ShoulderHeadClearanceCm = 0.0f;
+	float Stage2ShoulderHeadClearanceReferenceCm = 0.0f;
+	float Stage2ShoulderHeadClearanceShrugCm = 0.0f;
+	float Stage2ClearancePrimaryEvidenceCm = 0.0f;
+	float Stage2RawLiftConfirmationWeight = 0.0f;
+	float Stage2SignedLiftEvidenceCm = 0.0f;
+	float Stage2SignedTargetLiftCm = 0.0f;
+	float Stage2AppliedResponseScale = 0.0f;
+	float Stage2PositiveLiftEvidenceCm = 0.0f;
+	float Stage2UnfadedPositiveTargetLiftCm = 0.0f;
+	float Stage2QuestWristLiftFromPelvisCm = 0.0f;
+	float Stage2QuestElbowLiftFromPelvisCm = 0.0f;
+	float Stage2QuestArmRaiseOwnershipFade = 0.0f;
+	float Stage2QuestArmRaiseLiftWeight = 1.0f;
 	float Stage2PositiveTargetLiftCm = 0.0f;
 	float Stage2ContradictionDeltaCm = 0.0f;
 	float Stage2SmoothedLiftCm = 0.0f;
 	float Stage2PreSolveClavicleLiftFromPelvisCm = 0.0f;
 	float Stage2TargetClavicleLiftFromPelvisCm = 0.0f;
 	float Stage2AppliedClavicleLiftCm = 0.0f;
+	float Stage2AppliedClavicleHelperLiftCm = 0.0f;
+	float Stage2DirectUpperArmLiftCm = 0.0f;
+	float Stage2DirectLowerArmLiftCm = 0.0f;
+	float Stage2DirectHandLiftCm = 0.0f;
 };
 
 struct FMediaPipePoseDrivenSignalSnapshot
@@ -192,6 +218,10 @@ public:
 	// Keep feet planted while pelvis translates (squats). Uses a 2-bone IK solve per leg with a stable pole.
 	UPROPERTY(EditAnywhere, Category="MediaPipe|RootMotion")
 	bool bUseLegIK = false;
+
+	// Keep the legacy IK plant lock separate from IK targeting so replay can follow airborne foot motion.
+	UPROPERTY(EditAnywhere, Category="MediaPipe|RootMotion")
+	bool bUseLegIKFootPlant = true;
 
 	UPROPERTY(EditAnywhere, Category="MediaPipe|RootMotion")
 	float LegIKRotationHalfLifeSeconds = 0.08f;
@@ -627,6 +657,7 @@ private:
 	static float HalfLifeToAlpha(float HalfLifeSeconds, float DeltaSeconds);
 	static float QuatAngularDistanceDegrees(const FQuat& A, const FQuat& B);
 	static void UpdateSmoothedRotation(bool& bInOutHasValue, FQuat& InOutValueCS, const FQuat& TargetCS, float Alpha, float MaxStepDegrees = 0.0f);
+	void ConfigureBodyFusionProfileForCurrentTarget(FMediaPipeAvatarEmbodimentProfile& InOutProfile) const;
 	FVector GetTargetForwardWorld() const;
 	void ApplyReferencePoseProportionsToTargetProfile();
 	void ResetRotationSmoothing();
@@ -645,6 +676,7 @@ private:
 	bool TryMapQuestDirectionToMediaWorld(const FVector& QuestDirectionWorld, FVector& OutMediaDirectionWorld);
 	bool TryMapQuestHmdRelativeWristToAvatarWorld(
 		FCSPose<FCompactPose>& CSPose,
+		bool bIsLeft,
 		const FVector& QuestAnchorWorld,
 		const FQuat& QuestAnchorYawWorld,
 		const FVector& QuestWristWorld,
@@ -653,6 +685,7 @@ private:
 
 	void ApplyRotationCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FQuat& TargetRotCS) const;
 	void ApplyTranslationDeltaCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FVector& DeltaComp) const;
+	bool ShouldUseAvatarLockedMetaHumanReplay() const;
 	bool ShouldUseBodyFusionPoseForEvaluation() const;
 	bool ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const;
 	bool ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const;

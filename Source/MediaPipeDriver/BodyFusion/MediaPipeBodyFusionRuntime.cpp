@@ -31,6 +31,8 @@ FMediaPipeBodyFusionRuntimePolicySnapshot FMediaPipeBodyFusionRuntimePolicy::Rea
 	Snapshot.bPoseWriteEnabled = IsPoseWriteEnabledGameThread();
 	Snapshot.MediaPipeAuthorityMode =
 		MediaPipeRuntimeCVars::CVarBodyFusionMediaPipeAuthority.GetValueOnGameThread();
+	Snapshot.bFullBodyMediaPipeAuthority =
+		MediaPipeRuntimeCVars::CVarBodyFusionFullBodyMediaPipeAuthority.GetValueOnGameThread() != 0;
 	Snapshot.bStage1TorsoPelvisHintEnabled = IsStage1TorsoPelvisHintEnabledGameThread();
 	Snapshot.Stage1TorsoPelvisHintBlend = FMath::Clamp(
 		MediaPipeRuntimeCVars::CVarBodyFusionStage1TorsoPelvisHintBlend.GetValueOnGameThread(),
@@ -60,6 +62,18 @@ FMediaPipeBodyFusionRuntimePolicySnapshot FMediaPipeBodyFusionRuntimePolicy::Rea
 	Snapshot.Stage2ShoulderContradictionCm = FMath::Max(
 		0.0f,
 		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderContradictionCm.GetValueOnGameThread());
+	Snapshot.Stage2ShoulderArmRaiseFadeStartCm = FMath::Max(
+		0.0f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderArmRaiseFadeStartCm.GetValueOnGameThread());
+	Snapshot.Stage2ShoulderArmRaiseFadeFullCm = FMath::Max(
+		Snapshot.Stage2ShoulderArmRaiseFadeStartCm + 0.5f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderArmRaiseFadeFullCm.GetValueOnGameThread());
+	Snapshot.Stage2ShoulderShrugStartCm = FMath::Max(
+		0.0f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderShrugStartCm.GetValueOnGameThread());
+	Snapshot.Stage2ShoulderShrugFullCm = FMath::Max(
+		Snapshot.Stage2ShoulderShrugStartCm + 0.5f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderShrugFullCm.GetValueOnGameThread());
 	Snapshot.RequiredCalibrationStableFrames = ResolveRequiredStableFrames(
 		Snapshot.MediaPipeAuthorityMode,
 		MediaPipeRuntimeCVars::CVarBodyFusionCalibrationStableFrames.GetValueOnGameThread());
@@ -190,6 +204,36 @@ float FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThre
 	return FMath::Max(
 		0.0f,
 		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderContradictionCm.GetValueOnAnyThread());
+}
+
+float FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeStartCmAnyThread()
+{
+	return FMath::Max(
+		0.0f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderArmRaiseFadeStartCm.GetValueOnAnyThread());
+}
+
+float FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeFullCmAnyThread()
+{
+	const float FadeStartCm = GetStage2ShoulderArmRaiseFadeStartCmAnyThread();
+	return FMath::Max(
+		FadeStartCm + 0.5f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderArmRaiseFadeFullCm.GetValueOnAnyThread());
+}
+
+float FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugStartCmAnyThread()
+{
+	return FMath::Max(
+		0.0f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderShrugStartCm.GetValueOnAnyThread());
+}
+
+float FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugFullCmAnyThread()
+{
+	const float ShrugStartCm = GetStage2ShoulderShrugStartCmAnyThread();
+	return FMath::Max(
+		ShrugStartCm + 0.5f,
+		MediaPipeRuntimeCVars::CVarBodyFusionStage2ShoulderShrugFullCm.GetValueOnAnyThread());
 }
 
 int32 FMediaPipeEmbodimentDebugCommands::GetQuestWristManualResetSerial()

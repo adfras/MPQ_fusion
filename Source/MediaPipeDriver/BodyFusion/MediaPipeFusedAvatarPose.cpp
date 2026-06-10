@@ -11,6 +11,8 @@ void FMediaPipeBodyFusionDebugErrors::Reset()
 	RightWristReachCm = 0.0f;
 	LeftFootReliability = 0.0f;
 	RightFootReliability = 0.0f;
+	LeftHeelReliability = 0.0f;
+	RightHeelReliability = 0.0f;
 	BodyAuthorityState = EMediaPipeBodyFusionAuthorityState::NoMediaPipe;
 	bMediaPipePoseAuthorityAllowed = 0;
 }
@@ -33,10 +35,12 @@ void FMediaPipeFusedAvatarPose::Reset()
 	LeftHip = FMediaPipeFusedBodyPoint();
 	LeftKnee = FMediaPipeFusedBodyPoint();
 	LeftAnkle = FMediaPipeFusedBodyPoint();
+	LeftHeel = FMediaPipeFusedBodyPoint();
 	LeftFoot = FMediaPipeFusedBodyPoint();
 	RightHip = FMediaPipeFusedBodyPoint();
 	RightKnee = FMediaPipeFusedBodyPoint();
 	RightAnkle = FMediaPipeFusedBodyPoint();
+	RightHeel = FMediaPipeFusedBodyPoint();
 	RightFoot = FMediaPipeFusedBodyPoint();
 	DebugErrors.Reset();
 }
@@ -82,6 +86,8 @@ const FMediaPipeFusedBodyPoint* FMediaPipeFusedAvatarPose::GetPoint(const EMedia
 		return &LeftKnee;
 	case EMediaPipeBodyFusionRegion::LeftAnkle:
 		return &LeftAnkle;
+	case EMediaPipeBodyFusionRegion::LeftHeel:
+		return &LeftHeel;
 	case EMediaPipeBodyFusionRegion::LeftFoot:
 		return &LeftFoot;
 	case EMediaPipeBodyFusionRegion::RightHip:
@@ -90,6 +96,8 @@ const FMediaPipeFusedBodyPoint* FMediaPipeFusedAvatarPose::GetPoint(const EMedia
 		return &RightKnee;
 	case EMediaPipeBodyFusionRegion::RightAnkle:
 		return &RightAnkle;
+	case EMediaPipeBodyFusionRegion::RightHeel:
+		return &RightHeel;
 	case EMediaPipeBodyFusionRegion::RightFoot:
 		return &RightFoot;
 	default:

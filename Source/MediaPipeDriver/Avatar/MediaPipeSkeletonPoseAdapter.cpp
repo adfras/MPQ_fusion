@@ -120,6 +120,9 @@ bool FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(
 	const EMediaPipeBodyFusionRegion AnkleRegion = bIsLeft
 		? EMediaPipeBodyFusionRegion::LeftAnkle
 		: EMediaPipeBodyFusionRegion::RightAnkle;
+	const EMediaPipeBodyFusionRegion HeelRegion = bIsLeft
+		? EMediaPipeBodyFusionRegion::LeftHeel
+		: EMediaPipeBodyFusionRegion::RightHeel;
 	const EMediaPipeBodyFusionRegion FootRegion = bIsLeft
 		? EMediaPipeBodyFusionRegion::LeftFoot
 		: EMediaPipeBodyFusionRegion::RightFoot;
@@ -132,6 +135,11 @@ bool FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(
 		return false;
 	}
 
+	OutSide.bHasHeel = TryGetMediaPipePoint(HeelRegion, OutSide.HeelWorld);
+	if (!OutSide.bHasHeel)
+	{
+		OutSide.HeelWorld = OutSide.AnkleWorld;
+	}
 	OutSide.bHasFoot = TryGetMediaPipePoint(FootRegion, OutSide.FootWorld);
 	if (!OutSide.bHasFoot)
 	{

@@ -5,7 +5,8 @@
 enum class EMediaPipeFullArmChainSource : uint8
 {
 	None = 0,
-	OpenXRBodyTracking = 1
+	OpenXRBodyTracking = 1,
+	TrackingFusionReplay = 2
 };
 
 struct FMediaPipeFullArmChainJointSnapshot

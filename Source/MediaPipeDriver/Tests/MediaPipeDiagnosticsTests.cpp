@@ -3,6 +3,8 @@
 #include "HAL/IConsoleManager.h"
 #include "HeadMountedDisplayTypes.h"
 #include "IHandTracker.h"
+#include "MediaPipeAvatarCalibrationProfile.h"
+#include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeBodyDiagnostics.h"
 #include "MediaPipeBodyFusionDebugFormatter.h"
 #include "MediaPipeBodyFusionRuntime.h"
@@ -17,9 +19,20 @@
 #include "MediaPipeQuestWristTraceTypes.h"
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeShoulderRollbackDiagnostics.h"
+#include "MediaPipeTrackingSourceAlignment.h"
+#include "MediaPipeTrackingFusionDataset.h"
+#include "MediaPipeTrackingFusionDatasetReplay.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformTime.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
 #include "Misc/OutputDeviceNull.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 // Consolidated from MediaPipeBodyDiagnosticsTests.cpp
 
@@ -184,6 +197,1138 @@ bool FMediaPipeEmbodimentDebugCommandsResetSerialTest::RunTest(const FString& Pa
 		TEXT("BodyFusion calibration reset serial increments"),
 		FMediaPipeEmbodimentDebugCommands::GetBodyFusionCalibrationResetSerial(),
 		BodyFusionSerialBefore + 1);
+	return true;
+}
+}
+
+namespace MediaPipeTrackingFusionDatasetTests
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetSchemaAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetSchema",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetSchemaAutomationTest::RunTest(const FString& Parameters)
+{
+	TArray<FMediaPipeTrackingFusionDatasetPhase> Phases;
+	FMediaPipeTrackingFusionDataset::BuildDefaultMovementPhases(90.0, Phases);
+
+	TestEqual(TEXT("Guided dataset has the required movement phase count"), Phases.Num(), 24);
+	if (Phases.Num() != 24)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Schema version is stable"), FMediaPipeTrackingFusionDataset::SchemaVersion, 1);
+	TestEqual(TEXT("First phase is neutral"), Phases[0].PhaseName, FString(TEXT("neutral_stand_arms_down_forward")));
+	TestEqual(TEXT("Last phase returns to neutral"), Phases.Last().PhaseName, FString(TEXT("return_to_neutral")));
+	TestTrue(TEXT("Phase duration stays in requested 3-5 second range"),
+		Phases[0].GetDurationSeconds() >= FMediaPipeTrackingFusionDataset::MinimumMovementPhaseSeconds &&
+		Phases[0].GetDurationSeconds() <= FMediaPipeTrackingFusionDataset::MaximumMovementPhaseSeconds);
+	TestTrue(TEXT("Phase carries expected signal targets"), Phases[11].ExpectedSignalTargets.Contains(FString(TEXT("metahuman_left_clavicle_helpers"))));
+	TestTrue(TEXT("Timeline covers the requested duration"), FMediaPipeTrackingFusionDataset::GetTimelineDurationSeconds(Phases) >= 89.0);
+	TestTrue(TEXT("Movement lookup finds head yaw phase"),
+		FMediaPipeTrackingFusionDataset::FindMovementPhaseAtElapsedSeconds(Phases, Phases[1].StartTimeSeconds + 0.1) != nullptr);
+	TestTrue(TEXT("Settle lookup finds neutral settle between phases"),
+		FMediaPipeTrackingFusionDataset::FindSettlePhaseAtElapsedSeconds(Phases, Phases[0].SettleStartTimeSeconds + 0.1) != nullptr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetHelperDiscoveryAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetHelperDiscovery",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetAvatarLockedSyncPhaseAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetAvatarLockedSyncPhases",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetAvatarLockedSyncPhaseAutomationTest::RunTest(const FString& Parameters)
+{
+	TArray<FMediaPipeTrackingFusionDatasetPhase> Phases;
+	FMediaPipeTrackingFusionDataset::BuildAvatarLockedSyncCalibrationPhases(Phases);
+
+	TestEqual(TEXT("Avatar-locked sync calibration has seven movement blocks"), Phases.Num(), 7);
+	if (Phases.Num() != 7)
+	{
+		return false;
+	}
+
+	const TArray<FString> ExpectedNames = {
+		TEXT("avatar_locked_head_30s"),
+		TEXT("avatar_locked_hands_wrists_30s"),
+		TEXT("avatar_locked_arms_30s"),
+		TEXT("avatar_locked_torso_30s"),
+		TEXT("avatar_locked_hips_30s"),
+		TEXT("avatar_locked_legs_30s"),
+		TEXT("avatar_locked_feet_30s"),
+	};
+	const TArray<FString> ExpectedRegions = {
+		TEXT("head"),
+		TEXT("hands"),
+		TEXT("arms"),
+		TEXT("torso"),
+		TEXT("hips"),
+		TEXT("legs"),
+		TEXT("feet"),
+	};
+
+	for (int32 Index = 0; Index < Phases.Num(); ++Index)
+	{
+		const FMediaPipeTrackingFusionDatasetPhase& Phase = Phases[Index];
+		TestEqual(FString::Printf(TEXT("Block %d has the required phase name"), Index), Phase.PhaseName, ExpectedNames[Index]);
+		TestEqual(FString::Printf(TEXT("Block %d has the required region"), Index), Phase.Region, ExpectedRegions[Index]);
+		TestEqual(FString::Printf(TEXT("Block %d starts on a 30-second boundary"), Index), Phase.StartTimeSeconds, Index * FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationBlockSeconds);
+		TestEqual(FString::Printf(TEXT("Block %d is exactly 30 seconds"), Index), Phase.GetDurationSeconds(), FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationBlockSeconds);
+		TestEqual(FString::Printf(TEXT("Block %d has no yellow settle window"), Index), Phase.SettleEndTimeSeconds, Phase.EndTimeSeconds);
+		TestTrue(FString::Printf(TEXT("Block %d carries readiness targets"), Index), Phase.ReadinessTargets.Num() > 0);
+	}
+
+	TestTrue(TEXT("Head prompt includes rotations and translations"),
+		Phases[0].Prompt.Contains(TEXT("Yaw")) &&
+		Phases[0].Prompt.Contains(TEXT("pitch")) &&
+		Phases[0].Prompt.Contains(TEXT("side-to-side")));
+	TestTrue(TEXT("Hands prompt includes wrist circles and cross-body motion"),
+		Phases[1].Prompt.Contains(TEXT("Wrist circles")) &&
+		Phases[1].Prompt.Contains(TEXT("cross-body")));
+	TestTrue(TEXT("Feet prompt asks for feet visible"),
+		Phases[6].Prompt.Contains(TEXT("feet visible")));
+	TestEqual(TEXT("Avatar-locked sync timeline is 210 seconds"), FMediaPipeTrackingFusionDataset::GetTimelineDurationSeconds(Phases), 210.0);
+	return true;
+}
+
+bool FMediaPipeTrackingFusionDatasetHelperDiscoveryAutomationTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("Clavicle out helper is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("clavicle_out_l"))));
+	TestTrue(TEXT("Clavicle scap helper is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("clavicle_scap_r"))));
+	TestTrue(TEXT("Upper-arm twist corrective helper is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("upperarm_twistCor_01_l"))));
+	TestTrue(TEXT("Upper-arm bicep helper is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("upperarm_bicep_r"))));
+	TestTrue(TEXT("Lower-arm corrective leaf is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("lowerarm_fwd_l"))));
+	TestTrue(TEXT("Wrist outer helper is classified"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("wrist_outer_r"))));
+	TestFalse(TEXT("Main upper arm is not a helper"), FMediaPipeTrackingFusionDataset::IsKnownMetaHumanHelperBoneName(FName(TEXT("upperarm_l"))));
+	TestTrue(TEXT("Main upper arm is recorded"), FMediaPipeTrackingFusionDataset::ShouldRecordBoneName(FName(TEXT("upperarm_l"))));
+	TestTrue(TEXT("Finger bone is recorded"), FMediaPipeTrackingFusionDataset::ShouldRecordBoneName(FName(TEXT("index_02_l"))));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetCVarAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetCVars",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetCVarAutomationTest::RunTest(const FString& Parameters)
+{
+	IConsoleVariable* RecordOnPlay = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetOnPlay"));
+	IConsoleVariable* Duration = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetDuration"));
+	IConsoleVariable* SampleRate = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetSampleRate"));
+	IConsoleVariable* BoneMode = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetBoneMode"));
+	IConsoleVariable* PhasePreset = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetPhasePreset"));
+	IConsoleVariable* ChunkMegabytes = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetChunkMegabytes"));
+	IConsoleVariable* Label = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetLabel"));
+	IConsoleVariable* Path = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetPath"));
+	IConsoleVariable* Analyze = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.RecordTrackingFusionDatasetAnalyzeAfterWrite"));
+	IConsoleObject* PrepareCommand = IConsoleManager::Get().FindConsoleObject(TEXT("mp.PrepareTrackingFusionDatasetCapture"));
+	IConsoleObject* AvatarLockedPrepareCommand = IConsoleManager::Get().FindConsoleObject(TEXT("mp.PrepareAvatarLockedSyncCalibrationCapture"));
+	IConsoleObject* ReplayOutputPrepareCommand = IConsoleManager::Get().FindConsoleObject(TEXT("mp.PrepareTrackingFusionDatasetReplayOutputCapture"));
+	IConsoleVariable* ReplayAllowTrackingCapture = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.TrackingFusionDatasetReplayAllowTrackingFusionCapture"));
+	IConsoleVariable* ReplayFile = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.TrackingFusionDatasetReplayFile"));
+	IConsoleVariable* ReplayStartOffset = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.TrackingFusionDatasetReplayStartOffsetSeconds"));
+	IConsoleVariable* QuestWristCalibrationHud = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestWristCalibrationHud"));
+	IConsoleVariable* QuestArmLengthCalibrationHud = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmLengthCalibrationHud"));
+	IConsoleVariable* QuestArmLengthCalibrationStartup = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.QuestArmLengthCalibrationStartup"));
+	IConsoleVariable* BodyFusionEnable = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Enable"));
+	IConsoleVariable* BodyFusionDebug = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Debug"));
+	IConsoleVariable* BodyFusionWritePose = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.WritePose"));
+	IConsoleVariable* BodyFusionMediaPipeAuthority = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.MediaPipeAuthority"));
+	IConsoleVariable* BodyFusionFullBodyMediaPipeAuthority = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"));
+	IConsoleVariable* MediaPipeDriveSpine = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeDriveSpine"));
+	IConsoleVariable* MediaPipeDrivePelvisTranslation = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeDrivePelvisTranslation"));
+	IConsoleVariable* MediaPipeDriveLegs = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeDriveLegs"));
+	IConsoleVariable* MediaPipeUseLegIK = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeUseLegIK"));
+	IConsoleVariable* MediaPipeUseLegIKFootPlant = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeUseLegIKFootPlant"));
+	IConsoleVariable* MediaPipeUseFkRootGrounding = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeUseFkRootGrounding"));
+	IConsoleVariable* MediaPipeDriveFootRotation = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeDriveFootRotation"));
+
+	TestNotNull(TEXT("Tracking-fusion on-play CVar is registered"), RecordOnPlay);
+	TestNotNull(TEXT("Tracking-fusion duration CVar is registered"), Duration);
+	TestNotNull(TEXT("Tracking-fusion sample-rate CVar is registered"), SampleRate);
+	TestNotNull(TEXT("Tracking-fusion bone-mode CVar is registered"), BoneMode);
+	TestNotNull(TEXT("Tracking-fusion phase preset CVar is registered"), PhasePreset);
+	TestNotNull(TEXT("Tracking-fusion chunk-size CVar is registered"), ChunkMegabytes);
+	TestNotNull(TEXT("Tracking-fusion label CVar is registered"), Label);
+	TestNotNull(TEXT("Tracking-fusion path CVar is registered"), Path);
+	TestNotNull(TEXT("Tracking-fusion analyze CVar is registered"), Analyze);
+	TestNotNull(TEXT("Tracking-fusion prepare command is registered"), PrepareCommand);
+	TestNotNull(TEXT("Avatar-locked sync calibration prepare command is registered"), AvatarLockedPrepareCommand);
+	TestNotNull(TEXT("Replay-output prepare command is registered"), ReplayOutputPrepareCommand);
+	TestNotNull(TEXT("Replay capture allow CVar is registered"), ReplayAllowTrackingCapture);
+	TestNotNull(TEXT("Replay source file CVar is registered"), ReplayFile);
+	TestNotNull(TEXT("Replay start-offset CVar is registered"), ReplayStartOffset);
+	TestNotNull(TEXT("BodyFusion full-body authority CVar is registered"), BodyFusionFullBodyMediaPipeAuthority);
+	TestNotNull(TEXT("Leg IK foot-plant CVar is registered"), MediaPipeUseLegIKFootPlant);
+	TestNotNull(TEXT("FK root-grounding CVar is registered"), MediaPipeUseFkRootGrounding);
+	if (RecordOnPlay)
+	{
+		TestEqual(TEXT("Tracking-fusion on-play defaults off"), RecordOnPlay->GetInt(), 0);
+	}
+	if (Duration)
+	{
+		TestEqual(TEXT("Tracking-fusion duration defaults to full routine"), Duration->GetFloat(), 90.0f);
+	}
+	if (SampleRate)
+	{
+		TestEqual(TEXT("Tracking-fusion sample-rate defaults to fixed all-bone capture"), SampleRate->GetFloat(), 30.0f);
+	}
+	if (BoneMode)
+	{
+		TestEqual(TEXT("Tracking-fusion bone-mode defaults to all bones"), BoneMode->GetString(), FString(TEXT("all")));
+	}
+	if (PhasePreset)
+	{
+		TestEqual(TEXT("Tracking-fusion phase preset defaults to default"), PhasePreset->GetString(), FString(TEXT("default")));
+	}
+	if (ChunkMegabytes)
+	{
+		TestEqual(TEXT("Tracking-fusion chunk size defaults to 128 MB"), ChunkMegabytes->GetFloat(), 128.0f);
+	}
+	if (Analyze)
+	{
+		TestEqual(TEXT("Tracking-fusion analyzer defaults on"), Analyze->GetInt(), 1);
+	}
+
+	TArray<TPair<IConsoleVariable*, FString>> ConsoleSnapshots;
+	auto SnapshotConsoleVariable = [&ConsoleSnapshots](IConsoleVariable* Variable)
+	{
+		if (Variable)
+		{
+			ConsoleSnapshots.Emplace(Variable, Variable->GetString());
+		}
+	};
+	for (IConsoleVariable* Variable : {
+		RecordOnPlay,
+		Duration,
+		SampleRate,
+		BoneMode,
+		PhasePreset,
+		ChunkMegabytes,
+		Label,
+		Path,
+		Analyze,
+		QuestWristCalibrationHud,
+		QuestArmLengthCalibrationHud,
+		QuestArmLengthCalibrationStartup,
+		BodyFusionEnable,
+		BodyFusionDebug,
+		BodyFusionWritePose,
+		BodyFusionMediaPipeAuthority,
+		BodyFusionFullBodyMediaPipeAuthority,
+		ReplayAllowTrackingCapture,
+		ReplayFile,
+		ReplayStartOffset,
+		MediaPipeDriveSpine,
+		MediaPipeDrivePelvisTranslation,
+		MediaPipeDriveLegs,
+		MediaPipeUseLegIK,
+		MediaPipeUseLegIKFootPlant,
+		MediaPipeUseFkRootGrounding,
+		MediaPipeDriveFootRotation })
+	{
+		SnapshotConsoleVariable(Variable);
+	}
+
+	if (MediaPipeDrivePelvisTranslation)
+	{
+		MediaPipeDrivePelvisTranslation->Set(0, ECVF_SetByConsole);
+	}
+	if (BodyFusionEnable)
+	{
+		BodyFusionEnable->Set(0, ECVF_SetByConsole);
+	}
+	if (BodyFusionDebug)
+	{
+		BodyFusionDebug->Set(0, ECVF_SetByConsole);
+	}
+	if (BodyFusionWritePose)
+	{
+		BodyFusionWritePose->Set(0, ECVF_SetByConsole);
+	}
+	if (BodyFusionMediaPipeAuthority)
+	{
+		BodyFusionMediaPipeAuthority->Set(0, ECVF_SetByConsole);
+	}
+	if (BodyFusionFullBodyMediaPipeAuthority)
+	{
+		BodyFusionFullBodyMediaPipeAuthority->Set(0, ECVF_SetByConsole);
+	}
+	if (ReplayAllowTrackingCapture)
+	{
+		ReplayAllowTrackingCapture->Set(0, ECVF_SetByConsole);
+	}
+	if (MediaPipeDriveSpine)
+	{
+		MediaPipeDriveSpine->Set(0, ECVF_SetByConsole);
+	}
+	if (MediaPipeDriveLegs)
+	{
+		MediaPipeDriveLegs->Set(0, ECVF_SetByConsole);
+	}
+	if (MediaPipeUseLegIK)
+	{
+		MediaPipeUseLegIK->Set(0, ECVF_SetByConsole);
+	}
+	if (MediaPipeUseLegIKFootPlant)
+	{
+		MediaPipeUseLegIKFootPlant->Set(1, ECVF_SetByConsole);
+	}
+	if (MediaPipeUseFkRootGrounding)
+	{
+		MediaPipeUseFkRootGrounding->Set(0, ECVF_SetByConsole);
+	}
+	if (MediaPipeDriveFootRotation)
+	{
+		MediaPipeDriveFootRotation->Set(0, ECVF_SetByConsole);
+	}
+
+	if (AvatarLockedPrepareCommand)
+	{
+		FOutputDeviceNull OutputDevice;
+		const bool bProcessed = IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("mp.PrepareAvatarLockedSyncCalibrationCapture label=automation_avatar_locked analyze=0 path=Saved/CodexAgent/Diagnostics/avatar_locked_automation.json"),
+			OutputDevice,
+			nullptr);
+		TestTrue(TEXT("Avatar-locked sync calibration command executes"), bProcessed);
+
+		if (RecordOnPlay)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration arms one-shot tracking fusion capture"), RecordOnPlay->GetInt(), 1);
+		}
+		if (Duration)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration uses seven 30-second blocks"), Duration->GetFloat(), 210.0f);
+		}
+		if (SampleRate)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration preserves 30 Hz capture"), SampleRate->GetFloat(), 30.0f);
+		}
+		if (BoneMode)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration preserves all-bone capture"), BoneMode->GetString(), FString(TEXT("all")));
+		}
+		if (PhasePreset)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration selects the calibration phase preset"), PhasePreset->GetString(), FString(FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset));
+		}
+		if (Analyze)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration stores analyze flag"), Analyze->GetInt(), 0);
+		}
+		if (QuestWristCalibrationHud)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration suppresses wrist calibration HUD"), QuestWristCalibrationHud->GetInt(), 0);
+		}
+		if (QuestArmLengthCalibrationHud)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration suppresses arm-length calibration HUD"), QuestArmLengthCalibrationHud->GetInt(), 0);
+		}
+		if (QuestArmLengthCalibrationStartup)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration suppresses arm-length calibration startup"), QuestArmLengthCalibrationStartup->GetInt(), 0);
+		}
+		if (BodyFusionEnable)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables BodyFusion"), BodyFusionEnable->GetInt(), 1);
+		}
+		if (BodyFusionDebug)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables BodyFusion diagnostics"), BodyFusionDebug->GetInt(), 1);
+		}
+		if (BodyFusionWritePose)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables visible pose writes"), BodyFusionWritePose->GetInt(), 1);
+		}
+		if (BodyFusionMediaPipeAuthority)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration uses calibrated/fresh MediaPipe authority"), BodyFusionMediaPipeAuthority->GetInt(), 2);
+		}
+		if (BodyFusionFullBodyMediaPipeAuthority)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables full-body MediaPipe authority"), BodyFusionFullBodyMediaPipeAuthority->GetInt(), 1);
+		}
+		if (MediaPipeDriveSpine)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables spine driving"), MediaPipeDriveSpine->GetInt(), 1);
+		}
+		if (MediaPipeDrivePelvisTranslation)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables pelvis translation driving"), MediaPipeDrivePelvisTranslation->GetInt(), 1);
+		}
+		if (MediaPipeDriveLegs)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables live leg driving"), MediaPipeDriveLegs->GetInt(), 1);
+		}
+		if (MediaPipeUseLegIK)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration uses direct MetaHuman segment legs"), MediaPipeUseLegIK->GetInt(), 0);
+		}
+		if (MediaPipeUseLegIKFootPlant)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration disables IK foot-plant lock"), MediaPipeUseLegIKFootPlant->GetInt(), 0);
+		}
+		if (MediaPipeUseFkRootGrounding)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables FK root grounding without leg IK"), MediaPipeUseFkRootGrounding->GetInt(), 1);
+		}
+		if (MediaPipeDriveFootRotation)
+		{
+			TestEqual(TEXT("Avatar-locked sync calibration enables foot rotation driving"), MediaPipeDriveFootRotation->GetInt(), 1);
+		}
+	}
+
+	if (ReplayOutputPrepareCommand)
+	{
+		FOutputDeviceNull OutputDevice;
+		const bool bProcessed = IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("mp.PrepareTrackingFusionDatasetReplayOutputCapture duration=12 label=automation_replay_output analyze=0 path=Saved/CodexAgent/Diagnostics/replay_output_automation.json manifest=Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_manifest.json"),
+			OutputDevice,
+			nullptr);
+		TestTrue(TEXT("Replay-output tracking fusion dataset command executes"), bProcessed);
+
+		if (ReplayAllowTrackingCapture)
+		{
+			TestEqual(TEXT("Replay output permits tracking dataset capture through replay startup actor"), ReplayAllowTrackingCapture->GetInt(), 1);
+		}
+		if (RecordOnPlay)
+		{
+			TestEqual(TEXT("Replay output arms one-shot tracking fusion capture"), RecordOnPlay->GetInt(), 1);
+		}
+		if (Duration)
+		{
+			TestEqual(TEXT("Replay output command stores requested duration"), Duration->GetFloat(), 12.0f);
+		}
+		if (SampleRate)
+		{
+			TestEqual(TEXT("Replay output preserves 30 Hz capture"), SampleRate->GetFloat(), 30.0f);
+		}
+		if (BoneMode)
+		{
+			TestEqual(TEXT("Replay output preserves all-bone capture"), BoneMode->GetString(), FString(TEXT("all")));
+		}
+		if (PhasePreset)
+		{
+			TestEqual(TEXT("Replay output selects avatar-locked analysis preset"), PhasePreset->GetString(), FString(FMediaPipeTrackingFusionDataset::AvatarLockedSyncCalibrationPreset));
+		}
+		if (Analyze)
+		{
+			TestEqual(TEXT("Replay output command stores analyze flag"), Analyze->GetInt(), 0);
+		}
+		if (BodyFusionMediaPipeAuthority)
+		{
+			TestEqual(TEXT("Replay output uses calibrated/fresh MediaPipe authority"), BodyFusionMediaPipeAuthority->GetInt(), 2);
+		}
+		if (BodyFusionFullBodyMediaPipeAuthority)
+		{
+			TestEqual(TEXT("Replay output enables full-body MediaPipe authority"), BodyFusionFullBodyMediaPipeAuthority->GetInt(), 1);
+		}
+		if (MediaPipeDriveLegs)
+		{
+			TestEqual(TEXT("Replay output enables leg driving"), MediaPipeDriveLegs->GetInt(), 1);
+		}
+		if (MediaPipeUseLegIK)
+		{
+			TestEqual(TEXT("Replay output uses direct MetaHuman segment legs"), MediaPipeUseLegIK->GetInt(), 0);
+		}
+		if (MediaPipeUseLegIKFootPlant)
+		{
+			TestEqual(TEXT("Replay output disables planted-foot lock for visible leg motion"), MediaPipeUseLegIKFootPlant->GetInt(), 0);
+		}
+		if (MediaPipeUseFkRootGrounding)
+		{
+			TestEqual(TEXT("Replay output uses FK root grounding, not leg IK, for floor contact"), MediaPipeUseFkRootGrounding->GetInt(), 1);
+		}
+		if (MediaPipeDriveFootRotation)
+		{
+			TestEqual(TEXT("Replay output enables measured MetaHuman foot rotation"), MediaPipeDriveFootRotation->GetInt(), 1);
+		}
+	}
+
+	for (const TPair<IConsoleVariable*, FString>& Snapshot : ConsoleSnapshots)
+	{
+		if (Snapshot.Key)
+		{
+			Snapshot.Key->Set(*Snapshot.Value, ECVF_SetByConsole);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarCalibrationProfileCVarAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.AvatarCalibrationProfileCVar",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarCalibrationProfileCVarAutomationTest::RunTest(const FString& Parameters)
+{
+	IConsoleObject* ProfilePath = IConsoleManager::Get().FindConsoleObject(TEXT("mp.AvatarCalibrationProfilePath"));
+	TestNotNull(TEXT("Avatar-locked calibration profile path CVar is registered"), ProfilePath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarCalibrationProfileMergeAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.AvatarCalibrationProfileSafeMerge",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarCalibrationProfileMergeAutomationTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FJsonObject> ProfileObject = MakeShared<FJsonObject>();
+	ProfileObject->SetStringField(TEXT("mode"), TEXT("avatar_locked_proteus"));
+
+	TSharedPtr<FJsonObject> SourceAlignment = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> TimingOffsets = MakeShared<FJsonObject>();
+	TimingOffsets->SetNumberField(TEXT("quest_hmd"), 0.10);
+	TimingOffsets->SetNumberField(TEXT("quest_hands"), 0.10);
+	TimingOffsets->SetNumberField(TEXT("quest_arm_chains"), 0.10);
+	TimingOffsets->SetNumberField(TEXT("mediapipe_body_pose"), 0.10);
+	SourceAlignment->SetObjectField(TEXT("timing_offsets_seconds_by_source"), TimingOffsets);
+
+	TSharedPtr<FJsonObject> CoordinateCorrections = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> QuestHandsCoordinateCorrection = MakeShared<FJsonObject>();
+	QuestHandsCoordinateCorrection->SetStringField(TEXT("space"), TEXT("target_component"));
+	TArray<TSharedPtr<FJsonValue>> QuestHandsAxisSign;
+	QuestHandsAxisSign.Add(MakeShared<FJsonValueNumber>(-1.0));
+	QuestHandsAxisSign.Add(MakeShared<FJsonValueNumber>(1.0));
+	QuestHandsAxisSign.Add(MakeShared<FJsonValueNumber>(1.0));
+	QuestHandsCoordinateCorrection->SetArrayField(TEXT("location_axis_sign"), QuestHandsAxisSign);
+	TArray<TSharedPtr<FJsonValue>> QuestHandsAxisOffset;
+	QuestHandsAxisOffset.Add(MakeShared<FJsonValueNumber>(1.0));
+	QuestHandsAxisOffset.Add(MakeShared<FJsonValueNumber>(0.0));
+	QuestHandsAxisOffset.Add(MakeShared<FJsonValueNumber>(0.0));
+	QuestHandsCoordinateCorrection->SetArrayField(TEXT("location_offset_cm"), QuestHandsAxisOffset);
+	CoordinateCorrections->SetObjectField(TEXT("quest_hands"), QuestHandsCoordinateCorrection);
+	SourceAlignment->SetObjectField(TEXT("coordinate_axis_corrections"), CoordinateCorrections);
+
+	TArray<TSharedPtr<FJsonValue>> HeadAnchor;
+	HeadAnchor.Add(MakeShared<FJsonValueNumber>(1.0));
+	HeadAnchor.Add(MakeShared<FJsonValueNumber>(2.0));
+	HeadAnchor.Add(MakeShared<FJsonValueNumber>(3.0));
+	SourceAlignment->SetArrayField(TEXT("head_camera_anchor_offset_cm"), HeadAnchor);
+
+	TSharedPtr<FJsonObject> WristOffsets = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> LeftWrist = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> LeftOffset;
+	LeftOffset.Add(MakeShared<FJsonValueNumber>(4.0));
+	LeftOffset.Add(MakeShared<FJsonValueNumber>(5.0));
+	LeftOffset.Add(MakeShared<FJsonValueNumber>(6.0));
+	LeftWrist->SetArrayField(TEXT("offset_cm"), LeftOffset);
+	WristOffsets->SetObjectField(TEXT("left"), LeftWrist);
+	SourceAlignment->SetObjectField(TEXT("wrist_arm_chain_offsets_cm"), WristOffsets);
+
+	TSharedPtr<FJsonObject> BoneMapCorrections = MakeShared<FJsonObject>();
+	BoneMapCorrections->SetStringField(TEXT("Head"), TEXT("head_corrected"));
+	SourceAlignment->SetObjectField(TEXT("bone_map_corrections"), BoneMapCorrections);
+	ProfileObject->SetObjectField(TEXT("source_alignment"), SourceAlignment);
+
+	FMediaPipeAvatarEmbodimentProfile EmbodimentProfile;
+	const float OriginalUpperArmLengthCm = EmbodimentProfile.ExpectedUpperArmLengthCm;
+	const float OriginalThighLengthCm = EmbodimentProfile.ExpectedThighLengthCm;
+	FMediaPipeAvatarCalibrationProfileMergeResult Result;
+
+	TestTrue(
+		TEXT("Avatar-locked profile safe fields merge"),
+		ApplyMediaPipeAvatarCalibrationProfileObject(ProfileObject, EmbodimentProfile, Result));
+	TestTrue(TEXT("Profile is marked as avatar-locked calibration"), EmbodimentProfile.bHasAvatarLockedCalibrationProfile);
+	TestEqual(TEXT("Mode is preserved"), EmbodimentProfile.AvatarLockedCalibrationMode, FString(TEXT("avatar_locked_proteus")));
+	TestEqual(TEXT("Quest HMD timing offset is merged"), EmbodimentProfile.AvatarLockedSourceTimingOffsetsSeconds.FindChecked(FString(TEXT("quest_hmd"))), 0.10f);
+	TestTrue(TEXT("Coordinate correction is merged"), EmbodimentProfile.AvatarLockedSourceCoordinateAxisCorrections.Contains(FString(TEXT("quest_hands"))));
+	TestTrue(TEXT("Coordinate axis sign is sanitized and preserved"),
+		EmbodimentProfile.AvatarLockedSourceCoordinateAxisCorrections.FindChecked(FString(TEXT("quest_hands"))).LocationAxisSign.Equals(FVector(-1.0f, 1.0f, 1.0f)));
+	TestTrue(TEXT("Head camera anchor is merged"), EmbodimentProfile.AvatarLockedHeadCameraAnchorOffsetCm.Equals(FVector(1.0f, 2.0f, 3.0f)));
+	TestTrue(TEXT("Wrist offset is merged"), EmbodimentProfile.AvatarLockedWristArmChainOffsetsCm.FindChecked(FString(TEXT("left"))).Equals(FVector(4.0f, 5.0f, 6.0f)));
+	TestEqual(TEXT("Safe bone-map correction is merged"), EmbodimentProfile.BoneMap.Head, FName(TEXT("head_corrected")));
+	TArray<FName> RuntimeDrivenBones;
+	AppendMediaPipeAvatarProfileDrivenUpperBodyBones(EmbodimentProfile, RuntimeDrivenBones);
+	TestTrue(TEXT("Bone-map correction changes the runtime profile-driven bone list"), RuntimeDrivenBones.Contains(FName(TEXT("head_corrected"))));
+	TestFalse(TEXT("Corrected head bone replaces the default runtime head bone"), RuntimeDrivenBones.Contains(FName(TEXT("head"))));
+	TestEqual(TEXT("Avatar upper-arm length is preserved"), EmbodimentProfile.ExpectedUpperArmLengthCm, OriginalUpperArmLengthCm);
+	TestEqual(TEXT("Avatar thigh length is preserved"), EmbodimentProfile.ExpectedThighLengthCm, OriginalThighLengthCm);
+	TestTrue(TEXT("Merge result reports applied fields"), Result.bApplied && Result.AppliedFields.Num() > 0);
+
+	FMediaPipeAvatarEmbodimentProfile BaselineProfile;
+	BaselineProfile.EmbodiedCameraForwardOffsetCm = 0.0f;
+	EmbodimentProfile.EmbodiedCameraForwardOffsetCm = 0.0f;
+
+	FMediaPipeAvatarEmbodimentSolveInput BaselineSolveInput;
+	BaselineSolveInput.Profile = BaselineProfile;
+	BaselineSolveInput.DesiredCameraWorld = FVector(100.0f, 0.0f, 170.0f);
+	BaselineSolveInput.ViewerYawWorld = FRotator::ZeroRotator;
+	BaselineSolveInput.bSnapAvatarToGround = false;
+	FMediaPipeAvatarEmbodimentSolveInput CalibratedSolveInput = BaselineSolveInput;
+	CalibratedSolveInput.Profile = EmbodimentProfile;
+
+	FMediaPipeAvatarEmbodimentSolveResult BaselineSolve;
+	FMediaPipeAvatarEmbodimentSolveResult CalibratedSolve;
+	TestTrue(TEXT("Baseline camera solve succeeds"), FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(BaselineSolveInput, BaselineSolve));
+	TestTrue(TEXT("Calibrated camera solve succeeds"), FMediaPipeAvatarEmbodimentSolver::SolveCameraAnchoredAvatar(CalibratedSolveInput, CalibratedSolve));
+	TestFalse(TEXT("Head/camera anchor offset changes avatar placement"), BaselineSolve.AvatarWorld.Equals(CalibratedSolve.AvatarWorld, 0.001f));
+
+	FMediaPipeAvatarHmdWristMapInput BaselineMapInput;
+	BaselineMapInput.QuestAnchorWorld = FVector(100.0f, 0.0f, 170.0f);
+	BaselineMapInput.QuestAnchorYawWorld = FQuat::Identity;
+	BaselineMapInput.QuestTrackingUpWorld = FVector::UpVector;
+	BaselineMapInput.QuestWristWorld = FVector(120.0f, 30.0f, 160.0f);
+	BaselineMapInput.TargetCompTransform = FTransform::Identity;
+	BaselineMapInput.Profile = BaselineProfile;
+	BaselineMapInput.MaxOffsetCm = 0.0f;
+	FMediaPipeAvatarHmdWristMapInput CalibratedMapInput = BaselineMapInput;
+	CalibratedMapInput.Profile = EmbodimentProfile;
+	CalibratedMapInput.WristArmChainOffsetCm = EmbodimentProfile.AvatarLockedWristArmChainOffsetsCm.FindChecked(FString(TEXT("left")));
+
+	FMediaPipeAvatarHmdWristMapResult BaselineMap;
+	FMediaPipeAvatarHmdWristMapResult CalibratedMap;
+	TestTrue(TEXT("Baseline wrist map succeeds"), FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(BaselineMapInput, BaselineMap));
+	TestTrue(TEXT("Calibrated wrist map succeeds"), FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(CalibratedMapInput, CalibratedMap));
+	TestTrue(TEXT("Wrist calibration offset changes mapped wrist"), FVector::Dist(CalibratedMap.MappedWristWorld, BaselineMap.MappedWristWorld) > 1.0f);
+
+	FMediaPipeTrackingSourceAlignmentRuntime AlignmentRuntime;
+	FMediaPipeTrackingSourceFrame HistoricalFrame;
+	HistoricalFrame.FrameTimeSeconds = 1.0;
+	HistoricalFrame.bHasHmdPose = true;
+	HistoricalFrame.HmdLocationWorld = FVector(10.0f, 0.0f, 170.0f);
+	HistoricalFrame.HmdRotationWorld = FQuat::Identity;
+	HistoricalFrame.HmdTimestampSeconds = 1.0;
+	HistoricalFrame.HmdConfidence = 1.0f;
+	HistoricalFrame.bHasLeftHand = true;
+	HistoricalFrame.LeftHandWorld = FVector(20.0f, 0.0f, 100.0f);
+	HistoricalFrame.LeftHandTimestampSeconds = 1.0;
+	HistoricalFrame.LeftHandConfidence = 1.0f;
+	HistoricalFrame.bHasLeftArmChain = true;
+	HistoricalFrame.LeftArmShoulderWorld = FVector(0.0f, -20.0f, 140.0f);
+	HistoricalFrame.LeftArmElbowWorld = FVector(10.0f, -30.0f, 120.0f);
+	HistoricalFrame.LeftArmWristWorld = FVector(20.0f, -40.0f, 100.0f);
+	HistoricalFrame.LeftArmChainTimestampSeconds = 1.0;
+	HistoricalFrame.LeftArmChainConfidence = 1.0f;
+	HistoricalFrame.bHasBodyPose = true;
+	HistoricalFrame.BodyPoseTimestampSeconds = 1.0;
+	HistoricalFrame.BodyPoseConfidence = 1.0f;
+	HistoricalFrame.SetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(20.0f, -40.0f, 100.0f), 1.0f);
+	HistoricalFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	AlignmentRuntime.AddRawFrame(HistoricalFrame);
+
+	FMediaPipeTrackingSourceFrame CurrentFrame = HistoricalFrame;
+	CurrentFrame.FrameTimeSeconds = 1.10;
+	CurrentFrame.HmdLocationWorld = FVector(100.0f, 0.0f, 170.0f);
+	CurrentFrame.HmdTimestampSeconds = 1.10;
+	CurrentFrame.LeftHandWorld = FVector(200.0f, 0.0f, 100.0f);
+	CurrentFrame.LeftHandTimestampSeconds = 1.10;
+	CurrentFrame.LeftArmShoulderWorld = FVector(100.0f, -20.0f, 140.0f);
+	CurrentFrame.LeftArmElbowWorld = FVector(110.0f, -30.0f, 120.0f);
+	CurrentFrame.LeftArmWristWorld = FVector(120.0f, -40.0f, 100.0f);
+	CurrentFrame.LeftArmChainTimestampSeconds = 1.10;
+	CurrentFrame.BodyPoseTimestampSeconds = 1.10;
+	CurrentFrame.SetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, FVector(120.0f, -40.0f, 100.0f), 1.0f);
+	CurrentFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	AlignmentRuntime.AddRawFrame(CurrentFrame);
+
+	FMediaPipeTrackingSourceFrame AlignedFrame;
+	FMediaPipeTrackingSourceAlignmentResult AlignmentResult;
+	TestTrue(
+		TEXT("Source alignment reports runtime alignment applied"),
+		AlignmentRuntime.BuildAlignedFrame(
+			CurrentFrame,
+			EmbodimentProfile,
+			FTransform::Identity,
+			FMediaPipeBodyFusionFreshnessThresholds(),
+			AlignedFrame,
+			AlignmentResult));
+	TestTrue(TEXT("HMD timing alignment selected historical HMD frame"), AlignmentResult.bUsedHistoricalHmd);
+	TestTrue(TEXT("Hand timing alignment selected historical hand frame"), AlignmentResult.bUsedHistoricalLeftHand);
+	TestTrue(TEXT("Arm timing alignment selected historical arm-chain frame"), AlignmentResult.bUsedHistoricalLeftArmChain);
+	TestTrue(TEXT("MediaPipe body timing alignment selected historical body-pose frame"), AlignmentResult.bUsedHistoricalBodyPose);
+	TestEqual(TEXT("Aligned HMD comes from historical frame"), AlignedFrame.HmdLocationWorld.X, 10.0);
+	TestEqual(TEXT("Aligned hand applies coordinate correction before wrist offset"), AlignedFrame.LeftHandWorld, FVector(-15.0f, 5.0f, 106.0f));
+	FVector AlignedBodyWrist = FVector::ZeroVector;
+	TestTrue(TEXT("Aligned body landmark exists"), AlignedFrame.TryGetBodyLandmark(EMediaPipePoseLandmark::LeftWrist, AlignedBodyWrist));
+	TestEqual(TEXT("Aligned body pose comes from historical frame"), AlignedBodyWrist, FVector(20.0f, -40.0f, 100.0f));
+
+	FMediaPipeAvatarEmbodimentProfile CoordinateOnlyProfile;
+	FMediaPipeAvatarSourceCoordinateAxisCorrection CoordinateCorrection;
+	CoordinateCorrection.LocationAxisSign = FVector(-1.0f, 1.0f, 1.0f);
+	CoordinateCorrection.LocationOffsetCm = FVector(1.0f, 0.0f, 0.0f);
+	CoordinateOnlyProfile.AvatarLockedSourceCoordinateAxisCorrections.Add(FString(TEXT("quest_hands")), CoordinateCorrection);
+
+	FMediaPipeTrackingSourceAlignmentRuntime CoordinateRuntime;
+	FMediaPipeTrackingSourceFrame CoordinateRawFrame;
+	CoordinateRawFrame.FrameTimeSeconds = 2.0;
+	CoordinateRawFrame.bHasLeftHand = true;
+	CoordinateRawFrame.LeftHandWorld = FVector(20.0f, -5.0f, 100.0f);
+	CoordinateRawFrame.LeftHandTimestampSeconds = 2.0;
+	CoordinateRawFrame.LeftHandConfidence = 1.0f;
+	CoordinateRawFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	CoordinateRuntime.AddRawFrame(CoordinateRawFrame);
+
+	FMediaPipeTrackingSourceFrame CoordinateAlignedFrame;
+	FMediaPipeTrackingSourceAlignmentResult CoordinateAlignmentResult;
+	TestTrue(
+		TEXT("Coordinate correction reports runtime alignment applied"),
+		CoordinateRuntime.BuildAlignedFrame(
+			CoordinateRawFrame,
+			CoordinateOnlyProfile,
+			FTransform::Identity,
+			FMediaPipeBodyFusionFreshnessThresholds(),
+			CoordinateAlignedFrame,
+			CoordinateAlignmentResult));
+	TestTrue(TEXT("Quest hand coordinate correction flag is set"), CoordinateAlignmentResult.bAppliedQuestHandsCoordinateAxisCorrection);
+	TestEqual(TEXT("Quest hand coordinate correction changes source frame before BodyFusion"),
+		CoordinateAlignedFrame.LeftHandWorld,
+		FVector(-19.0f, -5.0f, 100.0f));
+
+	FMediaPipeAvatarEmbodimentProfile TimestampProfile;
+	TimestampProfile.AvatarLockedSourceTimingOffsetsSeconds.Add(FString(TEXT("quest_hmd")), 0.20f);
+	TimestampProfile.AvatarLockedSourceTimingOffsetsSeconds.Add(FString(TEXT("quest_hands")), 0.20f);
+	FMediaPipeTrackingSourceAlignmentRuntime TimestampRuntime;
+
+	FMediaPipeTrackingSourceFrame FrameTimeCloserFrame;
+	FrameTimeCloserFrame.FrameTimeSeconds = 10.0;
+	FrameTimeCloserFrame.bHasHmdPose = true;
+	FrameTimeCloserFrame.HmdLocationWorld = FVector(1.0f, 0.0f, 170.0f);
+	FrameTimeCloserFrame.HmdRotationWorld = FQuat::Identity;
+	FrameTimeCloserFrame.HmdTimestampSeconds = 9.70;
+	FrameTimeCloserFrame.HmdConfidence = 1.0f;
+	FrameTimeCloserFrame.bHasLeftHand = true;
+	FrameTimeCloserFrame.LeftHandWorld = FVector(1.0f, -20.0f, 100.0f);
+	FrameTimeCloserFrame.LeftHandTimestampSeconds = 9.70;
+	FrameTimeCloserFrame.LeftHandConfidence = 1.0f;
+	FrameTimeCloserFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	TimestampRuntime.AddRawFrame(FrameTimeCloserFrame);
+
+	FMediaPipeTrackingSourceFrame SourceTimestampCloserFrame = FrameTimeCloserFrame;
+	SourceTimestampCloserFrame.FrameTimeSeconds = 9.80;
+	SourceTimestampCloserFrame.HmdLocationWorld = FVector(2.0f, 0.0f, 170.0f);
+	SourceTimestampCloserFrame.HmdTimestampSeconds = 10.0;
+	SourceTimestampCloserFrame.LeftHandWorld = FVector(2.0f, -20.0f, 100.0f);
+	SourceTimestampCloserFrame.LeftHandTimestampSeconds = 10.0;
+	SourceTimestampCloserFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	TimestampRuntime.AddRawFrame(SourceTimestampCloserFrame);
+
+	FMediaPipeTrackingSourceFrame TimestampRawFrame = FrameTimeCloserFrame;
+	TimestampRawFrame.FrameTimeSeconds = 10.20;
+	TimestampRawFrame.HmdLocationWorld = FVector(3.0f, 0.0f, 170.0f);
+	TimestampRawFrame.HmdTimestampSeconds = 10.20;
+	TimestampRawFrame.LeftHandWorld = FVector(3.0f, -20.0f, 100.0f);
+	TimestampRawFrame.LeftHandTimestampSeconds = 10.20;
+	TimestampRawFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	TimestampRuntime.AddRawFrame(TimestampRawFrame);
+
+	FMediaPipeTrackingSourceFrame TimestampAlignedFrame;
+	FMediaPipeTrackingSourceAlignmentResult TimestampAlignmentResult;
+	TestTrue(
+		TEXT("Source timestamp alignment reports runtime alignment applied"),
+		TimestampRuntime.BuildAlignedFrame(
+			TimestampRawFrame,
+			TimestampProfile,
+			FTransform::Identity,
+			FMediaPipeBodyFusionFreshnessThresholds(),
+			TimestampAlignedFrame,
+			TimestampAlignmentResult));
+	TestEqual(TEXT("HMD alignment selects by source timestamp, not frame time"), TimestampAlignedFrame.HmdLocationWorld, FVector(2.0f, 0.0f, 170.0f));
+	TestEqual(TEXT("Hand alignment selects by source timestamp, not frame time"), TimestampAlignedFrame.LeftHandWorld, FVector(2.0f, -20.0f, 100.0f));
+	TestEqual(TEXT("Selected HMD source timestamp is reported"), TimestampAlignmentResult.SelectedHmdSourceTimestampSeconds, 10.0);
+	TestEqual(TEXT("Selected hand source timestamp is reported"), TimestampAlignmentResult.SelectedLeftHandSourceTimestampSeconds, 10.0);
+
+	FMediaPipeAvatarEmbodimentProfile WideDelayProfile;
+	WideDelayProfile.AvatarLockedSourceTimingOffsetsSeconds.Add(FString(TEXT("quest_hmd")), 0.75f);
+	FMediaPipeTrackingSourceAlignmentRuntime WideDelayRuntime;
+	FMediaPipeTrackingSourceFrame WideDelayHistoricalFrame;
+	WideDelayHistoricalFrame.FrameTimeSeconds = 30.0;
+	WideDelayHistoricalFrame.bHasHmdPose = true;
+	WideDelayHistoricalFrame.HmdLocationWorld = FVector(75.0f, 0.0f, 170.0f);
+	WideDelayHistoricalFrame.HmdRotationWorld = FQuat::Identity;
+	WideDelayHistoricalFrame.HmdTimestampSeconds = 30.0;
+	WideDelayHistoricalFrame.HmdConfidence = 1.0f;
+	WideDelayHistoricalFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	WideDelayRuntime.AddRawFrame(WideDelayHistoricalFrame);
+
+	FMediaPipeTrackingSourceFrame WideDelayCurrentFrame = WideDelayHistoricalFrame;
+	WideDelayCurrentFrame.FrameTimeSeconds = 30.75;
+	WideDelayCurrentFrame.HmdLocationWorld = FVector(175.0f, 0.0f, 170.0f);
+	WideDelayCurrentFrame.HmdTimestampSeconds = 30.75;
+	WideDelayCurrentFrame.NormalizeInPlace(FMediaPipeBodyFusionFreshnessThresholds());
+	WideDelayRuntime.AddRawFrame(WideDelayCurrentFrame);
+
+	FMediaPipeTrackingSourceFrame WideDelayAlignedFrame;
+	FMediaPipeTrackingSourceAlignmentResult WideDelayAlignmentResult;
+	TestTrue(
+		TEXT("Runtime source alignment accepts the 0.75s calibration window"),
+		WideDelayRuntime.BuildAlignedFrame(
+			WideDelayCurrentFrame,
+			WideDelayProfile,
+			FTransform::Identity,
+			FMediaPipeBodyFusionFreshnessThresholds(),
+			WideDelayAlignedFrame,
+			WideDelayAlignmentResult));
+	TestEqual(TEXT("0.75s HMD timing offset is not clipped below the capture protocol window"), WideDelayAlignmentResult.QuestHmdDelaySeconds, 0.75f);
+	TestTrue(TEXT("0.75s timing alignment selected historical HMD frame"), WideDelayAlignmentResult.bUsedHistoricalHmd);
+	TestEqual(TEXT("0.75s aligned HMD comes from historical frame"), WideDelayAlignedFrame.HmdLocationWorld, FVector(75.0f, 0.0f, 170.0f));
+
+	FString ProfileJson;
+	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&ProfileJson);
+	TestTrue(TEXT("Profile JSON serializes for CVar smoke"), FJsonSerializer::Serialize(ProfileObject.ToSharedRef(), JsonWriter));
+	const FString TempProfileDir = FPaths::Combine(
+		FPlatformProcess::UserTempDir(),
+		TEXT("TestingKit5"),
+		TEXT("CodexAgent"),
+		TEXT("Diagnostics"));
+	IFileManager::Get().MakeDirectory(*TempProfileDir, true);
+	FString TempProfilePath = FPaths::Combine(TempProfileDir, TEXT("avatar_calibration_profile_runtime_smoke.json"));
+	FPaths::NormalizeFilename(TempProfilePath);
+	TestTrue(TEXT("Profile JSON writes for CVar smoke"), FFileHelper::SaveStringToFile(ProfileJson, *TempProfilePath));
+
+	const FString PreviousProfilePath = MediaPipeRuntimeCVars::GAvatarCalibrationProfilePath;
+	MediaPipeRuntimeCVars::GAvatarCalibrationProfilePath = TempProfilePath;
+	FMediaPipeAvatarEmbodimentProfile LoadedProfile;
+	ApplyMediaPipeAvatarCalibrationProfileFromCVar(LoadedProfile);
+	MediaPipeRuntimeCVars::GAvatarCalibrationProfilePath = PreviousProfilePath;
+	TestTrue(TEXT("CVar-loaded profile applies avatar-locked calibration"), LoadedProfile.bHasAvatarLockedCalibrationProfile);
+	TestTrue(TEXT("CVar-loaded timing offset is available to runtime"), LoadedProfile.AvatarLockedSourceTimingOffsetsSeconds.Contains(FString(TEXT("quest_hmd"))));
+	if (LoadedProfile.AvatarLockedSourceTimingOffsetsSeconds.Contains(FString(TEXT("quest_hmd"))))
+	{
+		TestEqual(TEXT("CVar-loaded timing offset value is preserved"), LoadedProfile.AvatarLockedSourceTimingOffsetsSeconds.FindChecked(FString(TEXT("quest_hmd"))), 0.10f);
+	}
+	TestTrue(TEXT("CVar-loaded coordinate correction is available to runtime"), LoadedProfile.AvatarLockedSourceCoordinateAxisCorrections.Contains(FString(TEXT("quest_hands"))));
+	AddInfo(TEXT("mp.AvatarAlignmentSmoke: loadedProfile=1 beforeBodyFusion=1 timingOffsets=quest_hmd,quest_hands,quest_arm_chains,mediapipe_body_pose coordCorrections=quest_hands sourceFrameChanged=1 avatarScaleChanged=0"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarCalibrationProfileDiagnosticOnlyInactiveAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.AvatarCalibrationProfileDiagnosticOnlyInactive",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarCalibrationProfileDiagnosticOnlyInactiveAutomationTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FJsonObject> ProfileObject = MakeShared<FJsonObject>();
+	ProfileObject->SetStringField(TEXT("mode"), TEXT("avatar_locked_proteus"));
+	TSharedPtr<FJsonObject> DiagnosticOnly = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> TimingOffsets = MakeShared<FJsonObject>();
+	TimingOffsets->SetNumberField(TEXT("quest_hmd"), 0.25);
+	DiagnosticOnly->SetObjectField(TEXT("timing_offsets_seconds_by_source"), TimingOffsets);
+	TSharedPtr<FJsonObject> CoordinateAlignment = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> AxisSuggestions;
+	TSharedPtr<FJsonObject> AxisSuggestion = MakeShared<FJsonObject>();
+	AxisSuggestion->SetStringField(TEXT("source"), TEXT("quest_hands"));
+	AxisSuggestion->SetStringField(TEXT("axis"), TEXT("x"));
+	AxisSuggestion->SetNumberField(TEXT("axis_sign"), -1.0);
+	AxisSuggestions.Add(MakeShared<FJsonValueObject>(AxisSuggestion));
+	CoordinateAlignment->SetArrayField(TEXT("axis_sign_suggestions"), AxisSuggestions);
+	DiagnosticOnly->SetObjectField(TEXT("coordinate_alignment"), CoordinateAlignment);
+	ProfileObject->SetObjectField(TEXT("diagnostic_only"), DiagnosticOnly);
+
+	FMediaPipeAvatarEmbodimentProfile EmbodimentProfile;
+	FMediaPipeAvatarCalibrationProfileMergeResult Result;
+	TestTrue(
+		TEXT("Diagnostic-only profile object is accepted"),
+		ApplyMediaPipeAvatarCalibrationProfileObject(ProfileObject, EmbodimentProfile, Result));
+	TestEqual(TEXT("Diagnostic-only timing offset is not merged"), EmbodimentProfile.AvatarLockedSourceTimingOffsetsSeconds.Num(), 0);
+	TestEqual(TEXT("Diagnostic-only axis suggestion is not merged"), EmbodimentProfile.AvatarLockedSourceCoordinateAxisCorrections.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetReplayAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetReplayLoadsSourceObservations",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetReplayAutomationTest::RunTest(const FString& Parameters)
+{
+	const FString TempReplayDir = FPaths::Combine(
+		FPlatformProcess::UserTempDir(),
+		TEXT("TestingKit5"),
+		FString::Printf(TEXT("TrackingFusionReplay_%llu"), static_cast<unsigned long long>(FPlatformTime::Cycles64())));
+	IFileManager::Get().MakeDirectory(*TempReplayDir, true);
+	const FString SampleFilePath = FPaths::Combine(TempReplayDir, TEXT("samples_000.jsonl"));
+	const FString ManifestPath = FPaths::Combine(TempReplayDir, TEXT("capture.json"));
+
+	const FString SampleLine =
+		TEXT("{\"t\":0.0,\"phase\":{\"phase_name\":\"replay_test\"},\"fusion\":{\"source\":{")
+		TEXT("\"hmd\":{\"has_pose\":true,\"loc\":[10,20,170],\"quat\":[0,0,0,1],\"tracking_up\":[0,0,1],\"confidence\":1},")
+		TEXT("\"left_hand\":{\"has_hand\":true,\"wrist_world\":[30,-40,100],\"confidence\":1},")
+		TEXT("\"right_hand\":{\"has_hand\":true,\"wrist_world\":[35,40,100],\"confidence\":1},")
+		TEXT("\"left_arm_chain\":{\"has_chain\":true,\"shoulder_world\":[0,-20,140],\"elbow_world\":[15,-30,120],\"wrist_world\":[30,-40,100],\"confidence\":1},")
+		TEXT("\"right_arm_chain\":{\"has_chain\":true,\"shoulder_world\":[0,20,140],\"elbow_world\":[15,30,120],\"wrist_world\":[35,40,100],\"confidence\":1},")
+		TEXT("\"body_pose\":{\"has_body_pose\":true,\"landmarks\":{\"nose\":{\"valid\":true,\"reliability\":1,\"pos\":[10,20,170]},\"left_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,-10,90]},\"right_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,10,90]}}}")
+		TEXT("}}}\n")
+		TEXT("{\"t\":1.0,\"phase\":{\"phase_name\":\"replay_late\"},\"fusion\":{\"source\":{")
+		TEXT("\"hmd\":{\"has_pose\":true,\"loc\":[11,21,171],\"quat\":[0,0,0,1],\"tracking_up\":[0,0,1],\"confidence\":1},")
+		TEXT("\"body_pose\":{\"has_body_pose\":true,\"landmarks\":{\"nose\":{\"valid\":true,\"reliability\":1,\"pos\":[11,21,171]},\"left_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,-10,88]},\"right_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,10,88]}}}")
+		TEXT("}}}\n")
+		TEXT("{\"t\":2.0,\"phase\":{\"phase_name\":\"replay_end\"},\"fusion\":{\"source\":{")
+		TEXT("\"hmd\":{\"has_pose\":true,\"loc\":[12,22,172],\"quat\":[0,0,0,1],\"tracking_up\":[0,0,1],\"confidence\":1},")
+		TEXT("\"body_pose\":{\"has_body_pose\":true,\"landmarks\":{\"nose\":{\"valid\":true,\"reliability\":1,\"pos\":[12,22,172]},\"left_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,-10,86]},\"right_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,10,86]}}}")
+		TEXT("}}}\n");
+	TestTrue(TEXT("Replay sample JSONL writes"), FFileHelper::SaveStringToFile(SampleLine, *SampleFilePath));
+
+	const FString ManifestText =
+		TEXT("{\"schema\":\"tracking_fusion_dataset\",\"label\":\"replay_test\",\"sample_files\":[{\"relative_path\":\"samples_000.jsonl\"}]}");
+	TestTrue(TEXT("Replay manifest writes"), FFileHelper::SaveStringToFile(ManifestText, *ManifestPath));
+
+	FString Error;
+	FMediaPipeTrackingFusionDatasetReplayRuntime& ReplayRuntime =
+		FMediaPipeTrackingFusionDatasetReplayRuntime::Get();
+	TestTrue(TEXT("Replay manifest loads"), ReplayRuntime.LoadFromPath(ManifestPath, Error));
+	if (!Error.IsEmpty())
+	{
+		AddInfo(FString::Printf(TEXT("Replay load message: %s"), *Error));
+	}
+	ReplayRuntime.Start(100.0);
+
+	FEmbodiedFusionSourceObservations Observations;
+	FString PhaseName;
+	TestTrue(TEXT("Replay returns current observations"), ReplayRuntime.GetCurrentObservations(100.0, Observations, &PhaseName));
+	TestEqual(TEXT("Replay phase name is preserved"), PhaseName, FString(TEXT("replay_test")));
+	TestTrue(TEXT("Replay HMD pose is present"), Observations.HmdPose.bHasPose);
+	TestEqual(TEXT("Replay HMD location is parsed"), Observations.HmdPose.LocationWorld, FVector(10.0f, 20.0f, 170.0f));
+	TestEqual(TEXT("Replay HMD timestamp is current playback time"), Observations.HmdPose.TimestampSeconds, 100.0);
+	TestTrue(TEXT("Replay left hand is present"), Observations.Hands.bHasLeft != 0);
+	TestEqual(TEXT("Replay left hand wrist is parsed"),
+		Observations.Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)],
+		FVector(30.0f, -40.0f, 100.0f));
+	TestTrue(TEXT("Replay left arm chain is present"), Observations.ArmChain.Left.bHasChain);
+	TestEqual(TEXT("Replay left arm-chain wrist is parsed"), Observations.ArmChain.Left.WristWorld, FVector(30.0f, -40.0f, 100.0f));
+	const int32 NoseIndex = static_cast<int32>(EMediaPipePoseLandmark::Nose);
+	TestTrue(TEXT("Replay MediaPipe nose landmark is present"), Observations.BodyPose.LandmarkValid[NoseIndex] != 0);
+	TestEqual(TEXT("Replay MediaPipe nose landmark is parsed"), Observations.BodyPose.LandmarksWorld[NoseIndex], FVector(10.0f, 20.0f, 170.0f));
+	TestEqual(TEXT("Replay body timestamp is current playback time"), Observations.BodyPose.TimestampSeconds, 100.0);
+	ReplayRuntime.Stop();
+
+	if (IConsoleVariable* ReplayStartOffset = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.TrackingFusionDatasetReplayStartOffsetSeconds")))
+	{
+		const FString PreviousStartOffset = ReplayStartOffset->GetString();
+		ReplayStartOffset->Set(1.0f, ECVF_SetByConsole);
+		ReplayRuntime.Start(200.0);
+		TestTrue(TEXT("Replay returns offset observations"), ReplayRuntime.GetCurrentObservations(200.0, Observations, &PhaseName));
+		TestEqual(TEXT("Replay start offset seeks to the later sample"), PhaseName, FString(TEXT("replay_late")));
+		TestTrue(TEXT("Replay status records start offset"),
+			FMath::IsNearlyEqual(ReplayRuntime.GetStatus().StartOffsetSeconds, 1.0, 0.001));
+		ReplayRuntime.Stop();
+		ReplayStartOffset->Set(*PreviousStartOffset, ECVF_SetByConsole);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeAvatarCalibrationProfileForbiddenAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.AvatarCalibrationProfileRejectsUserBodyShape",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeAvatarCalibrationProfileForbiddenAutomationTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FJsonObject> ProfileObject = MakeShared<FJsonObject>();
+	ProfileObject->SetStringField(TEXT("mode"), TEXT("avatar_locked_proteus"));
+	TSharedPtr<FJsonObject> SourceAlignment = MakeShared<FJsonObject>();
+	SourceAlignment->SetNumberField(TEXT("user_height_cm"), 188.0);
+	SourceAlignment->SetNumberField(TEXT("avatar_scale"), 1.1);
+	ProfileObject->SetObjectField(TEXT("source_alignment"), SourceAlignment);
+
+	FMediaPipeAvatarEmbodimentProfile EmbodimentProfile;
+	const float OriginalHeadToChestCm = EmbodimentProfile.ExpectedHeadToChestCm;
+	FMediaPipeAvatarCalibrationProfileMergeResult Result;
+	TestFalse(
+		TEXT("Profile containing user body-shape fields is rejected"),
+		ApplyMediaPipeAvatarCalibrationProfileObject(ProfileObject, EmbodimentProfile, Result));
+	TestTrue(TEXT("Rejected result is marked rejected"), Result.bRejected);
+	TestTrue(TEXT("Forbidden user-height field is reported"), Result.RejectedFields.Contains(TEXT("source_alignment.user_height_cm")));
+	TestTrue(TEXT("Forbidden avatar-scale field is reported"), Result.RejectedFields.Contains(TEXT("source_alignment.avatar_scale")));
+	TestFalse(TEXT("Rejected profile is not applied"), EmbodimentProfile.bHasAvatarLockedCalibrationProfile);
+	TestEqual(TEXT("MetaHuman/avatar proportions remain untouched after rejection"), EmbodimentProfile.ExpectedHeadToChestCm, OriginalHeadToChestCm);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetFixedScheduleAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetFixedSchedule",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetFixedScheduleAutomationTest::RunTest(const FString& Parameters)
+{
+	const double IntervalSeconds = 1.0 / 30.0;
+	int32 NextSampleIndex = 0;
+	double ScheduledElapsedSeconds = -1.0;
+	int32 MissedSamples = -1;
+
+	TestTrue(
+		TEXT("First sample is accepted"),
+		FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+			0.001,
+			IntervalSeconds,
+			NextSampleIndex,
+			ScheduledElapsedSeconds,
+			MissedSamples));
+	TestEqual(TEXT("First sample advances schedule"), NextSampleIndex, 1);
+	TestEqual(TEXT("First sample has no missed schedule entries"), MissedSamples, 0);
+
+	TestFalse(
+		TEXT("Early tick before next fixed slot is skipped"),
+		FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+			0.010,
+			IntervalSeconds,
+			NextSampleIndex,
+			ScheduledElapsedSeconds,
+			MissedSamples));
+	TestEqual(TEXT("Skipped early tick preserves next schedule index"), NextSampleIndex, 1);
+
+	TestTrue(
+		TEXT("Near-boundary tick is accepted instead of drifting the schedule"),
+		FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+			IntervalSeconds - 0.001,
+			IntervalSeconds,
+			NextSampleIndex,
+			ScheduledElapsedSeconds,
+			MissedSamples));
+	TestEqual(TEXT("Near-boundary sample advances to the following fixed slot"), NextSampleIndex, 2);
+	TestEqual(TEXT("Near-boundary sample reports scheduled time"), ScheduledElapsedSeconds, IntervalSeconds);
+
+	TestTrue(
+		TEXT("Late tick records the latest due slot and counts missed entries"),
+		FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+			(5.0 * IntervalSeconds) + 0.001,
+			IntervalSeconds,
+			NextSampleIndex,
+			ScheduledElapsedSeconds,
+			MissedSamples));
+	TestEqual(TEXT("Late tick records the fifth fixed slot"), ScheduledElapsedSeconds, 5.0 * IntervalSeconds);
+	TestEqual(TEXT("Late tick reports missed schedule entries"), MissedSamples, 3);
+	TestEqual(TEXT("Late tick advances beyond the recorded slot"), NextSampleIndex, 6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetAllBoneHotPathStressAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetAllBoneHotPathStress",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetAllBoneHotPathStressAutomationTest::RunTest(const FString& Parameters)
+{
+	constexpr int32 RecordedBoneCount = 342;
+	constexpr int32 FloatsPerBone = 33;
+	constexpr double SampleRateHz = 30.0;
+	constexpr double DurationSeconds = 30.0;
+	const double IntervalSeconds = 1.0 / SampleRateHz;
+	const int32 ExpectedSamples = FMath::FloorToInt(DurationSeconds * SampleRateHz) + 1;
+	const int32 FloatsPerSample = RecordedBoneCount * FloatsPerBone;
+
+	TArray<float> FlatBoneBuffer;
+	FlatBoneBuffer.Reserve(ExpectedSamples * FloatsPerSample);
+
+	int32 NextSampleIndex = 0;
+	int32 AcceptedSamples = 0;
+	int32 MissedSamplesTotal = 0;
+	int32 SkippedTicks = 0;
+	double ScheduledElapsedSeconds = 0.0;
+	int32 MissedSamplesThisTick = 0;
+
+	const double StartSeconds = FPlatformTime::Seconds();
+	for (int32 TickIndex = 0; TickIndex <= FMath::CeilToInt(DurationSeconds * 90.0); ++TickIndex)
+	{
+		const double ElapsedSeconds = static_cast<double>(TickIndex) / 90.0;
+		if (!FMediaPipeTrackingFusionDataset::ComputeFixedRateSampleSchedule(
+			ElapsedSeconds,
+			IntervalSeconds,
+			NextSampleIndex,
+			ScheduledElapsedSeconds,
+			MissedSamplesThisTick))
+		{
+			++SkippedTicks;
+			continue;
+		}
+
+		MissedSamplesTotal += MissedSamplesThisTick;
+		const int32 BaseIndex = FlatBoneBuffer.AddUninitialized(FloatsPerSample);
+		for (int32 FloatIndex = 0; FloatIndex < FloatsPerSample; ++FloatIndex)
+		{
+			FlatBoneBuffer[BaseIndex + FloatIndex] =
+				static_cast<float>((AcceptedSamples % 251) * 0.01 + (FloatIndex % FloatsPerBone) * 0.001);
+		}
+		++AcceptedSamples;
+	}
+	const double WallSeconds = FMath::Max(0.0, FPlatformTime::Seconds() - StartSeconds);
+
+	TestEqual(TEXT("30-second 30 Hz all-bone stress accepts every scheduled sample"), AcceptedSamples, ExpectedSamples);
+	TestEqual(TEXT("30-second 30 Hz all-bone stress has no scheduler misses"), MissedSamplesTotal, 0);
+	TestEqual(TEXT("All-bone flat buffer preserves every 342-bone sample"), FlatBoneBuffer.Num(), ExpectedSamples * FloatsPerSample);
+	TestTrue(TEXT("All-bone flat-buffer stress remains below realtime budget"), WallSeconds < DurationSeconds);
+	TestTrue(TEXT("90 Hz tick simulation skips non-sample ticks without backlog"), SkippedTicks > AcceptedSamples);
+	AddInfo(FString::Printf(
+		TEXT("TrackingFusionDatasetAllBoneHotPathStress accepted=%d expected=%d skippedTicks=%d missed=%d recordedBones=%d floats=%d wallSeconds=%.6f"),
+		AcceptedSamples,
+		ExpectedSamples,
+		SkippedTicks,
+		MissedSamplesTotal,
+		RecordedBoneCount,
+		FlatBoneBuffer.Num(),
+		WallSeconds));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetNoArmFallbackAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetNoArmFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetNoArmFallbackAutomationTest::RunTest(const FString& Parameters)
+{
+	TArray<TPair<IConsoleVariable*, FString>> Snapshots;
+	for (const FString& Name : FMediaPipeTrackingFusionDataset::GetArmFallbackCVarNames())
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(*Name))
+		{
+			Snapshots.Emplace(Variable, Variable->GetString());
+			Variable->Set(1, ECVF_SetByConsole);
+		}
+	}
+
+	FMediaPipeTrackingFusionDataset::DisableArmFallbackCVarsForCapture();
+	TestTrue(TEXT("Tracking-fusion dataset disables all arm fallback CVars"), FMediaPipeTrackingFusionDataset::AreArmFallbackCVarsDisabled());
+
+	for (const TPair<IConsoleVariable*, FString>& Snapshot : Snapshots)
+	{
+		if (Snapshot.Key)
+		{
+			Snapshot.Key->Set(*Snapshot.Value, ECVF_SetByConsole);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingFusionDatasetSuppressesDiagnosticLogsAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.TrackingFusionDatasetSuppressesDiagnosticLogs",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingFusionDatasetSuppressesDiagnosticLogsAutomationTest::RunTest(const FString& Parameters)
+{
+	TArray<TPair<IConsoleVariable*, FString>> Snapshots;
+	for (const FString& Name : FMediaPipeTrackingFusionDataset::GetHighVolumeDiagnosticLogCVarNames())
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(*Name))
+		{
+			Snapshots.Emplace(Variable, Variable->GetString());
+			Variable->Set(1, ECVF_SetByConsole);
+		}
+	}
+
+	FMediaPipeTrackingFusionDataset::SuppressHighVolumeDiagnosticLogCVarsForCapture();
+	TestTrue(
+		TEXT("Tracking-fusion dataset suppresses high-volume live diagnostic logs"),
+		FMediaPipeTrackingFusionDataset::AreHighVolumeDiagnosticLogCVarsSuppressed());
+
+	for (const TPair<IConsoleVariable*, FString>& Snapshot : Snapshots)
+	{
+		if (Snapshot.Key)
+		{
+			Snapshot.Key->Set(*Snapshot.Value, ECVF_SetByConsole);
+		}
+	}
 	return true;
 }
 }
@@ -1144,8 +2289,16 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend CVar is registered"), BodyFusionStage2ShoulderClavicleHintBlend);
 	if (BodyFusionStage2ShoulderClavicleHintBlend)
 	{
-		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend default"), 0.20f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend default"), 1.0f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
 		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle hint blend header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleHintBlend.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderClavicleResponseScale = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder/clavicle response scale CVar is registered"), BodyFusionStage2ShoulderClavicleResponseScale);
+	if (BodyFusionStage2ShoulderClavicleResponseScale)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle response scale default"), 1.0f, BodyFusionStage2ShoulderClavicleResponseScale->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder/clavicle response scale header handle matches registry value"), CVarBodyFusionStage2ShoulderClavicleResponseScale.GetValueOnAnyThread(), BodyFusionStage2ShoulderClavicleResponseScale->GetFloat());
 	}
 
 	IConsoleVariable* BodyFusionStage2ShoulderClavicleMaxLiftCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"));
@@ -1170,6 +2323,38 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("BodyFusion Stage 2 shoulder contradiction default"), 20.0f, BodyFusionStage2ShoulderContradictionCm->GetFloat());
 		TestEqual(TEXT("BodyFusion Stage 2 shoulder contradiction header handle matches registry value"), CVarBodyFusionStage2ShoulderContradictionCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderContradictionCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderArmRaiseFadeStartCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder arm-raise fade start CVar is registered"), BodyFusionStage2ShoulderArmRaiseFadeStartCm);
+	if (BodyFusionStage2ShoulderArmRaiseFadeStartCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder arm-raise fade start default"), 35.0f, BodyFusionStage2ShoulderArmRaiseFadeStartCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder arm-raise fade start header handle matches registry value"), CVarBodyFusionStage2ShoulderArmRaiseFadeStartCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderArmRaiseFadeStartCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderArmRaiseFadeFullCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder arm-raise fade full CVar is registered"), BodyFusionStage2ShoulderArmRaiseFadeFullCm);
+	if (BodyFusionStage2ShoulderArmRaiseFadeFullCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder arm-raise fade full default"), 50.0f, BodyFusionStage2ShoulderArmRaiseFadeFullCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder arm-raise fade full header handle matches registry value"), CVarBodyFusionStage2ShoulderArmRaiseFadeFullCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderArmRaiseFadeFullCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderShrugStartCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderShrugStartCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder shrug start CVar is registered"), BodyFusionStage2ShoulderShrugStartCm);
+	if (BodyFusionStage2ShoulderShrugStartCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder shrug start default"), 2.0f, BodyFusionStage2ShoulderShrugStartCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder shrug start header handle matches registry value"), CVarBodyFusionStage2ShoulderShrugStartCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderShrugStartCm->GetFloat());
+	}
+
+	IConsoleVariable* BodyFusionStage2ShoulderShrugFullCm = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.Stage2ShoulderShrugFullCm"));
+	TestNotNull(TEXT("BodyFusion Stage 2 shoulder shrug full CVar is registered"), BodyFusionStage2ShoulderShrugFullCm);
+	if (BodyFusionStage2ShoulderShrugFullCm)
+	{
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder shrug full default"), 8.0f, BodyFusionStage2ShoulderShrugFullCm->GetFloat());
+		TestEqual(TEXT("BodyFusion Stage 2 shoulder shrug full header handle matches registry value"), CVarBodyFusionStage2ShoulderShrugFullCm.GetValueOnAnyThread(), BodyFusionStage2ShoulderShrugFullCm->GetFloat());
 	}
 
 	IConsoleVariable* BodyFusionCalibrationStableFrames = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.BodyFusion.CalibrationStableFrames"));
@@ -1265,9 +2450,14 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife"),
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"),
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"),
+		TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"),
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"),
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"),
 		TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"),
+		TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm"),
+		TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm"),
+		TEXT("mp.BodyFusion.Stage2ShoulderShrugStartCm"),
+		TEXT("mp.BodyFusion.Stage2ShoulderShrugFullCm"),
 		TEXT("mp.QuestArmDropoutDownFallback"),
 		TEXT("mp.QuestConstrainedArmBodyFallback"),
 		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
@@ -1388,7 +2578,7 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		}
 
 		const bool bStage2Processed = IConsoleManager::Get().ProcessUserConsoleInput(
-			TEXT("mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=automation_stage2_cvar_test stage1=1 stage2=1 analyze=0 blend=0.5 halfLife=0.04 stage2Blend=0.2 stage2MaxLiftCm=4.5 stage2HalfLife=0.05"),
+			TEXT("mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=45 prediction=1 maxPredictionMs=50 label=automation_stage2_cvar_test stage1=1 stage2=1 analyze=0 blend=0.5 halfLife=0.04 stage2Blend=1.0 stage2Scale=1.0 stage2MaxLiftCm=4.5 stage2HalfLife=0.05 stage2ArmRaiseFadeStartCm=36 stage2ArmRaiseFadeFullCm=51 stage2ShrugStartCm=2.5 stage2ShrugFullCm=9.5"),
 			OutputDevice,
 			nullptr);
 		TestTrue(TEXT("MPQ shadow-fusion latency trial accepts Stage 2 shoulder/clavicle options"), bStage2Processed);
@@ -1402,7 +2592,11 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		}
 		if (BodyFusionStage2ShoulderClavicleHintBlend)
 		{
-			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested blend"), 0.2f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested blend"), 1.0f, BodyFusionStage2ShoulderClavicleHintBlend->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderClavicleResponseScale)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested response scale"), 1.0f, BodyFusionStage2ShoulderClavicleResponseScale->GetFloat());
 		}
 		if (BodyFusionStage2ShoulderClavicleMaxLiftCm)
 		{
@@ -1411,6 +2605,22 @@ bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
 		if (BodyFusionStage2ShoulderClavicleHalfLife)
 		{
 			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested half-life"), 0.05f, BodyFusionStage2ShoulderClavicleHalfLife->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderArmRaiseFadeStartCm)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested arm-raise fade start"), 36.0f, BodyFusionStage2ShoulderArmRaiseFadeStartCm->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderArmRaiseFadeFullCm)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested arm-raise fade full"), 51.0f, BodyFusionStage2ShoulderArmRaiseFadeFullCm->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderShrugStartCm)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested shrug start"), 2.5f, BodyFusionStage2ShoulderShrugStartCm->GetFloat());
+		}
+		if (BodyFusionStage2ShoulderShrugFullCm)
+		{
+			TestEqual(TEXT("Prepared Stage 2 MPQ trial stores requested shrug full"), 9.5f, BodyFusionStage2ShoulderShrugFullCm->GetFloat());
 		}
 	}
 	RestoreConsoleSnapshots();

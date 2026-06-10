@@ -11,6 +11,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveLegs;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeUseArmIK;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeUseLegIK;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeUseLegIKFootPlant;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeUseFkRootGrounding;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveHandRotation;
 	extern TAutoConsoleVariable<int32> CVarQuestHandTracking;
@@ -21,6 +22,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<int32> CVarBodyFusionDebug;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionWritePose;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionMediaPipeAuthority;
+	extern TAutoConsoleVariable<int32> CVarBodyFusionFullBodyMediaPipeAuthority;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionStage1TorsoPelvisHint;
 	extern TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintBlend;
 	extern TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisMaxVerticalCm;
@@ -31,6 +33,10 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleMaxLiftCm;
 	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHalfLifeSeconds;
 	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderContradictionCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderArmRaiseFadeStartCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderArmRaiseFadeFullCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderShrugStartCm;
+	extern TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderShrugFullCm;
 	extern TAutoConsoleVariable<int32> CVarBodyFusionCalibrationStableFrames;
 	extern TAutoConsoleVariable<float> CVarBodyFusionCalibrationHoldSeconds;
 	extern TAutoConsoleVariable<int32> CVarQuestWristRelativeCalibration;
@@ -76,6 +82,8 @@ namespace MediaPipeRuntimeCVars
 	extern FAutoConsoleVariableRef CVarMetaHumanActiveProfile;
 	extern FString GMetaHumanProfileAssetPaths;
 	extern FAutoConsoleVariableRef CVarMetaHumanProfileAssetPaths;
+	extern FString GAvatarCalibrationProfilePath;
+	extern FAutoConsoleVariableRef CVarAvatarCalibrationProfilePath;
 	extern TAutoConsoleVariable<int32> CVarMetaHumanArmSource;
 	extern TAutoConsoleVariable<int32> CVarMetaHumanFullArmChainTrace;
 	extern TAutoConsoleVariable<float> CVarMetaHumanFullArmChainTraceLogIntervalSeconds;
@@ -216,6 +224,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMetaHumanArmSanityMinElbowBendDeg;
 	extern TAutoConsoleVariable<float> CVarMetaHumanArmSanityMaxSwingDeg;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeLegUseBasisRoll;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeLegSolveDebugOnce;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeFootForwardHysteresis;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveFootRotation;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeFootPlanarWhenGrounded;

@@ -43,19 +43,21 @@ FMediaPipeBodyFusionAuthority FMediaPipeBodyFusionAuthority::DefaultHybrid()
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::Chest, EMediaPipeBodyFusionOwner::Fused);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::Spine, EMediaPipeBodyFusionOwner::Fused);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::Pelvis, EMediaPipeBodyFusionOwner::MediaPipe);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftShoulder, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftElbow, EMediaPipeBodyFusionOwner::Quest);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftShoulder, EMediaPipeBodyFusionOwner::MediaPipe);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftElbow, EMediaPipeBodyFusionOwner::Fused);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftWrist, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightShoulder, EMediaPipeBodyFusionOwner::Quest);
-	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightElbow, EMediaPipeBodyFusionOwner::Quest);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightShoulder, EMediaPipeBodyFusionOwner::MediaPipe);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightElbow, EMediaPipeBodyFusionOwner::Fused);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightWrist, EMediaPipeBodyFusionOwner::Quest);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHip, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftKnee, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftAnkle, EMediaPipeBodyFusionOwner::MediaPipe);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHeel, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftFoot, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHip, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightKnee, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightAnkle, EMediaPipeBodyFusionOwner::MediaPipe);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHeel, EMediaPipeBodyFusionOwner::MediaPipe);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightFoot, EMediaPipeBodyFusionOwner::MediaPipe);
 	return Authority;
 }
@@ -67,10 +69,12 @@ FMediaPipeBodyFusionAuthority FMediaPipeBodyFusionAuthority::DefaultEmbodiedUppe
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHip, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftKnee, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftAnkle, EMediaPipeBodyFusionOwner::AvatarProfile);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftHeel, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::LeftFoot, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHip, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightKnee, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightAnkle, EMediaPipeBodyFusionOwner::AvatarProfile);
+	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightHeel, EMediaPipeBodyFusionOwner::AvatarProfile);
 	Authority.SetOwner(EMediaPipeBodyFusionRegion::RightFoot, EMediaPipeBodyFusionOwner::AvatarProfile);
 	return Authority;
 }
@@ -110,13 +114,10 @@ EMediaPipeBodyFusionOwner FMediaPipeBodyFusionAuthority::ResolveUpperLimbOwner(
 	const FMediaPipeBodyFusionSourceStatus& QuestStatus,
 	const FMediaPipeBodyFusionSourceStatus& MediaPipeStatus)
 {
+	(void)MediaPipeStatus;
 	if (QuestStatus.IsFresh())
 	{
 		return EMediaPipeBodyFusionOwner::Quest;
-	}
-	if (MediaPipeStatus.IsFresh())
-	{
-		return EMediaPipeBodyFusionOwner::MediaPipe;
 	}
 	return EMediaPipeBodyFusionOwner::None;
 }
@@ -175,6 +176,9 @@ FMediaPipeBodyFusionAuthorityGateDecision FMediaPipeBodyFusionAuthorityPolicy::R
 	Decision.Reason = Input.MediaPipeAuthorityMode >= 2
 		? TEXT("legacy calibrated fresh")
 		: TEXT("stable calibrated fresh");
+	Decision.Authority = Input.bAllowFullBodyMediaPipeAuthority
+		? FMediaPipeBodyFusionAuthority::DefaultHybrid()
+		: FMediaPipeBodyFusionAuthority::DefaultEmbodiedHipsOnly();
 	Decision.bAllowMediaPipePoseAuthority = 1;
 	return Decision;
 }

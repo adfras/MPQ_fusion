@@ -9,33 +9,43 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	FVector HipWorld = FVector::ZeroVector;
 	FVector KneeWorld = FVector::ZeroVector;
 	FVector AnkleWorld = FVector::ZeroVector;
+	FVector HeelWorld = FVector::ZeroVector;
 	FVector ToeWorld = FVector::ZeroVector;
+	bool bHeelMeasured = false;
 	bool bFootMeasured = false;
-	const bool bUseBodyFusionLowerBody = bDriveLegs && ShouldUseBodyFusionPoseForEvaluation();
+	const bool bAvatarLockedMetaHumanReplay = ShouldUseAvatarLockedMetaHumanReplay();
+	const bool bBodyFusionPoseUsableForEvaluation = ShouldUseBodyFusionPoseForEvaluation();
+	const bool bUseBodyFusionLowerBody =
+		bDriveLegs &&
+		bBodyFusionPoseUsableForEvaluation &&
+		!bAvatarLockedMetaHumanReplay;
 	if (!bDriveLegs)
 	{
 		return;
 	}
 
-	if (bUseBodyFusionLowerBody)
+	FMediaPipeFusedLowerBodySide FusedLowerBodySide;
+	const bool bTryGetMediaPipeLowerBodySideSucceeded =
+		bBodyFusionPoseUsableForEvaluation &&
+		FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(BodyFusionFrame.Pose, bIsLeft, FusedLowerBodySide);
+	bool bUsingBodyFusionLowerBody = false;
+	if (bUseBodyFusionLowerBody && bTryGetMediaPipeLowerBodySideSucceeded)
 	{
-		FMediaPipeFusedLowerBodySide FusedLowerBodySide;
-		if (!FMediaPipeAvatarPoseWriter::TryGetMediaPipeLowerBodySide(BodyFusionFrame.Pose, bIsLeft, FusedLowerBodySide))
-		{
-			return;
-		}
-
 		HipWorld = FusedLowerBodySide.HipWorld;
 		KneeWorld = FusedLowerBodySide.KneeWorld;
 		AnkleWorld = FusedLowerBodySide.AnkleWorld;
+		HeelWorld = FusedLowerBodySide.HeelWorld;
 		ToeWorld = FusedLowerBodySide.FootWorld;
+		bHeelMeasured = FusedLowerBodySide.bHasHeel;
 		bFootMeasured = FusedLowerBodySide.bHasFoot;
+		bUsingBodyFusionLowerBody = true;
 	}
-	else
+	if (!bUsingBodyFusionLowerBody)
 	{
 		const int32 HipLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftHip : (int32)EMediaPipePoseLandmark::RightHip;
 		const int32 KneeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftKnee : (int32)EMediaPipePoseLandmark::RightKnee;
 		const int32 AnkleLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftAnkle : (int32)EMediaPipePoseLandmark::RightAnkle;
+		const int32 HeelLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftHeel : (int32)EMediaPipePoseLandmark::RightHeel;
 		const int32 ToeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftFootIndex : (int32)EMediaPipePoseLandmark::RightFootIndex;
 
 		const bool bThighMeasured = IsMeasured(HipLm) && IsMeasured(KneeLm);
@@ -61,6 +71,11 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		{
 			ToeWorld = AnkleWorld;
 		}
+		bHeelMeasured = IsMeasured(HeelLm) && TryGetLmWorld(HeelLm, HeelWorld);
+	}
+	if (!bHeelMeasured)
+	{
+		HeelWorld = AnkleWorld;
 	}
 
 	FVector LegHipRightWorld = FVector::RightVector;
@@ -68,7 +83,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	FVector LegUpWorld = FVector::UpVector;
 	FVector LegForwardWorld = FVector::ForwardVector;
 	bool bHasLegTorsoBasis = false;
-	if (bUseBodyFusionLowerBody)
+	if (bUsingBodyFusionLowerBody)
 	{
 		if (BodyFusionFrame.Pose.LeftHip.bValid && BodyFusionFrame.Pose.RightHip.bValid)
 		{
@@ -133,7 +148,11 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 
 	const FVector DesiredThighWorld = (KneeWorld - HipWorld).GetSafeNormal();
 	const FVector DesiredCalfWorld = (AnkleWorld - KneeWorld).GetSafeNormal();
-	const FVector RawDesiredFootWorld = bCanDriveFoot ? (ToeWorld - AnkleWorld).GetSafeNormal() : FVector::ZeroVector;
+	const FVector RawDesiredFootWorld = bCanDriveFoot
+		? (bHeelMeasured && !(ToeWorld - HeelWorld).IsNearlyZero()
+			? (ToeWorld - HeelWorld).GetSafeNormal()
+			: (ToeWorld - AnkleWorld).GetSafeNormal())
+		: FVector::ZeroVector;
 	const FVector DesiredFootWorld = bCanDriveFoot ? SolveFootForwardWorld(RawDesiredFootWorld) : FVector::ZeroVector;
 
 	const FVector DesiredThighComp = TargetCompTransform.InverseTransformVectorNoScale(DesiredThighWorld).GetSafeNormal();
@@ -159,6 +178,9 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	const bool bHasRefLegBasis = bIsLeft ? bHasRefLegBasisL : bHasRefLegBasisR;
 	const FQuat& RefFootBasisComp = bIsLeft ? RefFootBasisCompL : RefFootBasisCompR;
 	const bool bHasRefFootBasis = bIsLeft ? bHasRefFootBasisL : bHasRefFootBasisR;
+	bool bApplyThighRotationCalled = false;
+	bool bApplyCalfRotationCalled = false;
+	bool bApplyFootRotationCalled = false;
 	bool& bHasSmoothedThighRotCS = bIsLeft ? LeftLegState.bHasSmoothedThighRotCS : RightLegState.bHasSmoothedThighRotCS;
 	FQuat& SmoothedThighRotCS = bIsLeft ? LeftLegState.SmoothedThighRotCS : RightLegState.SmoothedThighRotCS;
 	bool& bHasSmoothedCalfRotCS = bIsLeft ? LeftLegState.bHasSmoothedCalfRotCS : RightLegState.bHasSmoothedCalfRotCS;
@@ -169,6 +191,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	FVector& SmoothedLegPlaneComp = bIsLeft ? LeftLegState.SmoothedLegPlaneComp : RightLegState.SmoothedLegPlaneComp;
 	bool& bHasPrevFootSample = bIsLeft ? LeftLegState.bHasPrevFootSample : RightLegState.bHasPrevFootSample;
 	FVector& PrevAnkleWorld = bIsLeft ? LeftLegState.PrevAnkleWorld : RightLegState.PrevAnkleWorld;
+	FVector& PrevHeelWorld = bIsLeft ? LeftLegState.PrevHeelWorld : RightLegState.PrevHeelWorld;
 	FVector& PrevToeWorld = bIsLeft ? LeftLegState.PrevToeWorld : RightLegState.PrevToeWorld;
 	bool& bFootPlantLocked = bIsLeft ? LeftLegState.bFootPlantLocked : RightLegState.bFootPlantLocked;
 	int32& FootPlantCandidateFrames = bIsLeft ? LeftLegState.FootPlantCandidateFrames : RightLegState.FootPlantCandidateFrames;
@@ -182,22 +205,32 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	const bool bHadPrevFootSample = bHasPrevFootSample;
 	const float SampleDt = FMath::Max(DeltaSeconds, 1.0f / 120.0f);
 	const FVector AnkleVelWorld = bHadPrevFootSample ? ((AnkleWorld - PrevAnkleWorld) / SampleDt) : FVector::ZeroVector;
+	const FVector HeelVelWorld = bHadPrevFootSample ? ((HeelWorld - PrevHeelWorld) / SampleDt) : FVector::ZeroVector;
 	const FVector ToeVelWorld = bHadPrevFootSample ? ((ToeWorld - PrevToeWorld) / SampleDt) : FVector::ZeroVector;
 	const float FootPlanarSpeedCmPerSecond = bHadPrevFootSample
-		? FMath::Max(FVector2D(AnkleVelWorld.X, AnkleVelWorld.Y).Size(), FVector2D(ToeVelWorld.X, ToeVelWorld.Y).Size())
+		? FMath::Max(
+			FMath::Max(
+				FVector2D(AnkleVelWorld.X, AnkleVelWorld.Y).Size(),
+				FVector2D(HeelVelWorld.X, HeelVelWorld.Y).Size()),
+			FVector2D(ToeVelWorld.X, ToeVelWorld.Y).Size())
 		: 0.0f;
 	const float FootVerticalSpeedCmPerSecond = bHadPrevFootSample
-		? FMath::Max(FMath::Abs(AnkleVelWorld.Z), FMath::Abs(ToeVelWorld.Z))
+		? FMath::Max(FMath::Max(FMath::Abs(AnkleVelWorld.Z), FMath::Abs(HeelVelWorld.Z)), FMath::Abs(ToeVelWorld.Z))
 		: 0.0f;
 	const float FootUpwardSpeedCmPerSecond = bHadPrevFootSample
-		? FMath::Max(FMath::Max(AnkleVelWorld.Z, 0.0f), FMath::Max(ToeVelWorld.Z, 0.0f))
+		? FMath::Max(
+			FMath::Max(FMath::Max(AnkleVelWorld.Z, 0.0f), FMath::Max(HeelVelWorld.Z, 0.0f)),
+			FMath::Max(ToeVelWorld.Z, 0.0f))
 		: 0.0f;
 
 	PrevAnkleWorld = AnkleWorld;
+	PrevHeelWorld = HeelWorld;
 	PrevToeWorld = ToeWorld;
 	bHasPrevFootSample = true;
 
-	const float SampleFootFloorZ = FMath::Min(AnkleWorld.Z, ToeWorld.Z);
+	const float SampleFootFloorZ = bHeelMeasured
+		? FMath::Min(FMath::Min(AnkleWorld.Z, HeelWorld.Z), ToeWorld.Z)
+		: FMath::Min(AnkleWorld.Z, ToeWorld.Z);
 	if (!bHasObservedSourceFloor)
 	{
 		ObservedSourceFloorZ = SampleFootFloorZ;
@@ -218,7 +251,10 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	const bool bFootShouldStayPlanted =
 		bNearObservedFloorForRelease &&
 		(FootUpwardSpeedCmPerSecond <= FootPlantLiftSpeedThresholdCmPerSecond);
-	const bool bAcquireGrounded = bHadPrevFootSample && bNearObservedFloorForAcquire && bFootMotionGroundLike;
+	const bool bAcquireGrounded =
+		bHadPrevFootSample &&
+		bNearObservedFloorForAcquire &&
+		bFootMotionGroundLike;
 	bCurrentSourceFootGrounded = bAcquireGrounded || (bFootPlantLocked && bFootShouldStayPlanted);
 
 	FVector FootForwardForRotationWorld = DesiredFootWorld;
@@ -286,6 +322,22 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		? TargetCompTransform.InverseTransformVectorNoScale(FootForwardForRotationWorld).GetSafeNormal()
 		: FVector::ZeroVector;
 
+	auto MarkAppliedLegBone = [&](const FBoneReference& Bone)
+	{
+		if (Bone.BoneName == ThighBone.BoneName)
+		{
+			bApplyThighRotationCalled = true;
+		}
+		else if (Bone.BoneName == CalfBone.BoneName)
+		{
+			bApplyCalfRotationCalled = true;
+		}
+		else if (Bone.BoneName == FootBone.BoneName)
+		{
+			bApplyFootRotationCalled = true;
+		}
+	};
+
 	auto ApplyDirOnly = [&](const FVector& RefDir, const FVector& TargetDir, const FQuat& RefRot, bool& bHasSmoothed, FQuat& SmoothedRot, const FBoneReference& Bone, float Alpha)
 	{
 		if (RefDir.IsNearlyZero() || TargetDir.IsNearlyZero() || !Bone.IsValidToEvaluate())
@@ -295,6 +347,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		const FQuat TargetRotCS = (FQuat::FindBetweenNormals(RefDir, TargetDir) * RefRot).GetNormalized();
 		UpdateSmoothedRotation(bHasSmoothed, SmoothedRot, TargetRotCS, Alpha);
 		ApplyRotationCS(CSPose, Bone, SmoothedRot);
+		MarkAppliedLegBone(Bone);
 	};
 
 	const FVector LegOutwardComp = TargetCompTransform.InverseTransformVectorNoScale(OutwardWorldSeed).GetSafeNormal();
@@ -330,6 +383,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 
 		UpdateSmoothedRotation(bHasSmoothed, SmoothedRot, TargetRotCS, Alpha);
 		ApplyRotationCS(CSPose, Bone, SmoothedRot);
+		MarkAppliedLegBone(Bone);
 	};
 
 	auto ApplyFootBasis = [&](const float Alpha)
@@ -363,13 +417,72 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			const FQuat TargetFootRotCS = ((TargetFootBasisComp * RefFootBasisComp.Inverse()) * RefFootComp).GetNormalized();
 			UpdateSmoothedRotation(bHasSmoothedFootRotCS, SmoothedFootRotCS, TargetFootRotCS, Alpha);
 			ApplyRotationCS(CSPose, FootBone, SmoothedFootRotCS);
+			MarkAppliedLegBone(FootBone);
 			return;
 		}
 
 		ApplyDirOnly(RefFootDir, FootForwardForRotationComp, RefFootComp, bHasSmoothedFootRotCS, SmoothedFootRotCS, FootBone, Alpha);
 	};
 
+	const bool bDriveFootRotationForSide =
+		CVarMediaPipeDriveFootRotation.GetValueOnAnyThread() != 0;
 	const bool bDoLegIK = bDrivePelvisTranslation && bUseLegIK;
+	const bool bAllowFootPlantLock = bDoLegIK && bUseLegIKFootPlant;
+	auto EmitLegSolveDebugIfRequested = [&](const TCHAR* SolvePath)
+	{
+		static std::atomic<int32> LastRequestedLogCount{0};
+		static std::atomic<int32> RemainingLogCount{0};
+
+		const int32 RequestedLogCount = FMath::Max(0, CVarMediaPipeLegSolveDebugOnce.GetValueOnAnyThread());
+		int32 LastObservedLogCount = LastRequestedLogCount.load(std::memory_order_relaxed);
+		if (RequestedLogCount != LastObservedLogCount &&
+			LastRequestedLogCount.compare_exchange_strong(LastObservedLogCount, RequestedLogCount, std::memory_order_relaxed))
+		{
+			RemainingLogCount.store(RequestedLogCount, std::memory_order_relaxed);
+		}
+
+		int32 RemainingLogs = RemainingLogCount.load(std::memory_order_relaxed);
+		bool bShouldLog = false;
+		while (RemainingLogs > 0)
+		{
+			if (RemainingLogCount.compare_exchange_weak(RemainingLogs, RemainingLogs - 1, std::memory_order_relaxed))
+			{
+				bShouldLog = true;
+				break;
+			}
+		}
+		if (!bShouldLog)
+		{
+			return;
+		}
+
+		UE_LOG(LogMediaPipePose, Warning,
+			TEXT("mp.MediaPipeLegSolve.Debug actor=%s side=%s path=%s bDriveLegs=%d bHasRefLegL=%d bHasRefLegR=%d avatarLockedReplay=%d bodyFusionPoseUsable=%d bUseBodyFusionLowerBody=%d bUsingBodyFusionLowerBody=%d tryGetMediaPipeLowerBodySide=%d hip=%s knee=%s ankle=%s heel=%s toe=%s desiredThigh=%s desiredCalf=%s apply(thigh=%d calf=%d foot=%d) useLegIK=%d useFootPlant=%d driveFootRotation=%d"),
+			*TargetActorName.ToString(),
+			bIsLeft ? TEXT("L") : TEXT("R"),
+			SolvePath,
+			bDriveLegs ? 1 : 0,
+			bHasRefLegL ? 1 : 0,
+			bHasRefLegR ? 1 : 0,
+			bAvatarLockedMetaHumanReplay ? 1 : 0,
+			bBodyFusionPoseUsableForEvaluation ? 1 : 0,
+			bUseBodyFusionLowerBody ? 1 : 0,
+			bUsingBodyFusionLowerBody ? 1 : 0,
+			bTryGetMediaPipeLowerBodySideSucceeded ? 1 : 0,
+			*HipWorld.ToCompactString(),
+			*KneeWorld.ToCompactString(),
+			*AnkleWorld.ToCompactString(),
+			*HeelWorld.ToCompactString(),
+			*ToeWorld.ToCompactString(),
+			*DesiredThighWorld.ToCompactString(),
+			*DesiredCalfWorld.ToCompactString(),
+			bApplyThighRotationCalled ? 1 : 0,
+			bApplyCalfRotationCalled ? 1 : 0,
+			bApplyFootRotationCalled ? 1 : 0,
+			bDoLegIK ? 1 : 0,
+			bAllowFootPlantLock ? 1 : 0,
+			bDriveFootRotationForSide ? 1 : 0);
+	};
 	const float RefThighLen = bIsLeft ? RefThighLenCompL : RefThighLenCompR;
 	const float RefCalfLen = bIsLeft ? RefCalfLenCompL : RefCalfLenCompR;
 	if (bDoLegIK && RefThighLen > KINDA_SMALL_NUMBER && RefCalfLen > KINDA_SMALL_NUMBER)
@@ -381,7 +494,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 
 		const FVector HipPosComp = CSPose.GetComponentSpaceTransform(ThighBone.CachedCompactPoseIndex).GetTranslation();
 		FVector AnkleTargetComp = HipPosComp + TargetCompTransform.InverseTransformVectorNoScale(AnkleWorld - HipWorld);
-		if (bHasRefFootFloorZ)
+		if (bAllowFootPlantLock && bHasRefFootFloorZ)
 		{
 			const float RefAnkleHeightAboveFloorComp = RefAnklePosComp.Z - RefBallPosComp.Z;
 			const float PlantedAnkleZComp = RefFootFloorZComp + RefAnkleHeightAboveFloorComp;
@@ -573,19 +686,21 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 
 		ApplyLegRotation(RefThighDir, SolvedThighDir, RefThighComp, RefThighBasisComp, bHasSmoothedThighRotCS, SmoothedThighRotCS, ThighBone, RotAlpha);
 		ApplyLegRotation(RefCalfDir, SolvedCalfDir, RefCalfComp, RefCalfBasisComp, bHasSmoothedCalfRotCS, SmoothedCalfRotCS, CalfBone, RotAlpha);
-		if (bCanDriveFoot && CVarMediaPipeDriveFootRotation.GetValueOnAnyThread() != 0)
+		if (bCanDriveFoot && bDriveFootRotationForSide)
 		{
 			ApplyFootBasis(RotAlpha);
 		}
 
+		EmitLegSolveDebugIfRequested(TEXT("IK"));
 		return;
 	}
 
 	const float RotAlpha = HalfLifeToAlpha(LegIKRotationHalfLifeSeconds, DeltaSeconds);
 	ApplyLegRotation(RefThighDir, DesiredThighComp, RefThighComp, RefThighBasisComp, bHasSmoothedThighRotCS, SmoothedThighRotCS, ThighBone, RotAlpha);
 	ApplyLegRotation(RefCalfDir, DesiredCalfComp, RefCalfComp, RefCalfBasisComp, bHasSmoothedCalfRotCS, SmoothedCalfRotCS, CalfBone, RotAlpha);
-	if (bCanDriveFoot && CVarMediaPipeDriveFootRotation.GetValueOnAnyThread() != 0)
+	if (bCanDriveFoot && bDriveFootRotationForSide)
 	{
 		ApplyFootBasis(RotAlpha);
 	}
+	EmitLegSolveDebugIfRequested(TEXT("DirectSegment"));
 }

@@ -32,6 +32,11 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, use MediaPipe foot-plant leg IK. Default is off because cached retarget quality is better with direct segment legs."));
 
+	TAutoConsoleVariable<int32> CVarMediaPipeUseLegIKFootPlant(
+		TEXT("mp.MediaPipeUseLegIKFootPlant"),
+		1,
+		TEXT("When non-zero, MediaPipe leg IK may lock planted feet to the avatar reference floor. Disable for replay-output evaluation that must follow recorded foot lifts while preserving target leg lengths."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeUseFkRootGrounding(
 		TEXT("mp.MediaPipeUseFkRootGrounding"),
 		0,
@@ -82,10 +87,15 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("MediaPipe body authority mode. 0=trace-only/no pose authority, 1=allow only after stable calibration, 2=legacy allow when calibrated and fresh."));
 
+	TAutoConsoleVariable<int32> CVarBodyFusionFullBodyMediaPipeAuthority(
+		TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"),
+		0,
+		TEXT("When non-zero, calibrated/fresh MediaPipe body authority may own pelvis, hips, knees, ankles, and feet. This preserves avatar scale and segment lengths; it only exposes full-body targets to the fused pose writer."));
+
 	TAutoConsoleVariable<int32> CVarBodyFusionStage1TorsoPelvisHint(
 		TEXT("mp.BodyFusion.Stage1TorsoPelvisHint"),
 		0,
-		TEXT("When non-zero, enables the guarded Stage 1 MediaPipe vertical pelvis/torso hint path while keeping full BodyFusion pose writes, head, arms, wrists, hands, and fingers under their existing authorities."));
+		TEXT("Compatibility switch for historical Stage 1 torso/pelvis hint captures. The live MetaHuman path ignores this direct translation layer; BodyFusion pose writing owns torso movement."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage1TorsoPelvisHintBlend(
 		TEXT("mp.BodyFusion.Stage1TorsoPelvisHintBlend"),
@@ -105,32 +115,52 @@ namespace MediaPipeRuntimeCVars
 	TAutoConsoleVariable<int32> CVarBodyFusionStage2ShoulderClavicleHint(
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHint"),
 		0,
-		TEXT("When non-zero, enables guarded Stage 2A MediaPipe shoulder-lift hints that translate only visible clavicle bones. Head, arms, wrists, hands, fingers, and full arm IK endpoints remain under existing HMD/Quest authority."));
+		TEXT("When non-zero, records neutral-gated MediaPipe shoulder/shrug evidence for BodyFusion. This path must not directly translate MetaHuman clavicle/helper/arm bones outside the fused-pose writer."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHintBlend(
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHintBlend"),
-		0.20f,
-		TEXT("Blend fraction for Stage 2A positive shoulder/clavicle lift hints. Values are clamped to 0..1 at use time."));
+		1.0f,
+		TEXT("Compatibility field retained for Stage 2A evidence captures. Stage 2A no longer applies visible MetaHuman clavicle/helper/arm translations."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleResponseScale(
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleResponseScale"),
-		4.5f,
-		TEXT("Scales Stage 2A positive MediaPipe shoulder-lift response before clamping. This mirrors the proven Manny MediaPipe-only shoulder-lift response without giving MediaPipe arm, wrist, hand, or finger authority."));
+		1.0f,
+		TEXT("Scales recorded Stage 2A signed shoulder-lift evidence before diagnostic clamping. This value is not a visible MetaHuman bone-drive strength."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleMaxLiftCm(
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm"),
 		5.0f,
-		TEXT("Maximum positive clavicle lift, in centimeters, that Stage 2A may apply per side. Negative shoulder deltas are ignored."));
+		TEXT("Compatibility cap for recorded Stage 2 shoulder/shrug target diagnostics. The MPQ shadow path does not directly apply this as a MetaHuman bone translation."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderClavicleHalfLifeSeconds(
 		TEXT("mp.BodyFusion.Stage2ShoulderClavicleHalfLife"),
 		0.04f,
-		TEXT("Smoothing half-life in seconds for guarded Stage 2A clavicle lift hints. 0 disables smoothing."));
+		TEXT("Smoothing half-life in seconds for recorded Stage 2A shoulder evidence. 0 disables diagnostic smoothing."));
 
 	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderContradictionCm(
 		TEXT("mp.BodyFusion.Stage2ShoulderContradictionCm"),
 		20.0f,
 		TEXT("If a fresh Quest/full-arm shoulder chain differs from the calibrated MediaPipe shoulder by more than this many vertical centimeters, suppress that Stage 2A side. 0 disables this contradiction gate."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderArmRaiseFadeStartCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm"),
+		35.0f,
+		TEXT("Quest wrist or elbow height above the calibrated MediaPipe pelvis, in centimeters, where Stage 2A stops accepting neutral samples while preserving Quest arm ownership."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderArmRaiseFadeFullCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm"),
+		50.0f,
+		TEXT("Compatibility endpoint for the Stage 2A arm-raise neutral-update fade in diagnostics. It does not gate a visible MetaHuman clavicle writer."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderShrugStartCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderShrugStartCm"),
+		2.0f,
+		TEXT("Signed Stage 2A shoulder evidence, in centimeters above the observed neutral reference, where diagnostic shrug evidence begins."));
+
+	TAutoConsoleVariable<float> CVarBodyFusionStage2ShoulderShrugFullCm(
+		TEXT("mp.BodyFusion.Stage2ShoulderShrugFullCm"),
+		8.0f,
+		TEXT("Signed Stage 2A shoulder evidence, in centimeters above the observed neutral reference, where diagnostic shrug evidence reaches full response before clamping."));
 
 	TAutoConsoleVariable<int32> CVarBodyFusionCalibrationStableFrames(
 		TEXT("mp.BodyFusion.CalibrationStableFrames"),
@@ -349,6 +379,13 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MetaHumanProfileAssetPaths"),
 		GMetaHumanProfileAssetPaths,
 		TEXT("Semicolon- or comma-separated UMediaPipeMetaHumanRetargetProfile asset paths. Configured profiles override built-in profiles with the same id."),
+		ECVF_Default);
+
+	FString GAvatarCalibrationProfilePath(TEXT(""));
+	FAutoConsoleVariableRef CVarAvatarCalibrationProfilePath(
+		TEXT("mp.AvatarCalibrationProfilePath"),
+		GAvatarCalibrationProfilePath,
+		TEXT("Optional avatar-locked calibration profile JSON path. Only mode=avatar_locked_proteus safe source timing/alignment/anchor/bone-map fields are merged; user body-shape, avatar scaling, and MetaHuman deformation fields are rejected."),
 		ECVF_Default);
 
 	TAutoConsoleVariable<int32> CVarMetaHumanArmSource(
@@ -1050,6 +1087,11 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeLegUseBasisRoll"),
 		1,
 		TEXT("When non-zero, drive MediaPipe thigh/calf roll from a stable leg semantic basis instead of direction-only shortest-arc rotations."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegSolveDebugOnce(
+		TEXT("mp.MediaPipeLegSolveDebugOnce"),
+		0,
+		TEXT("When positive, log that many DriveLegCS input/apply summaries, then decrement. Default off."));
 
 	TAutoConsoleVariable<int32> CVarMediaPipeFootForwardHysteresis(
 		TEXT("mp.MediaPipeFootForwardHysteresis"),

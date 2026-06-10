@@ -40,10 +40,12 @@ enum class EMediaPipeBodyFusionRegion : uint8
 	LeftHip,
 	LeftKnee,
 	LeftAnkle,
+	LeftHeel,
 	LeftFoot,
 	RightHip,
 	RightKnee,
 	RightAnkle,
+	RightHeel,
 	RightFoot,
 	Count
 };
@@ -73,6 +75,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionAuthority
 struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionAuthorityGateInput
 {
 	int32 MediaPipeAuthorityMode = 0;
+	bool bAllowFullBodyMediaPipeAuthority = false;
 	bool bCalibrationUsable = false;
 	FString CalibrationRejectReason;
 	FMediaPipeBodyFusionSourceStatus BodyPoseStatus;

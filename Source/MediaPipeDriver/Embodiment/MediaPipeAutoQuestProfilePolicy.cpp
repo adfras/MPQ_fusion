@@ -8,11 +8,14 @@ FMediaPipeAutoQuestBodyDrivePolicy FMediaPipeAutoQuestProfilePolicy::ResolveBody
 	const bool bStableEmbodiedBody =
 		Input.bEmbodiedView &&
 		Input.bStableEmbodiedBody;
+	const bool bBodyFusionOwnsBody =
+		Input.bBodyFusionEnabled;
 
 	Policy.bDriveClavicles =
-		!bStableEmbodiedBody;
-	Policy.bDriveSpine = !bStableEmbodiedBody;
-	Policy.bDrivePelvisTranslation = Input.bBodyFusionEnabled && !bStableEmbodiedBody;
+		!bBodyFusionOwnsBody && !bStableEmbodiedBody;
+	Policy.bDriveSpine =
+		!bBodyFusionOwnsBody && !bStableEmbodiedBody;
+	Policy.bDrivePelvisTranslation = false;
 	Policy.bDriveLegs = false;
 	Policy.bUseLegIK = false;
 

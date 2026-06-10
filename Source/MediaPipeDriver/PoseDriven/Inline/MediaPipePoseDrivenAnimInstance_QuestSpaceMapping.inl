@@ -231,6 +231,7 @@ bool FAnimNode_MediaPipePoseDriven::TryMapQuestDirectionToMediaWorld(const FVect
 
 bool FAnimNode_MediaPipePoseDriven::TryMapQuestHmdRelativeWristToAvatarWorld(
 	FCSPose<FCompactPose>& CSPose,
+	const bool bIsLeft,
 	const FVector& QuestAnchorWorld,
 	const FQuat& QuestAnchorYawWorld,
 	const FVector& QuestWristWorld,
@@ -284,6 +285,16 @@ bool FAnimNode_MediaPipePoseDriven::TryMapQuestHmdRelativeWristToAvatarWorld(
 	MapInput.UserCameraForwardOffsetCm = ReadConsoleFloat(TEXT("mp.AutoQuestEmbodiedCameraForwardOffsetCm"), 0.0f);
 	MapInput.PositionScale = CVarQuestWristPositionScale.GetValueOnAnyThread();
 	MapInput.MaxOffsetCm = CVarQuestWristMaxOffsetCm.GetValueOnAnyThread();
+	const FString SideKey = bIsLeft ? FString(TEXT("left")) : FString(TEXT("right"));
+	if (const FVector* WristOffset = MappingProfile.AvatarLockedWristArmChainOffsetsCm.Find(SideKey))
+	{
+		MapInput.WristArmChainOffsetCm = *WristOffset;
+	}
+	else if (const FVector* HandOffset = MappingProfile.AvatarLockedWristArmChainOffsetsCm.Find(
+		bIsLeft ? FString(TEXT("hand_l")) : FString(TEXT("hand_r"))))
+	{
+		MapInput.WristArmChainOffsetCm = *HandOffset;
+	}
 
 	FMediaPipeAvatarHmdWristMapResult MapResult;
 	if (!FMediaPipeAvatarEmbodimentSolver::MapQuestHmdRelativeWristToAvatarWorld(MapInput, MapResult))
@@ -702,6 +713,7 @@ bool FAnimNode_MediaPipePoseDriven::TryApplyQuestWristPositionWorld(FCSPose<FCom
 		FVector QuestMappedWristWorld = FVector::ZeroVector;
 		if (!TryMapQuestHmdRelativeWristToAvatarWorld(
 			CSPose,
+			bIsLeft,
 			QuestTranslationAnchorWorld,
 			QuestWristRuntimeState.HmdRelativeQuestAnchorYawWorld,
 			QuestWristWorld,

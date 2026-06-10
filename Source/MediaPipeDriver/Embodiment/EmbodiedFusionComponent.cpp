@@ -51,6 +51,8 @@ FMediaPipeTrackingHandSourceSnapshot ConvertQuestHandsToGenericHands(const FQues
 	Generic.bHasRight = Snapshot.bHasRight;
 	Generic.bLeftTracked = Snapshot.bLeftTracked;
 	Generic.bRightTracked = Snapshot.bRightTracked;
+	Generic.LeftTimestampSeconds = Snapshot.LeftTimestampSeconds;
+	Generic.RightTimestampSeconds = Snapshot.RightTimestampSeconds;
 	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
 	{
 		Generic.LeftPositionsWorld[Index] = Snapshot.LeftPositionsWorld[Index];
@@ -343,6 +345,7 @@ void FEmbodiedFusionMediaPipeCandidate::Reset()
 void FEmbodiedFusionFrame::ResetTransient()
 {
 	SourceFrame.Reset();
+	SourceAlignment = FMediaPipeTrackingSourceAlignmentResult();
 	FreshnessThresholds = FMediaPipeBodyFusionFreshnessThresholds();
 	Pose.Reset();
 	MediaPipeCandidate.Reset();
@@ -379,6 +382,7 @@ void UEmbodiedFusionComponent::ResetFusionState()
 	LastCalibrationUpdateTimeSeconds = -1.0;
 	LastDebugLogTimeSeconds = -1.0;
 	LastCalibrationLogTimeSeconds = -1.0;
+	SourceAlignmentRuntime.Reset();
 	LastQuestHandsForDebug.Reset();
 	LastAcceptedHmdPose = FMediaPipeQuestHmdPoseSnapshot();
 	LastAcceptedHmdPoseTimeSeconds = -1.0;
@@ -430,6 +434,8 @@ bool UEmbodiedFusionComponent::BuildMediaPipeCandidatePose(
 	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightKnee, EMediaPipeBodyFusionRegion::RightKnee);
 	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftAnkle, EMediaPipeBodyFusionRegion::LeftAnkle);
 	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightAnkle, EMediaPipeBodyFusionRegion::RightAnkle);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftHeel, EMediaPipeBodyFusionRegion::LeftHeel);
+	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightHeel, EMediaPipeBodyFusionRegion::RightHeel);
 	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::LeftFootIndex, EMediaPipeBodyFusionRegion::LeftFoot);
 	TrySetMediaPipeCandidateLandmark(SourceFrame, Calibration, Pose, EMediaPipePoseLandmark::RightFootIndex, EMediaPipeBodyFusionRegion::RightFoot);
 
@@ -695,6 +701,12 @@ void UEmbodiedFusionComponent::UpdateBodyPoseObservation_GameThread(
 	}
 }
 
+void UEmbodiedFusionComponent::SetReplaySourceObservations_GameThread(
+	const FEmbodiedFusionSourceObservations& Observations)
+{
+	SourceObservations = Observations;
+}
+
 bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpdateInput& Input)
 {
 	const FMediaPipeBodyFusionRuntimePolicySnapshot RuntimePolicy =
@@ -719,6 +731,7 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 	SourceFrameInput.HmdLocationWorld = SourceObservations.HmdPose.LocationWorld;
 	SourceFrameInput.HmdRotationWorld = SourceObservations.HmdPose.RotationWorld;
 	SourceFrameInput.HmdTrackingUpWorld = SourceObservations.HmdPose.TrackingUpWorld;
+	SourceFrameInput.HmdTimestampSeconds = SourceObservations.HmdPose.TimestampSeconds;
 	SourceFrameInput.Hands = SourceObservations.Hands;
 	SourceFrameInput.ArmChain = SourceObservations.ArmChain;
 	SourceFrameInput.BodyPose = SourceObservations.BodyPose;
@@ -727,15 +740,25 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 	SourceFrameInput.ArmChainMaxAgeSeconds =
 		Input.ArmChainMaxAgeSeconds;
 
+	FMediaPipeTrackingSourceFrame RawSourceFrame;
 	FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 		SourceFrameInput,
-		LatestFrame.SourceFrame,
+		RawSourceFrame,
 		LatestFrame.FreshnessThresholds);
+	SourceAlignmentRuntime.AddRawFrame(RawSourceFrame);
+	SourceAlignmentRuntime.BuildAlignedFrame(
+		RawSourceFrame,
+		Input.AvatarProfile,
+		Input.TargetComponentTransform,
+		LatestFrame.FreshnessThresholds,
+		LatestFrame.SourceFrame,
+		LatestFrame.SourceAlignment);
 
 	TryUpdateCalibration_GameThread(Input, RuntimePolicy, NowSeconds);
 
 	FMediaPipeBodyFusionAuthorityGateInput AuthorityGateInput;
 	AuthorityGateInput.MediaPipeAuthorityMode = RuntimePolicy.MediaPipeAuthorityMode;
+	AuthorityGateInput.bAllowFullBodyMediaPipeAuthority = RuntimePolicy.bFullBodyMediaPipeAuthority;
 	AuthorityGateInput.bCalibrationUsable = Calibration.IsUsable();
 	AuthorityGateInput.CalibrationRejectReason = Calibration.LastRejectReason;
 	AuthorityGateInput.BodyPoseStatus = LatestFrame.SourceFrame.BodyPoseStatus;
@@ -812,6 +835,7 @@ void UEmbodiedFusionComponent::UpdateMovementReplicaPose_GameThread(
 	SourceFrameInput.HmdLocationWorld = SourceObservations.HmdPose.LocationWorld;
 	SourceFrameInput.HmdRotationWorld = SourceObservations.HmdPose.RotationWorld;
 	SourceFrameInput.HmdTrackingUpWorld = SourceObservations.HmdPose.TrackingUpWorld;
+	SourceFrameInput.HmdTimestampSeconds = SourceObservations.HmdPose.TimestampSeconds;
 	SourceFrameInput.Hands = SourceObservations.Hands;
 	SourceFrameInput.ArmChain = SourceObservations.ArmChain;
 	SourceFrameInput.BodyPose = SourceObservations.BodyPose;
@@ -1219,7 +1243,8 @@ void UEmbodiedFusionComponent::EmitDebugLog_GameThread(
 	}
 
 	const FVector AvatarRootWorld = Input.TargetComponentTransform.GetLocation();
-	const FVector AvatarEyeWorld = Input.TargetComponentTransform.TransformPosition(BodyFusionProfile.DefaultEyeLocalOffset);
+	const FVector AvatarEyeWorld = Input.TargetComponentTransform.TransformPosition(
+		ResolveMediaPipeAvatarProfileCameraAnchorLocal(BodyFusionProfile));
 	const FVector AvatarHeadWorld = !Input.RefHeadPosComp.IsNearlyZero()
 		? Input.TargetComponentTransform.TransformPosition(Input.RefHeadPosComp)
 		: Input.TargetComponentTransform.TransformPosition(ResolveMediaPipeAvatarProfileHeadLocal(BodyFusionProfile));
@@ -1260,15 +1285,45 @@ void UEmbodiedFusionComponent::EmitDebugLog_GameThread(
 	const float HeadToChestCm = FVector::Distance(AvatarHeadWorld, AvatarChestWorld);
 	const float ChestToPelvisCm = FVector::Distance(AvatarChestWorld, AvatarPelvisWorld);
 	const float HmdYawDeg = bHasHmd ? LatestFrame.SourceFrame.HmdRotationWorld.Rotator().Yaw : 0.0f;
+	const FMediaPipeTrackingSourceAlignmentResult& Alignment = LatestFrame.SourceAlignment;
 
 	UE_LOG(LogMediaPipePose, Log,
-		TEXT("mp.BodyFusion.Debug actor=%s bodyAuthority=%s mediaPipeAuthority=%d reason=\"%s\" stableFrames=%d stableSeconds=%.2f hmd=%s qHandL=%s qHandR=%s fullChainL=%s fullChainR=%s mediaPipe=%s hmdYaw=%.1f hmd=%s trackingUp=%s avatarRoot=%s eye=%s head=%s neck=%s chest=%s pelvis=%s forward=%s mpHip=%s hipRel=%.2f mpShoulder=%s shoulderRel=%.2f mpHead=%s headRel=%.2f dist(cameraEye=%.1f cameraChest=%.1f headChest=%.1f chestPelvis=%.1f) hmdPlanar(offset=%.1f) solve=%d solveEye=%s solveHead=%s solveChest=%s solvePelvis=%s"),
+		TEXT("mp.BodyFusion.Debug actor=%s bodyAuthority=%s mediaPipeAuthority=%d reason=\"%s\" stableFrames=%d stableSeconds=%.2f align(applied=%d hmdDelay=%.3f handsDelay=%.3f armsDelay=%.3f bodyDelay=%.3f hmdHist=%d handHist=%d/%d armHist=%d/%d bodyHist=%d coord=%d/%d/%d/%d wristOffset=%d/%d selected=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f selectedSrc=%.3f/%.3f/%.3f/%.3f/%.3f/%.3f) hmd=%s qHandL=%s qHandR=%s fullChainL=%s fullChainR=%s mediaPipe=%s hmdYaw=%.1f hmd=%s trackingUp=%s avatarRoot=%s eye=%s head=%s neck=%s chest=%s pelvis=%s forward=%s mpHip=%s hipRel=%.2f mpShoulder=%s shoulderRel=%.2f mpHead=%s headRel=%.2f dist(cameraEye=%.1f cameraChest=%.1f headChest=%.1f chestPelvis=%.1f) hmdPlanar(offset=%.1f) solve=%d solveEye=%s solveHead=%s solveChest=%s solvePelvis=%s"),
 		*Input.TargetActorName.ToString(),
 		FMediaPipeBodyFusionDebugFormatter::AuthorityStateName(LatestFrame.AuthorityState),
 		LatestFrame.bMediaPipeAuthorityAllowed ? 1 : 0,
 		*LatestFrame.AuthorityReason,
 		CalibrationStableFrameCount,
 		CalibrationStableSeconds,
+		Alignment.bApplied ? 1 : 0,
+		Alignment.QuestHmdDelaySeconds,
+		Alignment.QuestHandsDelaySeconds,
+		Alignment.QuestArmChainsDelaySeconds,
+		Alignment.MediaPipeBodyPoseDelaySeconds,
+		Alignment.bUsedHistoricalHmd ? 1 : 0,
+		Alignment.bUsedHistoricalLeftHand ? 1 : 0,
+		Alignment.bUsedHistoricalRightHand ? 1 : 0,
+		Alignment.bUsedHistoricalLeftArmChain ? 1 : 0,
+		Alignment.bUsedHistoricalRightArmChain ? 1 : 0,
+		Alignment.bUsedHistoricalBodyPose ? 1 : 0,
+		Alignment.bAppliedQuestHmdCoordinateAxisCorrection ? 1 : 0,
+		Alignment.bAppliedQuestHandsCoordinateAxisCorrection ? 1 : 0,
+		Alignment.bAppliedQuestArmChainsCoordinateAxisCorrection ? 1 : 0,
+		Alignment.bAppliedMediaPipeBodyPoseCoordinateAxisCorrection ? 1 : 0,
+		Alignment.bAppliedLeftWristArmOffset ? 1 : 0,
+		Alignment.bAppliedRightWristArmOffset ? 1 : 0,
+		Alignment.SelectedHmdFrameTimeSeconds,
+		Alignment.SelectedLeftHandFrameTimeSeconds,
+		Alignment.SelectedRightHandFrameTimeSeconds,
+		Alignment.SelectedLeftArmChainFrameTimeSeconds,
+		Alignment.SelectedRightArmChainFrameTimeSeconds,
+		Alignment.SelectedBodyPoseFrameTimeSeconds,
+		Alignment.SelectedHmdSourceTimestampSeconds,
+		Alignment.SelectedLeftHandSourceTimestampSeconds,
+		Alignment.SelectedRightHandSourceTimestampSeconds,
+		Alignment.SelectedLeftArmChainSourceTimestampSeconds,
+		Alignment.SelectedRightArmChainSourceTimestampSeconds,
+		Alignment.SelectedBodyPoseSourceTimestampSeconds,
 		*FMediaPipeBodyFusionDebugFormatter::StatusString(LatestFrame.SourceFrame.HmdStatus),
 		*FMediaPipeBodyFusionDebugFormatter::StatusString(LatestFrame.SourceFrame.LeftHandStatus),
 		*FMediaPipeBodyFusionDebugFormatter::StatusString(LatestFrame.SourceFrame.RightHandStatus),

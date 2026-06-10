@@ -8,6 +8,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionRuntimePolicySnapshot
 	bool bDebugEnabled = false;
 	bool bPoseWriteEnabled = false;
 	int32 MediaPipeAuthorityMode = 0;
+	bool bFullBodyMediaPipeAuthority = false;
 	bool bStage1TorsoPelvisHintEnabled = false;
 	float Stage1TorsoPelvisHintBlend = 0.0f;
 	float Stage1TorsoPelvisMaxVerticalCm = 0.0f;
@@ -18,6 +19,10 @@ struct MEDIAPIPEDRIVER_API FMediaPipeBodyFusionRuntimePolicySnapshot
 	float Stage2ShoulderClavicleMaxLiftCm = 0.0f;
 	float Stage2ShoulderClavicleHalfLifeSeconds = 0.0f;
 	float Stage2ShoulderContradictionCm = 0.0f;
+	float Stage2ShoulderArmRaiseFadeStartCm = 0.0f;
+	float Stage2ShoulderArmRaiseFadeFullCm = 0.0f;
+	float Stage2ShoulderShrugStartCm = 0.0f;
+	float Stage2ShoulderShrugFullCm = 0.0f;
 	int32 RequiredCalibrationStableFrames = 0;
 	float RequiredCalibrationStableSeconds = 0.0f;
 };
@@ -46,6 +51,10 @@ public:
 	static float GetStage2ShoulderClavicleMaxLiftCmAnyThread();
 	static float GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
 	static float GetStage2ShoulderContradictionCmAnyThread();
+	static float GetStage2ShoulderArmRaiseFadeStartCmAnyThread();
+	static float GetStage2ShoulderArmRaiseFadeFullCmAnyThread();
+	static float GetStage2ShoulderShrugStartCmAnyThread();
+	static float GetStage2ShoulderShrugFullCmAnyThread();
 };
 
 class MEDIAPIPEDRIVER_API FMediaPipeEmbodimentDebugCommands

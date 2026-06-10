@@ -34,11 +34,16 @@ const TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& GetHandPosition
 	return bIsLeft ? Snapshot.LeftPositionsWorld : Snapshot.RightPositionsWorld;
 }
 
+double ResolveTimestampSeconds(const double SourceTimestampSeconds, const double FallbackTimestampSeconds)
+{
+	return SourceTimestampSeconds >= 0.0 ? SourceTimestampSeconds : FallbackTimestampSeconds;
+}
+
 void PopulateHandSide(
 	FMediaPipeTrackingSourceFrame& InOutFrame,
 	const FMediaPipeTrackingHandSourceSnapshot& Snapshot,
 	const bool bIsLeft,
-	const double NowSeconds)
+	const double FallbackTimestampSeconds)
 {
 	if (!IsHandSideUsableForWrist(Snapshot, bIsLeft))
 	{
@@ -48,18 +53,21 @@ void PopulateHandSide(
 	const TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& Positions = GetHandPositions(Snapshot, bIsLeft);
 	const FVector WristWorld = Positions[static_cast<int32>(EHandKeypoint::Wrist)];
 	const float Confidence = IsHandSideTracked(Snapshot, bIsLeft) ? 1.0f : 0.5f;
+	const double TimestampSeconds = ResolveTimestampSeconds(
+		bIsLeft ? Snapshot.LeftTimestampSeconds : Snapshot.RightTimestampSeconds,
+		FallbackTimestampSeconds);
 	if (bIsLeft)
 	{
 		InOutFrame.bHasLeftHand = true;
 		InOutFrame.LeftHandWorld = WristWorld;
-		InOutFrame.LeftHandTimestampSeconds = NowSeconds;
+		InOutFrame.LeftHandTimestampSeconds = TimestampSeconds;
 		InOutFrame.LeftHandConfidence = Confidence;
 	}
 	else
 	{
 		InOutFrame.bHasRightHand = true;
 		InOutFrame.RightHandWorld = WristWorld;
-		InOutFrame.RightHandTimestampSeconds = NowSeconds;
+		InOutFrame.RightHandTimestampSeconds = TimestampSeconds;
 		InOutFrame.RightHandConfidence = Confidence;
 	}
 }
@@ -109,6 +117,8 @@ void FMediaPipeTrackingHandSourceSnapshot::Reset()
 	bHasRight = 0;
 	bLeftTracked = 0;
 	bRightTracked = 0;
+	LeftTimestampSeconds = -1.0;
+	RightTimestampSeconds = -1.0;
 	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
 	{
 		LeftPositionsWorld[Index] = FVector::ZeroVector;
@@ -172,7 +182,7 @@ void FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 		HmdSource.LocationWorld = Input.HmdLocationWorld;
 		HmdSource.RotationWorld = Input.HmdRotationWorld;
 		HmdSource.TrackingUpWorld = Input.HmdTrackingUpWorld;
-		HmdSource.TimestampSeconds = Input.NowSeconds;
+		HmdSource.TimestampSeconds = ResolveTimestampSeconds(Input.HmdTimestampSeconds, Input.NowSeconds);
 		HmdSource.Confidence = 1.0f;
 		PopulateHmd(OutFrame, HmdSource);
 	}

@@ -69,7 +69,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmTwistBonesCS(FCSPose<FCompactPose>& 
 		ResetMetaHumanHelperSmoothingRange(State, 0, MediaPipeMetaHumanArmDeformationHelperCount);
 	};
 
-	if (CVarMediaPipeDriveArmTwistBones.GetValueOnAnyThread() == 0)
+	const bool bBodyFusionMetaHumanHelperWrite =
+		ShouldUseBodyFusionPoseForEvaluation() &&
+		TargetMetaHumanProfile.IsValidForPoseDriving();
+	if (CVarMediaPipeDriveArmTwistBones.GetValueOnAnyThread() == 0 && !bBodyFusionMetaHumanHelperWrite)
 	{
 		ResetAllStandardTwistSmoothing(LeftArmState);
 		ResetAllStandardTwistSmoothing(RightArmState);
@@ -78,7 +81,9 @@ void FAnimNode_MediaPipePoseDriven::DriveArmTwistBonesCS(FCSPose<FCompactPose>& 
 		return;
 	}
 
-	const bool bDriveMetaHumanArmHelpers = CVarMediaPipeDriveMetaHumanArmHelpers.GetValueOnAnyThread() != 0;
+	const bool bDriveMetaHumanArmHelpers =
+		CVarMediaPipeDriveMetaHumanArmHelpers.GetValueOnAnyThread() != 0 ||
+		bBodyFusionMetaHumanHelperWrite;
 	if (!bDriveMetaHumanArmHelpers)
 	{
 		ResetAllMetaHumanHelperSmoothing(LeftArmState);

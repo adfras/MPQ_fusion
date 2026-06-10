@@ -11,6 +11,7 @@
 #include "MediaPipePoseDrivenSolverState.h"
 #include "MediaPipeQuestHandTypes.h"
 #include "MediaPipeQuestHmdTrackingSource.h"
+#include "MediaPipeTrackingSourceAlignment.h"
 #include "MediaPipeTrackingSourceFrameBuilder.h"
 
 #include "EmbodiedFusionComponent.generated.h"
@@ -178,6 +179,7 @@ struct MEDIAPIPEDRIVER_API FEmbodiedFusionMediaPipeCandidate
 struct MEDIAPIPEDRIVER_API FEmbodiedFusionFrame
 {
 	FMediaPipeTrackingSourceFrame SourceFrame;
+	FMediaPipeTrackingSourceAlignmentResult SourceAlignment;
 	FMediaPipeBodyFusionFreshnessThresholds FreshnessThresholds;
 	FMediaPipeFusedAvatarPose Pose;
 	FEmbodiedFusionMediaPipeCandidate MediaPipeCandidate;
@@ -222,6 +224,7 @@ public:
 		const FMediaPipePoseFrame& Frame,
 		const TStaticArray<FVector, MediaPipePoseLandmarkCount>& LandmarksWorld,
 		const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid);
+	void SetReplaySourceObservations_GameThread(const FEmbodiedFusionSourceObservations& Observations);
 	bool UpdateFusion_GameThread(const FEmbodiedFusionUpdateInput& Input);
 	void UpdateMovementReplicaPose_GameThread(const FEmbodiedFusionMovementReplicaPoseInput& Input);
 	const FEmbodiedFusionFrame& GetLatestFusionFrame() const { return LatestFrame; }
@@ -249,6 +252,7 @@ private:
 		double NowSeconds);
 
 	FEmbodiedFusionFrame LatestFrame;
+	FMediaPipeTrackingSourceAlignmentRuntime SourceAlignmentRuntime;
 	FEmbodiedFusionSourceObservations SourceObservations;
 	FMediaPipeEmbodimentCalibration Calibration;
 	int32 LastCalibrationResetSerial = 0;

@@ -26,6 +26,8 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingHandSourceSnapshot
 	uint8 bHasRight = 0;
 	uint8 bLeftTracked = 0;
 	uint8 bRightTracked = 0;
+	double LeftTimestampSeconds = -1.0;
+	double RightTimestampSeconds = -1.0;
 	TStaticArray<FVector, MediaPipeTrackingHandKeypointCount> LeftPositionsWorld;
 	TStaticArray<FQuat, MediaPipeTrackingHandKeypointCount> LeftRotationsWorld;
 	TStaticArray<float, MediaPipeTrackingHandKeypointCount> LeftRadii;
@@ -75,6 +77,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrameBuilderInput
 	FVector HmdLocationWorld = FVector::ZeroVector;
 	FQuat HmdRotationWorld = FQuat::Identity;
 	FVector HmdTrackingUpWorld = FVector::UpVector;
+	double HmdTimestampSeconds = -1.0;
 
 	FMediaPipeTrackingHandSourceSnapshot Hands;
 	FMediaPipeTrackingArmChainSourceSnapshot ArmChain;

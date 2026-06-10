@@ -317,20 +317,30 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 
 	auto ConsiderFoot = [&](bool bSourceGrounded, const FBoneReference& BallBone)
 	{
-		if (!bSourceGrounded || !BallBone.IsValidToEvaluate())
+		if (!BallBone.IsValidToEvaluate())
 		{
 			return;
 		}
 
 		const float CurrentBallZ = CSPose.GetComponentSpaceTransform(BallBone.CachedCompactPoseIndex).GetTranslation().Z;
-		const float HoverCm = CurrentBallZ - RefFootFloorZComp;
-		if (HoverCm <= KINDA_SMALL_NUMBER || HoverCm > FkRootGroundingMaxCorrectionCm)
+		const float FloorDeltaCm = CurrentBallZ - RefFootFloorZComp;
+		if (FMath::Abs(FloorDeltaCm) <= KINDA_SMALL_NUMBER ||
+			FMath::Abs(FloorDeltaCm) > FkRootGroundingMaxCorrectionCm)
 		{
 			return;
 		}
 
-		const float CandidateOffsetZ = -HoverCm;
-		if (!bHasGroundedFoot || CandidateOffsetZ < TargetOffsetZ)
+		const float CandidateOffsetZ = -FloorDeltaCm;
+		const bool bCandidateFixesPenetration = CandidateOffsetZ > 0.0f;
+		if (!bSourceGrounded && !bCandidateFixesPenetration)
+		{
+			return;
+		}
+
+		const bool bCurrentFixesPenetration = TargetOffsetZ > 0.0f;
+		if (!bHasGroundedFoot ||
+			(bCandidateFixesPenetration && (!bCurrentFixesPenetration || CandidateOffsetZ > TargetOffsetZ)) ||
+			(!bCandidateFixesPenetration && !bCurrentFixesPenetration && CandidateOffsetZ < TargetOffsetZ))
 		{
 			TargetOffsetZ = CandidateOffsetZ;
 			bHasGroundedFoot = true;
@@ -349,7 +359,12 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 	}
 	else
 	{
-		BodyState.SmoothedFkRootGroundOffsetComp = FMath::Lerp(BodyState.SmoothedFkRootGroundOffsetComp, TargetOffsetComp, Alpha);
+		FVector SmoothedOffsetComp = FMath::Lerp(BodyState.SmoothedFkRootGroundOffsetComp, TargetOffsetComp, Alpha);
+		if (TargetOffsetComp.Z > BodyState.SmoothedFkRootGroundOffsetComp.Z)
+		{
+			SmoothedOffsetComp.Z = TargetOffsetComp.Z;
+		}
+		BodyState.SmoothedFkRootGroundOffsetComp = SmoothedOffsetComp;
 	}
 }
 
@@ -497,6 +512,14 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		const float Weight = static_cast<float>(i + 1) / Denom;
 		const FQuat TargetBasis = FQuat::Slerp(PelvisTargetBasis, ChestTargetBasis, Weight).GetNormalized();
 		ApplySemanticBasisToBone(SpineBone, RefSpineComp[i], RefSpineBasisComp[i], TargetBasis, BodyState.bHasSmoothedSpineRotCS[i], BodyState.SmoothedSpineRotCS[i]);
+	}
+
+	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() && ShouldUseBodyFusionPoseForEvaluation())
+	{
+		BodyState.bHasSmoothedNeckRotCS = false;
+		BodyState.bHasSmoothedNeck02RotCS = false;
+		BodyState.bHasSmoothedHeadRotCS = false;
+		return;
 	}
 
 	if (FaceBlendWeight <= KINDA_SMALL_NUMBER && FaceTwistWeight <= KINDA_SMALL_NUMBER)

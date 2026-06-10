@@ -55,6 +55,17 @@ struct MEDIAPIPEDRIVER_API FMediaPipeAvatarLocalViewPolicy
 	bool ShouldUseFirstPersonBodyProxyForComponent(const UMeshComponent* MeshComponent, int32 AvatarMeshComponentCount) const;
 };
 
+struct MEDIAPIPEDRIVER_API FMediaPipeAvatarSourceCoordinateAxisCorrection
+{
+	FVector LocationAxisSign = FVector::OneVector;
+	FVector LocationOffsetCm = FVector::ZeroVector;
+
+	bool IsIdentity() const
+	{
+		return LocationAxisSign.Equals(FVector::OneVector) && LocationOffsetCm.IsNearlyZero();
+	}
+};
+
 struct MEDIAPIPEDRIVER_API FMediaPipeAvatarEmbodimentProfile
 {
 	FName ProfileId = NAME_None;
@@ -90,6 +101,13 @@ struct MEDIAPIPEDRIVER_API FMediaPipeAvatarEmbodimentProfile
 	float MaxThighLengthCm = 62.0f;
 	float MinCalfLengthCm = 28.0f;
 	float MaxCalfLengthCm = 62.0f;
+	bool bHasAvatarLockedCalibrationProfile = false;
+	FString AvatarLockedCalibrationProfilePath;
+	FString AvatarLockedCalibrationMode;
+	FVector AvatarLockedHeadCameraAnchorOffsetCm = FVector::ZeroVector;
+	TMap<FString, float> AvatarLockedSourceTimingOffsetsSeconds;
+	TMap<FString, FMediaPipeAvatarSourceCoordinateAxisCorrection> AvatarLockedSourceCoordinateAxisCorrections;
+	TMap<FString, FVector> AvatarLockedWristArmChainOffsetsCm;
 	FMediaPipeAvatarBoneMap BoneMap;
 	FMediaPipeAvatarLocalViewPolicy LocalViewPolicy = FMediaPipeAvatarLocalViewPolicy::DefaultHumanoid();
 
@@ -101,6 +119,14 @@ MEDIAPIPEDRIVER_API FVector ResolveMediaPipeAvatarProfileHeadLocal(
 
 MEDIAPIPEDRIVER_API FVector ResolveMediaPipeAvatarProfileEyeLocalInHead(
 	const FMediaPipeAvatarEmbodimentProfile& Profile);
+
+MEDIAPIPEDRIVER_API FVector ResolveMediaPipeAvatarProfileCameraAnchorLocal(
+	const FMediaPipeAvatarEmbodimentProfile& Profile);
+
+MEDIAPIPEDRIVER_API void AppendMediaPipeAvatarProfileDrivenUpperBodyBones(
+	const FMediaPipeAvatarEmbodimentProfile& Profile,
+	TArray<FName>& OutBoneNames,
+	bool bIncludeSecondaryNeck = true);
 
 struct MEDIAPIPEDRIVER_API FMediaPipeAvatarReferencePoseProportions
 {
@@ -181,6 +207,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeAvatarHmdWristMapInput
 	float UserCameraForwardOffsetCm = 0.0f;
 	float PositionScale = 1.0f;
 	float MaxOffsetCm = 140.0f;
+	FVector WristArmChainOffsetCm = FVector::ZeroVector;
 };
 
 struct MEDIAPIPEDRIVER_API FMediaPipeAvatarHmdWristMapResult

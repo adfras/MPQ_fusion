@@ -71,21 +71,25 @@ COMPENSATION_GOOD_LAG_SECONDS = 0.10
 
 STAGE2_CONFLICT_STRESS_FINAL_COMMAND = (
     "mp.PrepareMPQShadowLatencyTrial maxdim=384 duration=60 prediction=1 maxPredictionMs=50 "
-    "label=stage2_conflict_stress_final stage1=1 blend=0.5 halfLife=0.04 "
-    "stage2=1 stage2Blend=0.2 stage2Scale=4.5 stage2MaxLiftCm=5 stage2HalfLife=0.04 analyze=0"
+    "label=mpq_clean_fusion_sources_no_stage_writes stage1=0 "
+    "stage2=1 stage2Blend=1.0 stage2Scale=1.0 stage2MaxLiftCm=5 stage2HalfLife=0.04 "
+    "stage2ArmRaiseFadeStartCm=35 stage2ArmRaiseFadeFullCm=50 "
+    "stage2ShrugStartCm=2 stage2ShrugFullCm=8 analyze=0"
 )
 
 STAGE2_CONFLICT_STRESS_REQUIRED_CVARS = (
     ("mp.BodyFusion.WritePose", 0.0, "shadow-only capture; do not write the fused pose"),
     ("mp.BodyFusion.MediaPipeAuthority", 0.0, "MediaPipe must not take full-body authority"),
-    ("mp.BodyFusion.Stage1TorsoPelvisHint", 1.0, "Stage 1 vertical torso/pelvis hint enabled"),
-    ("mp.BodyFusion.Stage1TorsoPelvisHintBlend", 0.5, "proven Stage 1 blend"),
-    ("mp.BodyFusion.Stage1TorsoPelvisHintHalfLife", 0.04, "proven Stage 1 smoothing half-life"),
-    ("mp.BodyFusion.Stage2ShoulderClavicleHint", 1.0, "Stage 2 shoulder/clavicle hint enabled"),
-    ("mp.BodyFusion.Stage2ShoulderClavicleHintBlend", 0.2, "proven Stage 2 blend"),
-    ("mp.BodyFusion.Stage2ShoulderClavicleResponseScale", 4.5, "proven Stage 2 shoulder response scale"),
-    ("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm", 5.0, "bounded Stage 2 max clavicle lift"),
-    ("mp.BodyFusion.Stage2ShoulderClavicleHalfLife", 0.04, "proven Stage 2 smoothing half-life"),
+    ("mp.BodyFusion.Stage1TorsoPelvisHint", 0.0, "direct Stage 1 MetaHuman bone-offset layer disabled"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHint", 1.0, "Stage 2 shoulder evidence diagnostics enabled"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHintBlend", 1.0, "diagnostic blend kept at full strength"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleResponseScale", 1.0, "neutral-gated signed Stage 2 shoulder evidence scale"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleMaxLiftCm", 5.0, "bounded Stage 2 diagnostic target cap; not a direct bone translation"),
+    ("mp.BodyFusion.Stage2ShoulderClavicleHalfLife", 0.04, "Stage 2 evidence smoothing half-life"),
+    ("mp.BodyFusion.Stage2ShoulderArmRaiseFadeStartCm", 35.0, "wrist/elbow-above-pelvis endpoint-context suppression start"),
+    ("mp.BodyFusion.Stage2ShoulderArmRaiseFadeFullCm", 50.0, "Stage 2 endpoint-context fade full point"),
+    ("mp.BodyFusion.Stage2ShoulderShrugStartCm", 2.0, "signed Stage 2 neutral-relative shrug start"),
+    ("mp.BodyFusion.Stage2ShoulderShrugFullCm", 8.0, "signed Stage 2 neutral-relative shrug full response"),
 )
 
 MEASURE_ONLY_PAIR_KINDS = {
@@ -97,6 +101,7 @@ MEASURE_ONLY_PAIR_KINDS = {
     "quest_arm_output_measure",
     "quest_shoulder_output_measure",
     "shoulder_conflict_measure",
+    "stage2_output_shoulder_compare",
 }
 
 POOR_AREA_COMPENSATION_FIELDS = [
@@ -210,6 +215,66 @@ CONDITIONING_FIELDS = [
 
 LIVE_SPINE_BONES = ("spine_01", "spine_02", "spine_03", "spine_04", "spine_05")
 LIVE_CHEST_BONES_DESC = tuple(reversed(LIVE_SPINE_BONES))
+LIVE_STAGE2_DEFORMATION_BONES = {
+    "left": (
+        "clavicle_l",
+        "clavicle_out_l",
+        "clavicle_scap_l",
+        "clavicle_pec_l",
+        "upperarm_l",
+        "upperarm_twist_01_l",
+        "upperarm_twist_02_l",
+        "upperarm_twistCor_01_l",
+        "upperarm_twistCor_02_l",
+        "upperarm_bicep_l",
+        "upperarm_tricep_l",
+        "upperarm_correctiveRoot_l",
+        "upperarm_bck_l",
+        "upperarm_fwd_l",
+        "upperarm_in_l",
+        "upperarm_out_l",
+        "lowerarm_l",
+        "lowerarm_twist_01_l",
+        "lowerarm_twist_02_l",
+        "lowerarm_correctiveRoot_l",
+        "lowerarm_in_l",
+        "lowerarm_out_l",
+        "lowerarm_fwd_l",
+        "lowerarm_bck_l",
+        "wrist_inner_l",
+        "wrist_outer_l",
+        "hand_l",
+    ),
+    "right": (
+        "clavicle_r",
+        "clavicle_out_r",
+        "clavicle_scap_r",
+        "clavicle_pec_r",
+        "upperarm_r",
+        "upperarm_twist_01_r",
+        "upperarm_twist_02_r",
+        "upperarm_twistCor_01_r",
+        "upperarm_twistCor_02_r",
+        "upperarm_bicep_r",
+        "upperarm_tricep_r",
+        "upperarm_correctiveRoot_r",
+        "upperarm_bck_r",
+        "upperarm_fwd_r",
+        "upperarm_in_r",
+        "upperarm_out_r",
+        "lowerarm_r",
+        "lowerarm_twist_01_r",
+        "lowerarm_twist_02_r",
+        "lowerarm_correctiveRoot_r",
+        "lowerarm_in_r",
+        "lowerarm_out_r",
+        "lowerarm_fwd_r",
+        "lowerarm_bck_r",
+        "wrist_inner_r",
+        "wrist_outer_r",
+        "hand_r",
+    ),
+}
 
 FACE_LANDMARK_INDICES = {
     "nose_tip": 1,
@@ -887,6 +952,25 @@ def extract_signals(samples):
             add_path_signal(signals, samples, f"manny.{hand_bone}.world_loc.{axis}", "arms_measure_only", ["live", hand_bone, "world_loc", index], "manny")
             add_path_signal(signals, samples, f"manny.{clavicle_bone}.loc.{axis}", "shoulders", ["live", clavicle_bone, "loc", index], "manny")
             add_path_signal(signals, samples, f"manny.{clavicle_bone}.world_loc.{axis}", "shoulders", ["live", clavicle_bone, "world_loc", index], "manny")
+            for deformation_bone in LIVE_STAGE2_DEFORMATION_BONES[side]:
+                if deformation_bone in (hand_bone, clavicle_bone):
+                    continue
+                add_path_signal(
+                    signals,
+                    samples,
+                    f"manny.{deformation_bone}.loc.{axis}",
+                    "shoulder_deformation",
+                    ["live", deformation_bone, "loc", index],
+                    "manny",
+                )
+                add_path_signal(
+                    signals,
+                    samples,
+                    f"manny.{deformation_bone}.world_loc.{axis}",
+                    "shoulder_deformation",
+                    ["live", deformation_bone, "world_loc", index],
+                    "manny",
+                )
 
     live_chest_bone = select_live_chest_bone(signals, "loc")
     live_world_chest_bone = select_live_chest_bone(signals, "world_loc")
@@ -915,16 +999,42 @@ def extract_signals(samples):
         for field in (
             "stage2_shoulder_clavicle_hint_valid",
             "stage2_shoulder_clavicle_suppressed_by_contradiction",
+            "stage2_shoulder_clavicle_suppressed_by_arm_ownership",
             "stage2_shoulder_clavicle_had_contradiction_source",
+            "stage2_shoulder_clavicle_had_quest_arm_raise_source",
+            "stage2_neutral_reference_ready",
+            "stage2_neutral_sample_accepted",
+            "stage2_clamp_hit",
+            "stage2_signal_source_mode",
+            "stage2_signal_source_reliability",
+            "stage2_neutral_observation_seconds",
             "stage2_candidate_shoulder_lift_from_pelvis_cm",
             "stage2_reference_shoulder_lift_from_pelvis_cm",
             "stage2_raw_lift_delta_cm",
+            "stage2_shoulder_head_clearance_cm",
+            "stage2_shoulder_head_clearance_reference_cm",
+            "stage2_shoulder_head_clearance_shrug_cm",
+            "stage2_clearance_primary_evidence_cm",
+            "stage2_raw_lift_confirmation_weight",
+            "stage2_signed_lift_evidence_cm",
+            "stage2_signed_target_lift_cm",
+            "stage2_applied_response_scale",
+            "stage2_positive_lift_evidence_cm",
+            "stage2_unfaded_positive_target_lift_cm",
+            "stage2_quest_wrist_lift_from_pelvis_cm",
+            "stage2_quest_elbow_lift_from_pelvis_cm",
+            "stage2_quest_arm_raise_ownership_fade",
+            "stage2_quest_arm_raise_lift_weight",
             "stage2_positive_target_lift_cm",
             "stage2_contradiction_delta_cm",
             "stage2_smoothed_lift_cm",
             "stage2_pre_solve_clavicle_lift_from_pelvis_cm",
             "stage2_target_clavicle_lift_from_pelvis_cm",
             "stage2_applied_clavicle_lift_cm",
+            "stage2_applied_clavicle_helper_lift_cm",
+            "stage2_direct_upper_arm_lift_cm",
+            "stage2_direct_lower_arm_lift_cm",
+            "stage2_direct_hand_lift_cm",
         ):
             signal_name = f"{signal_prefix}.{field.removeprefix('stage2_')}"
             add_path_signal(signals, samples, signal_name, "shoulders_stage2_debug", ["solver", solver_name, field], "solver")
@@ -1009,6 +1119,25 @@ def extract_signals(samples):
             "manny.pelvis.world_loc.z",
             "manny",
         )
+        for deformation_bone in LIVE_STAGE2_DEFORMATION_BONES[side]:
+            if deformation_bone == clavicle_bone:
+                continue
+            add_difference_signal(
+                signals,
+                f"manny.{deformation_bone}_lift_from_pelvis",
+                "shoulder_deformation",
+                f"manny.{deformation_bone}.loc.z",
+                "manny.pelvis.loc.z",
+                "manny",
+            )
+            add_difference_signal(
+                signals,
+                f"manny.{deformation_bone}_world_lift_from_pelvis",
+                "shoulder_deformation",
+                f"manny.{deformation_bone}.world_loc.z",
+                "manny.pelvis.world_loc.z",
+                "manny",
+            )
 
     add_path_signal(signals, samples, "face.score", "head_mp_diagnostic", ["face", "score"], "face")
     add_path_signal(signals, samples, "face.count", "head_mp_diagnostic", ["face", "count"], "face")
@@ -1118,27 +1247,27 @@ def comparison_metadata(group, pair_kind, source_name, target_name):
         }
     if pair_kind == "mediapipe_candidate_vs_fused_shadow_measure" and group == "shoulders":
         return {
-            "comparison_role": "ownership_conflict_comparison",
-            "authority_policy": "quest_shoulders_authoritative_candidate_diagnostic_only",
-            "interpretation": "The fused shadow shoulder is Quest/mixed-owned, so MP-candidate-vs-shadow shoulder rows are ownership-conflict checks, not MediaPipe shoulder tracking failures.",
+            "comparison_role": "fusion_shoulder_source_correlation",
+            "authority_policy": "fusion_owns_avatar_shoulders_mediapipe_shoulders_are_source_evidence",
+            "interpretation": "MediaPipe candidate shoulders should correlate with fused shoulder context; inferred Quest shoulders are context only, not avatar owners.",
         }
     if pair_kind in {"shoulder_conflict_measure", "stage2_output_shoulder_compare"}:
         return {
-            "comparison_role": "ownership_conflict_comparison",
-            "authority_policy": "quest_shoulders_authoritative_no_mediapipe_shoulder_authority",
-            "interpretation": "Shoulder output remains Quest/mixed-owned; use MP-candidate-to-MP-world rows for MediaPipe shoulder quality.",
+            "comparison_role": "direct_stage_output_disabled_diagnostic",
+            "authority_policy": "stage2_direct_metahuman_clavicle_output_disabled",
+            "interpretation": "Direct Stage 2 clavicle/helper output is disabled; non-zero applied Stage output is a failure, flat direct output is expected.",
         }
     if pair_kind == "quest_shoulder_output_measure":
         return {
-            "comparison_role": "quest_shoulder_output_verification",
-            "authority_policy": "quest_shoulders_authoritative_no_mediapipe_shoulder_authority",
-            "interpretation": "Quest shoulder to fused shoulder rows verify the expected owner path; they are not MediaPipe shoulder quality rows.",
+            "comparison_role": "inferred_quest_shoulder_context",
+            "authority_policy": "quest_shoulders_are_inferred_context_not_avatar_authority",
+            "interpretation": "Quest shoulder rows are inferred context from endpoints; they must not override MediaPipe shoulder/shrug evidence.",
         }
     if group == "arms_measure_only" or pair_kind.startswith("arm_conflict_") or pair_kind == "quest_arm_output_measure":
         return {
             "comparison_role": "measure_only_no_authority",
-            "authority_policy": "quest_hands_wrists_arms_fingers_authoritative_no_mediapipe_arm_fallback",
-            "interpretation": "Arm rows quantify disagreement and lag only; they do not enable MediaPipe arm fallback.",
+            "authority_policy": "quest_endpoint_observations_no_mediapipe_arm_fallback",
+            "interpretation": "Arm rows quantify endpoint/source disagreement and lag only; they do not enable MediaPipe arm fallback.",
         }
     if pair_kind.startswith("stage1_mediapipe_candidate_pelvis") and target_name.endswith((".x", ".y")):
         return {
@@ -1156,13 +1285,13 @@ def comparison_metadata(group, pair_kind, source_name, target_name):
         return {
             "comparison_role": "stage1_torso_candidate",
             "authority_policy": "stage1_vertical_torso_pelvis_hint_only",
-            "interpretation": "Stage 1 torso diagnostic row; visible head, hands, arms, wrists, and fingers remain Quest/HMD-owned.",
+            "interpretation": "Stage 1 torso diagnostic row; the clean-fusion path does not use direct Stage 1 MetaHuman bone offsets.",
         }
     if pair_kind == "stage1_output_vertical_hint":
         return {
             "comparison_role": "stage1_vertical_hint_output_verification",
             "authority_policy": "stage1_vertical_torso_pelvis_hint_only",
-            "interpretation": "Stage 1 visible-output row; MediaPipe may affect only vertical pelvis/torso output, while head and upper limbs remain under existing HMD/Quest authority.",
+            "interpretation": "Direct Stage 1 visible output is disabled in the clean-fusion path; flat output is expected in this trial.",
         }
     if pair_kind.startswith("stage2_mediapipe_candidate_shoulder"):
         return {
@@ -1173,7 +1302,7 @@ def comparison_metadata(group, pair_kind, source_name, target_name):
     if pair_kind == "hmd_to_fused_head":
         return {
             "comparison_role": "hmd_to_fused_head_output",
-            "authority_policy": "hmd_head_authoritative",
+            "authority_policy": "hmd_head_source_observation_into_fusion",
             "interpretation": "Fused head location is derived from the HMD/eye pose plus avatar head offset; small lateral ranges can make X lag estimates noisy.",
         }
     return {
@@ -1211,9 +1340,9 @@ def pair_metrics(
     metadata = comparison_metadata(group, pair_kind, source_name, target_name)
     if stage2_active and pair_kind == "stage2_output_shoulder_compare":
         metadata = {
-            "comparison_role": "stage2_clavicle_vertical_hint_output_verification",
-            "authority_policy": "stage2_clavicle_vertical_hint_only_no_arm_endpoint_authority",
-            "interpretation": "Stage 2A visible-output row; MediaPipe may affect only bounded vertical clavicle translation while arms, wrists, hands, fingers, and full arm IK endpoints remain under existing authority.",
+            "comparison_role": "direct_stage_output_disabled_diagnostic",
+            "authority_policy": "stage2_direct_metahuman_clavicle_output_disabled",
+            "interpretation": "Direct Stage 2 clavicle/helper output is disabled; non-zero applied Stage output is a failure, flat direct output is expected.",
         }
     measurement_only = (
         group in {"arms_measure_only", "lower_body_measure_only"}
@@ -3326,26 +3455,80 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
         names = {
             "valid": stage2_debug_signal_name(side, "shoulder_clavicle_hint_valid"),
             "suppressed": stage2_debug_signal_name(side, "shoulder_clavicle_suppressed_by_contradiction"),
+            "arm_ownership_suppressed": stage2_debug_signal_name(side, "shoulder_clavicle_suppressed_by_arm_ownership"),
             "had_contradiction_source": stage2_debug_signal_name(side, "shoulder_clavicle_had_contradiction_source"),
+            "had_quest_arm_raise_source": stage2_debug_signal_name(side, "shoulder_clavicle_had_quest_arm_raise_source"),
+            "neutral_ready": stage2_debug_signal_name(side, "neutral_reference_ready"),
+            "neutral_sample": stage2_debug_signal_name(side, "neutral_sample_accepted"),
+            "clamp_hit": stage2_debug_signal_name(side, "clamp_hit"),
+            "source_mode": stage2_debug_signal_name(side, "signal_source_mode"),
+            "source_reliability": stage2_debug_signal_name(side, "signal_source_reliability"),
+            "neutral_seconds": stage2_debug_signal_name(side, "neutral_observation_seconds"),
             "candidate": stage2_debug_signal_name(side, "candidate_shoulder_lift_from_pelvis_cm"),
             "reference": stage2_debug_signal_name(side, "reference_shoulder_lift_from_pelvis_cm"),
             "raw_delta": stage2_debug_signal_name(side, "raw_lift_delta_cm"),
+            "clearance": stage2_debug_signal_name(side, "shoulder_head_clearance_cm"),
+            "clearance_reference": stage2_debug_signal_name(side, "shoulder_head_clearance_reference_cm"),
+            "clearance_shrug": stage2_debug_signal_name(side, "shoulder_head_clearance_shrug_cm"),
+            "clearance_primary": stage2_debug_signal_name(side, "clearance_primary_evidence_cm"),
+            "raw_lift_confirmation": stage2_debug_signal_name(side, "raw_lift_confirmation_weight"),
+            "signed_evidence": stage2_debug_signal_name(side, "signed_lift_evidence_cm"),
+            "signed_target": stage2_debug_signal_name(side, "signed_target_lift_cm"),
+            "applied_response_scale": stage2_debug_signal_name(side, "applied_response_scale"),
+            "positive_evidence": stage2_debug_signal_name(side, "positive_lift_evidence_cm"),
+            "unfaded_target": stage2_debug_signal_name(side, "unfaded_positive_target_lift_cm"),
+            "quest_wrist_lift": stage2_debug_signal_name(side, "quest_wrist_lift_from_pelvis_cm"),
+            "quest_elbow_lift": stage2_debug_signal_name(side, "quest_elbow_lift_from_pelvis_cm"),
+            "ownership_fade": stage2_debug_signal_name(side, "quest_arm_raise_ownership_fade"),
+            "lift_weight": stage2_debug_signal_name(side, "quest_arm_raise_lift_weight"),
             "target": stage2_debug_signal_name(side, "positive_target_lift_cm"),
             "contradiction_delta": stage2_debug_signal_name(side, "contradiction_delta_cm"),
             "smoothed": stage2_debug_signal_name(side, "smoothed_lift_cm"),
             "pre_solve": stage2_debug_signal_name(side, "pre_solve_clavicle_lift_from_pelvis_cm"),
             "target_lift": stage2_debug_signal_name(side, "target_clavicle_lift_from_pelvis_cm"),
             "applied": stage2_debug_signal_name(side, "applied_clavicle_lift_cm"),
+            "helper_applied": stage2_debug_signal_name(side, "applied_clavicle_helper_lift_cm"),
+            "direct_upper": stage2_debug_signal_name(side, "direct_upper_arm_lift_cm"),
+            "direct_lower": stage2_debug_signal_name(side, "direct_lower_arm_lift_cm"),
+            "direct_hand": stage2_debug_signal_name(side, "direct_hand_lift_cm"),
             "visible": f"manny.{clavicle_bone}_world_lift_from_pelvis",
         }
-        recorded = all(name in signals for key, name in names.items() if key != "visible")
+        required_names = (
+            "valid",
+            "suppressed",
+            "had_contradiction_source",
+            "candidate",
+            "reference",
+            "raw_delta",
+            "clearance",
+            "clearance_reference",
+            "clearance_shrug",
+            "positive_evidence",
+            "target",
+            "contradiction_delta",
+            "smoothed",
+            "pre_solve",
+            "target_lift",
+            "applied",
+        )
+        recorded = all(names[key] in signals for key in required_names)
         row = {
             "side": side,
             "recorded": recorded,
             "sample_count": 0,
             "valid_fraction": 0.0,
             "suppressed_fraction": math.nan,
+            "arm_ownership_suppressed_fraction": math.nan,
             "had_contradiction_source_fraction": math.nan,
+            "had_quest_arm_raise_source_fraction": math.nan,
+            "neutral_ready_fraction": math.nan,
+            "neutral_sample_fraction": math.nan,
+            "neutral_sample_during_suppression_fraction": math.nan,
+            "neutral_sample_during_arm_ownership_suppression_fraction": math.nan,
+            "clamp_hit_fraction": math.nan,
+            "signal_source_mode_p50": math.nan,
+            "signal_source_reliability_p50": math.nan,
+            "neutral_observation_seconds_p50": math.nan,
             "candidate_lift_p05": math.nan,
             "candidate_lift_p50": math.nan,
             "candidate_lift_p95": math.nan,
@@ -3353,6 +3536,28 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
             "raw_lift_delta_p05": math.nan,
             "raw_lift_delta_p50": math.nan,
             "raw_lift_delta_p95": math.nan,
+            "shoulder_head_clearance_p50": math.nan,
+            "shoulder_head_clearance_reference_p50": math.nan,
+            "shoulder_head_clearance_shrug_p95": math.nan,
+            "clearance_primary_evidence_p95": math.nan,
+            "raw_lift_confirmation_weight_p50": math.nan,
+            "signed_lift_evidence_p05": math.nan,
+            "signed_lift_evidence_p50": math.nan,
+            "signed_lift_evidence_p95": math.nan,
+            "signed_target_lift_p95": math.nan,
+            "applied_response_scale_p50": math.nan,
+            "positive_lift_evidence_p95": math.nan,
+            "unfaded_positive_target_lift_p95": math.nan,
+            "quest_wrist_lift_from_pelvis_p50": math.nan,
+            "quest_wrist_lift_from_pelvis_p95": math.nan,
+            "quest_elbow_lift_from_pelvis_p50": math.nan,
+            "quest_elbow_lift_from_pelvis_p95": math.nan,
+            "ownership_fade_active_fraction": math.nan,
+            "ownership_fade_full_fraction": math.nan,
+            "ownership_fade_p50": math.nan,
+            "ownership_fade_p95": math.nan,
+            "lift_weight_p05": math.nan,
+            "lift_weight_p50": math.nan,
             "positive_target_lift_p95": math.nan,
             "contradiction_delta_p95": math.nan,
             "smoothed_lift_p95": math.nan,
@@ -3361,6 +3566,10 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
             "applied_clavicle_lift_p05": math.nan,
             "applied_clavicle_lift_p50": math.nan,
             "applied_clavicle_lift_p95": math.nan,
+            "applied_clavicle_helper_lift_p95": math.nan,
+            "direct_upper_arm_lift_p95": math.nan,
+            "direct_lower_arm_lift_p95": math.nan,
+            "direct_hand_lift_p95": math.nan,
             "candidate_to_smoothed_corr": math.nan,
             "candidate_to_smoothed_best_lag_ms": math.nan,
             "target_to_visible_corr": math.nan,
@@ -3385,20 +3594,122 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
 
         suppressed = signals[names["suppressed"]]["values"] > 0.5
         had_contradiction_source = signals[names["had_contradiction_source"]]["values"] > 0.5
+        arm_ownership_suppressed = None
+        neutral_sample = None
         row["suppressed_fraction"] = float(np.count_nonzero(suppressed & valid) / row["sample_count"])
         row["had_contradiction_source_fraction"] = float(np.count_nonzero(had_contradiction_source & valid) / row["sample_count"])
+        if names["arm_ownership_suppressed"] in signals:
+            arm_ownership_suppressed = signals[names["arm_ownership_suppressed"]]["values"] > 0.5
+            row["arm_ownership_suppressed_fraction"] = float(
+                np.count_nonzero(arm_ownership_suppressed & valid) / row["sample_count"]
+            )
+        if names["neutral_ready"] in signals:
+            neutral_ready = signals[names["neutral_ready"]]["values"] > 0.5
+            row["neutral_ready_fraction"] = float(np.count_nonzero(neutral_ready & valid) / row["sample_count"])
+        if names["neutral_sample"] in signals:
+            neutral_sample = signals[names["neutral_sample"]]["values"] > 0.5
+            row["neutral_sample_fraction"] = float(np.count_nonzero(neutral_sample & valid) / row["sample_count"])
+            row["neutral_sample_during_suppression_fraction"] = float(
+                np.count_nonzero(neutral_sample & suppressed & valid) / row["sample_count"]
+            )
+            if arm_ownership_suppressed is not None:
+                row["neutral_sample_during_arm_ownership_suppression_fraction"] = float(
+                    np.count_nonzero(neutral_sample & arm_ownership_suppressed & valid) / row["sample_count"]
+                )
+        if names["clamp_hit"] in signals:
+            clamp_hit = signals[names["clamp_hit"]]["values"] > 0.5
+            row["clamp_hit_fraction"] = float(np.count_nonzero(clamp_hit & valid) / row["sample_count"])
+        if names["had_quest_arm_raise_source"] in signals:
+            had_quest_arm_raise_source = signals[names["had_quest_arm_raise_source"]]["values"] > 0.5
+            row["had_quest_arm_raise_source_fraction"] = float(
+                np.count_nonzero(had_quest_arm_raise_source & valid) / row["sample_count"]
+            )
+
+        for key, field in (
+            ("source_mode", "signal_source_mode_p50"),
+            ("source_reliability", "signal_source_reliability_p50"),
+        ):
+            if names[key] in signals:
+                row[field] = finite_percentile(signals[names[key]]["values"][valid], 50)
+        if names["neutral_seconds"] in signals:
+            row["neutral_observation_seconds_p50"] = finite_percentile(
+                signals[names["neutral_seconds"]]["values"][valid],
+                50,
+            )
 
         for key, prefix in (
             ("candidate", "candidate_lift"),
             ("raw_delta", "raw_lift_delta"),
+            ("clearance_shrug", "shoulder_head_clearance_shrug"),
+            ("positive_evidence", "positive_lift_evidence"),
             ("applied", "applied_clavicle_lift"),
         ):
             values = signals[names[key]]["values"][valid]
             row[f"{prefix}_p05"] = finite_percentile(values, 5)
             row[f"{prefix}_p50"] = finite_percentile(values, 50)
             row[f"{prefix}_p95"] = finite_percentile(values, 95)
+        if names["signed_evidence"] in signals:
+            values = signals[names["signed_evidence"]]["values"][valid]
+            row["signed_lift_evidence_p05"] = finite_percentile(values, 5)
+            row["signed_lift_evidence_p50"] = finite_percentile(values, 50)
+            row["signed_lift_evidence_p95"] = finite_percentile(values, 95)
+        if names["signed_target"] in signals:
+            row["signed_target_lift_p95"] = finite_percentile(
+                signals[names["signed_target"]]["values"][valid],
+                95,
+            )
+        if names["applied_response_scale"] in signals:
+            row["applied_response_scale_p50"] = finite_percentile(
+                signals[names["applied_response_scale"]]["values"][valid],
+                50,
+            )
+        if names["clearance_primary"] in signals:
+            values = signals[names["clearance_primary"]]["values"][valid]
+            row["clearance_primary_evidence_p05"] = finite_percentile(values, 5)
+            row["clearance_primary_evidence_p50"] = finite_percentile(values, 50)
+            row["clearance_primary_evidence_p95"] = finite_percentile(values, 95)
+        if names["raw_lift_confirmation"] in signals:
+            row["raw_lift_confirmation_weight_p50"] = finite_percentile(
+                signals[names["raw_lift_confirmation"]]["values"][valid],
+                50,
+            )
+        if names["unfaded_target"] in signals:
+            row["unfaded_positive_target_lift_p95"] = finite_percentile(
+                signals[names["unfaded_target"]]["values"][valid],
+                95,
+            )
+        for key, prefix in (
+            ("quest_wrist_lift", "quest_wrist_lift_from_pelvis"),
+            ("quest_elbow_lift", "quest_elbow_lift_from_pelvis"),
+        ):
+            if names[key] in signals:
+                values = signals[names[key]]["values"][valid]
+                row[f"{prefix}_p50"] = finite_percentile(values, 50)
+                row[f"{prefix}_p95"] = finite_percentile(values, 95)
+        if names["ownership_fade"] in signals:
+            values = signals[names["ownership_fade"]]["values"][valid]
+            finite_values = finite(values)
+            row["ownership_fade_p50"] = finite_percentile(values, 50)
+            row["ownership_fade_p95"] = finite_percentile(values, 95)
+            if finite_values.size:
+                row["ownership_fade_active_fraction"] = float(np.count_nonzero(finite_values > 0.01) / finite_values.size)
+                row["ownership_fade_full_fraction"] = float(np.count_nonzero(finite_values >= 0.99) / finite_values.size)
+        if names["lift_weight"] in signals:
+            values = signals[names["lift_weight"]]["values"][valid]
+            row["lift_weight_p05"] = finite_percentile(values, 5)
+            row["lift_weight_p50"] = finite_percentile(values, 50)
+        for key, field in (
+            ("helper_applied", "applied_clavicle_helper_lift_p95"),
+            ("direct_upper", "direct_upper_arm_lift_p95"),
+            ("direct_lower", "direct_lower_arm_lift_p95"),
+            ("direct_hand", "direct_hand_lift_p95"),
+        ):
+            if names[key] in signals:
+                row[field] = finite_percentile(signals[names[key]]["values"][valid], 95)
         for key, field in (
             ("reference", "reference_lift_p50"),
+            ("clearance", "shoulder_head_clearance_p50"),
+            ("clearance_reference", "shoulder_head_clearance_reference_p50"),
             ("target", "positive_target_lift_p95"),
             ("contradiction_delta", "contradiction_delta_p95"),
             ("smoothed", "smoothed_lift_p95"),
@@ -3424,9 +3735,24 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
             row[f"{prefix}_corr"] = corr
             row[f"{prefix}_best_lag_ms"] = lag * 1000.0 if np.isfinite(lag) else math.nan
 
-        if row["suppressed_fraction"] > 0.25:
+        if (
+            np.isfinite(row["neutral_sample_during_suppression_fraction"])
+            and row["neutral_sample_during_suppression_fraction"] > 0.0
+        ):
+            row["diagnostic_status"] = "neutral_sample_during_suppression"
+            row["interpretation"] = "Stage 2A accepted neutral samples while a suppression gate was active; this can poison the shoulder reference."
+        elif np.isfinite(row["clamp_hit_fraction"]) and row["clamp_hit_fraction"] > 0.05:
+            row["diagnostic_status"] = "stage2_clamp_hits"
+            row["interpretation"] = "Stage 2A still hits the clavicle lift clamp too often; treat the run as unsafe until the source window is reviewed."
+        elif np.isfinite(row["neutral_ready_fraction"]) and row["neutral_ready_fraction"] < 0.5:
+            row["diagnostic_status"] = "neutral_reference_not_ready"
+            row["interpretation"] = "Stage 2A failed closed because an observed neutral shoulder reference was not ready for most valid samples."
+        elif row["suppressed_fraction"] > 0.25:
             row["diagnostic_status"] = "contradiction_suppressed"
             row["interpretation"] = "Contradiction gating suppressed a substantial fraction of Stage 2A samples."
+        elif np.isfinite(row["arm_ownership_suppressed_fraction"]) and row["arm_ownership_suppressed_fraction"] > 0.25:
+            row["diagnostic_status"] = "quest_arm_ownership_suppressed"
+            row["interpretation"] = "Stage 2A failed closed during Quest arm ownership windows; this is expected during arm raises."
         elif np.isfinite(row["applied_clavicle_lift_p50"]) and row["applied_clavicle_lift_p50"] < -0.1:
             row["diagnostic_status"] = "post_arm_solve_overwrite_downward"
             row["interpretation"] = "Stage 2A is often writing below the post-arm-solve clavicle position."
@@ -3442,12 +3768,305 @@ def stage2_debug_diagnostic_rows(times, sample_total, signals):
 
 def summarize_stage2_debug(rows):
     recorded_rows = [row for row in rows if row["recorded"]]
+    ownership_fade_active = [
+        to_float(row.get("ownership_fade_active_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("ownership_fade_active_fraction")))
+    ]
+    ownership_fade_full = [
+        to_float(row.get("ownership_fade_full_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("ownership_fade_full_fraction")))
+    ]
+    lift_weight_p05 = [
+        to_float(row.get("lift_weight_p05"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("lift_weight_p05")))
+    ]
+    quest_wrist_lift_p95 = [
+        to_float(row.get("quest_wrist_lift_from_pelvis_p95"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("quest_wrist_lift_from_pelvis_p95")))
+    ]
+    unfaded_target_p95 = [
+        to_float(row.get("unfaded_positive_target_lift_p95"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("unfaded_positive_target_lift_p95")))
+    ]
+    neutral_ready = [
+        to_float(row.get("neutral_ready_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("neutral_ready_fraction")))
+    ]
+    arm_ownership_suppressed = [
+        to_float(row.get("arm_ownership_suppressed_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("arm_ownership_suppressed_fraction")))
+    ]
+    neutral_sample_during_suppression = [
+        to_float(row.get("neutral_sample_during_suppression_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("neutral_sample_during_suppression_fraction")))
+    ]
+    neutral_sample_during_arm_ownership_suppression = [
+        to_float(row.get("neutral_sample_during_arm_ownership_suppression_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("neutral_sample_during_arm_ownership_suppression_fraction")))
+    ]
+    clamp_hit = [
+        to_float(row.get("clamp_hit_fraction"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("clamp_hit_fraction")))
+    ]
+    signed_evidence_p95 = [
+        to_float(row.get("signed_lift_evidence_p95"))
+        for row in recorded_rows
+        if np.isfinite(to_float(row.get("signed_lift_evidence_p95")))
+    ]
     return {
         "recorded": bool(recorded_rows),
         "sides_recorded": [row["side"] for row in recorded_rows],
         "status_by_side": {row["side"]: row["diagnostic_status"] for row in rows},
         "needs_new_vr_preview_for_stage2_debug": not bool(recorded_rows),
+        "min_neutral_ready_fraction": min(neutral_ready, default=math.nan),
+        "max_arm_ownership_suppressed_fraction": max(arm_ownership_suppressed, default=math.nan),
+        "max_neutral_sample_during_suppression_fraction": max(neutral_sample_during_suppression, default=math.nan),
+        "max_neutral_sample_during_arm_ownership_suppression_fraction": max(
+            neutral_sample_during_arm_ownership_suppression,
+            default=math.nan,
+        ),
+        "max_clamp_hit_fraction": max(clamp_hit, default=math.nan),
+        "max_ownership_fade_active_fraction": max(ownership_fade_active, default=math.nan),
+        "mean_ownership_fade_active_fraction": float(np.nanmean(ownership_fade_active)) if ownership_fade_active else math.nan,
+        "max_ownership_fade_full_fraction": max(ownership_fade_full, default=math.nan),
+        "min_lift_weight_p05": min(lift_weight_p05, default=math.nan),
+        "max_quest_wrist_lift_from_pelvis_p95_cm": max(quest_wrist_lift_p95, default=math.nan),
+        "max_unfaded_positive_target_lift_p95_cm": max(unfaded_target_p95, default=math.nan),
+        "max_signed_lift_evidence_p95_cm": max(signed_evidence_p95, default=math.nan),
         "rows": rows,
+    }
+
+
+def stage2_debug_values(signals, side, field):
+    name = stage2_debug_signal_name(side, field)
+    return signals[name]["values"] if name in signals else None
+
+
+def stage2_motion_window_not_recorded_row(status="not_recorded"):
+    return {
+        "window": "not_recorded",
+        "side": "",
+        "role": "",
+        "sample_count": 0,
+        "valid_fraction": 0.0,
+        "applied_lift_mean_cm": math.nan,
+        "applied_lift_p50_cm": math.nan,
+        "applied_lift_p95_cm": math.nan,
+        "smoothed_lift_p95_cm": math.nan,
+        "positive_target_lift_p95_cm": math.nan,
+        "signed_evidence_p50_cm": math.nan,
+        "signed_evidence_p95_cm": math.nan,
+        "clamp_hit_fraction": math.nan,
+        "neutral_ready_fraction": math.nan,
+        "arm_ownership_suppressed_fraction": math.nan,
+        "over_2cm_fraction": math.nan,
+        "sticky_neutral_samples_over_2cm": 0,
+        "sticky_neutral_fraction_over_2cm": math.nan,
+        "diagnostic_status": status,
+        "interpretation": "Stage 2A motion-window fields were not fully recorded; rerun VR Preview with the instrumented build.",
+    }
+
+
+def stage2_motion_window_rows(sample_total, signals):
+    left_valid = stage2_debug_values(signals, "left", "shoulder_clavicle_hint_valid")
+    right_valid = stage2_debug_values(signals, "right", "shoulder_clavicle_hint_valid")
+    left_wrist = stage2_debug_values(signals, "left", "quest_wrist_lift_from_pelvis_cm")
+    left_elbow = stage2_debug_values(signals, "left", "quest_elbow_lift_from_pelvis_cm")
+    right_wrist = stage2_debug_values(signals, "right", "quest_wrist_lift_from_pelvis_cm")
+    right_elbow = stage2_debug_values(signals, "right", "quest_elbow_lift_from_pelvis_cm")
+    if any(values is None for values in (left_valid, right_valid, left_wrist, left_elbow, right_wrist, right_elbow)):
+        return [stage2_motion_window_not_recorded_row()]
+
+    left_arm_lift = np.maximum(left_wrist, left_elbow)
+    right_arm_lift = np.maximum(right_wrist, right_elbow)
+    arms_down_max_cm = 20.0
+    arm_up_min_cm = 35.0
+    windows = {
+        "arms_down": (left_arm_lift <= arms_down_max_cm) & (right_arm_lift <= arms_down_max_cm),
+        "left_only": (left_arm_lift >= arm_up_min_cm) & (right_arm_lift <= arms_down_max_cm),
+        "right_only": (right_arm_lift >= arm_up_min_cm) & (left_arm_lift <= arms_down_max_cm),
+        "both_up": (left_arm_lift >= arm_up_min_cm) & (right_arm_lift >= arm_up_min_cm),
+    }
+
+    rows = []
+    for window_name, window_mask in windows.items():
+        for side in ("left", "right"):
+            valid_values = stage2_debug_values(signals, side, "shoulder_clavicle_hint_valid")
+            applied = stage2_debug_values(signals, side, "applied_clavicle_lift_cm")
+            smoothed = stage2_debug_values(signals, side, "smoothed_lift_cm")
+            target = stage2_debug_values(signals, side, "positive_target_lift_cm")
+            signed_evidence = stage2_debug_values(signals, side, "signed_lift_evidence_cm")
+            clamp_hit = stage2_debug_values(signals, side, "clamp_hit")
+            neutral_ready = stage2_debug_values(signals, side, "neutral_reference_ready")
+            arm_suppressed = stage2_debug_values(signals, side, "shoulder_clavicle_suppressed_by_arm_ownership")
+            if any(values is None for values in (valid_values, applied, smoothed, target, signed_evidence)):
+                continue
+
+            mask = (
+                window_mask
+                & (valid_values > 0.5)
+                & np.isfinite(applied)
+                & np.isfinite(smoothed)
+                & np.isfinite(target)
+                & np.isfinite(signed_evidence)
+            )
+            count = int(np.count_nonzero(mask))
+            role = "arms_down_side"
+            if window_name == "left_only":
+                role = "raised_side" if side == "left" else "opposite_side"
+            elif window_name == "right_only":
+                role = "raised_side" if side == "right" else "opposite_side"
+            elif window_name == "both_up":
+                role = "both_arms_up"
+
+            row = {
+                "window": window_name,
+                "side": side,
+                "role": role,
+                "sample_count": count,
+                "valid_fraction": count / sample_total if sample_total > 0 else 0.0,
+                "applied_lift_mean_cm": math.nan,
+                "applied_lift_p50_cm": math.nan,
+                "applied_lift_p95_cm": math.nan,
+                "smoothed_lift_p95_cm": math.nan,
+                "positive_target_lift_p95_cm": math.nan,
+                "signed_evidence_p50_cm": math.nan,
+                "signed_evidence_p95_cm": math.nan,
+                "clamp_hit_fraction": math.nan,
+                "neutral_ready_fraction": math.nan,
+                "arm_ownership_suppressed_fraction": math.nan,
+                "over_2cm_fraction": math.nan,
+                "sticky_neutral_samples_over_2cm": 0,
+                "sticky_neutral_fraction_over_2cm": math.nan,
+                "diagnostic_status": "insufficient_samples",
+                "interpretation": "Not enough samples in this motion window to judge Stage 2A behavior.",
+            }
+            if count < 8:
+                rows.append(row)
+                continue
+
+            applied_window = applied[mask]
+            smoothed_window = smoothed[mask]
+            target_window = target[mask]
+            signed_window = signed_evidence[mask]
+            row["applied_lift_mean_cm"] = float(np.nanmean(applied_window))
+            row["applied_lift_p50_cm"] = finite_percentile(applied_window, 50)
+            row["applied_lift_p95_cm"] = finite_percentile(applied_window, 95)
+            row["smoothed_lift_p95_cm"] = finite_percentile(smoothed_window, 95)
+            row["positive_target_lift_p95_cm"] = finite_percentile(target_window, 95)
+            row["signed_evidence_p50_cm"] = finite_percentile(signed_window, 50)
+            row["signed_evidence_p95_cm"] = finite_percentile(signed_window, 95)
+            row["over_2cm_fraction"] = float(np.count_nonzero(applied_window > 2.0) / count)
+            if clamp_hit is not None:
+                row["clamp_hit_fraction"] = float(np.count_nonzero((clamp_hit > 0.5) & mask) / count)
+            if neutral_ready is not None:
+                row["neutral_ready_fraction"] = float(np.count_nonzero((neutral_ready > 0.5) & mask) / count)
+            if arm_suppressed is not None:
+                row["arm_ownership_suppressed_fraction"] = float(np.count_nonzero((arm_suppressed > 0.5) & mask) / count)
+
+            neutral_release = mask & (np.abs(signed_evidence) <= 1.0) & (target <= 0.25)
+            neutral_release_count = int(np.count_nonzero(neutral_release))
+            if neutral_release_count:
+                sticky_count = int(np.count_nonzero(neutral_release & (applied > 2.0)))
+                row["sticky_neutral_samples_over_2cm"] = sticky_count
+                row["sticky_neutral_fraction_over_2cm"] = sticky_count / neutral_release_count
+
+            if window_name == "arms_down":
+                if row["sticky_neutral_samples_over_2cm"] > 0:
+                    row["diagnostic_status"] = "arms_down_sticky_lift"
+                    row["interpretation"] = "Stage 2A still has >2 cm applied lift while signed evidence and target are neutral."
+                elif np.isfinite(row["applied_lift_p95_cm"]) and row["applied_lift_p95_cm"] > 1.0:
+                    row["diagnostic_status"] = "arms_down_residual_lift"
+                    row["interpretation"] = "Stage 2A arms-down applied lift is above the expected quiet threshold."
+                else:
+                    row["diagnostic_status"] = "pass"
+                    row["interpretation"] = "Stage 2A stays quiet during arms-down neutral windows."
+            elif role == "opposite_side":
+                if (
+                    np.isfinite(row["applied_lift_mean_cm"])
+                    and np.isfinite(row["applied_lift_p95_cm"])
+                    and row["applied_lift_mean_cm"] < 0.5
+                    and row["applied_lift_p95_cm"] < 1.0
+                ):
+                    row["diagnostic_status"] = "pass"
+                    row["interpretation"] = "Opposite-side clavicle lift stayed below the contamination threshold."
+                else:
+                    row["diagnostic_status"] = "opposite_side_contamination"
+                    row["interpretation"] = "One-arm window still lifts the opposite Stage 2A clavicle too much."
+            elif role == "raised_side":
+                if np.isfinite(row["arm_ownership_suppressed_fraction"]) and row["arm_ownership_suppressed_fraction"] > 0.5:
+                    row["diagnostic_status"] = "quest_arm_ownership_suppressed"
+                    row["interpretation"] = "Raised Quest arm correctly caused Stage 2A to fail closed on this side."
+                else:
+                    row["diagnostic_status"] = "recorded"
+                    row["interpretation"] = "Raised-side window recorded; inspect target and suppression fractions."
+            else:
+                row["diagnostic_status"] = "recorded"
+                row["interpretation"] = "Motion window recorded for context."
+            rows.append(row)
+    return rows if rows else [stage2_motion_window_not_recorded_row("partial_not_recorded")]
+
+
+def summarize_stage2_motion_windows(rows):
+    recorded = [row for row in rows if row.get("diagnostic_status") != "not_recorded"]
+    arms_down = [row for row in recorded if row.get("window") == "arms_down" and row.get("sample_count", 0) >= 8]
+    opposite = [row for row in recorded if row.get("role") == "opposite_side" and row.get("sample_count", 0) >= 8]
+    sticky_counts = [
+        to_float(row.get("sticky_neutral_samples_over_2cm"))
+        for row in arms_down
+        if np.isfinite(to_float(row.get("sticky_neutral_samples_over_2cm")))
+    ]
+    sticky_fractions = [
+        to_float(row.get("sticky_neutral_fraction_over_2cm"))
+        for row in arms_down
+        if np.isfinite(to_float(row.get("sticky_neutral_fraction_over_2cm")))
+    ]
+    opposite_means = [
+        to_float(row.get("applied_lift_mean_cm"))
+        for row in opposite
+        if np.isfinite(to_float(row.get("applied_lift_mean_cm")))
+    ]
+    opposite_p95 = [
+        to_float(row.get("applied_lift_p95_cm"))
+        for row in opposite
+        if np.isfinite(to_float(row.get("applied_lift_p95_cm")))
+    ]
+    failed_rows = [
+        row
+        for row in recorded
+        if row.get("diagnostic_status") in {"arms_down_sticky_lift", "arms_down_residual_lift", "opposite_side_contamination"}
+    ]
+    return {
+        "recorded": bool(recorded),
+        "needs_new_vr_preview_for_stage2_windows": not bool(recorded),
+        "arms_down_rows": len(arms_down),
+        "opposite_side_rows": len(opposite),
+        "max_arms_down_sticky_samples_over_2cm": max(sticky_counts, default=math.nan),
+        "max_arms_down_sticky_fraction_over_2cm": max(sticky_fractions, default=math.nan),
+        "max_opposite_side_applied_lift_mean_cm": max(opposite_means, default=math.nan),
+        "max_opposite_side_applied_lift_p95_cm": max(opposite_p95, default=math.nan),
+        "failed_window_count": len(failed_rows),
+        "failed_windows": [
+            {
+                "window": row.get("window"),
+                "side": row.get("side"),
+                "status": row.get("diagnostic_status"),
+                "applied_lift_mean_cm": row.get("applied_lift_mean_cm"),
+                "applied_lift_p95_cm": row.get("applied_lift_p95_cm"),
+                "sticky_neutral_samples_over_2cm": row.get("sticky_neutral_samples_over_2cm"),
+            }
+            for row in failed_rows
+        ],
     }
 
 
@@ -3616,16 +4235,110 @@ def summarize_stage2_conflict_readiness(input_path, rows, stage2_debug_rows, sol
         for row in debug_recorded_rows
         if np.isfinite(to_float(row.get("applied_clavicle_lift_p95")))
     ]
+    debug_helper_lift_p95 = [
+        to_float(row.get("applied_clavicle_helper_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("applied_clavicle_helper_lift_p95")))
+    ]
     debug_suppressed_fraction = [
         to_float(row.get("suppressed_fraction"))
         for row in debug_recorded_rows
         if np.isfinite(to_float(row.get("suppressed_fraction")))
+    ]
+    debug_arm_ownership_suppressed_fraction = [
+        to_float(row.get("arm_ownership_suppressed_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("arm_ownership_suppressed_fraction")))
+    ]
+    debug_neutral_ready_fraction = [
+        to_float(row.get("neutral_ready_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("neutral_ready_fraction")))
+    ]
+    debug_neutral_sample_during_suppression_fraction = [
+        to_float(row.get("neutral_sample_during_suppression_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("neutral_sample_during_suppression_fraction")))
+    ]
+    debug_neutral_sample_during_arm_ownership_suppression_fraction = [
+        to_float(row.get("neutral_sample_during_arm_ownership_suppression_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("neutral_sample_during_arm_ownership_suppression_fraction")))
+    ]
+    debug_clamp_hit_fraction = [
+        to_float(row.get("clamp_hit_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("clamp_hit_fraction")))
+    ]
+    debug_had_quest_arm_raise_source_fraction = [
+        to_float(row.get("had_quest_arm_raise_source_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("had_quest_arm_raise_source_fraction")))
+    ]
+    debug_ownership_fade_active_fraction = [
+        to_float(row.get("ownership_fade_active_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("ownership_fade_active_fraction")))
+    ]
+    debug_ownership_fade_full_fraction = [
+        to_float(row.get("ownership_fade_full_fraction"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("ownership_fade_full_fraction")))
+    ]
+    debug_lift_weight_p05 = [
+        to_float(row.get("lift_weight_p05"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("lift_weight_p05")))
+    ]
+    debug_quest_wrist_lift_p95 = [
+        to_float(row.get("quest_wrist_lift_from_pelvis_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("quest_wrist_lift_from_pelvis_p95")))
+    ]
+    debug_unfaded_target_p95 = [
+        to_float(row.get("unfaded_positive_target_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("unfaded_positive_target_lift_p95")))
+    ]
+    debug_direct_upper_arm_lift_p95 = [
+        to_float(row.get("direct_upper_arm_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("direct_upper_arm_lift_p95")))
+    ]
+    debug_direct_lower_arm_lift_p95 = [
+        to_float(row.get("direct_lower_arm_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("direct_lower_arm_lift_p95")))
+    ]
+    debug_direct_hand_lift_p95 = [
+        to_float(row.get("direct_hand_lift_p95"))
+        for row in debug_recorded_rows
+        if np.isfinite(to_float(row.get("direct_hand_lift_p95")))
     ]
     debug_applied_visible_corr = [
         to_float(row.get("applied_to_visible_corr"))
         for row in debug_recorded_rows
         if np.isfinite(to_float(row.get("applied_to_visible_corr")))
     ]
+    arm_raise_gate_debug_ready = (
+        bool(debug_had_quest_arm_raise_source_fraction)
+        and bool(debug_ownership_fade_active_fraction)
+        and bool(debug_ownership_fade_full_fraction)
+        and bool(debug_lift_weight_p05)
+        and bool(debug_quest_wrist_lift_p95)
+        and bool(debug_unfaded_target_p95)
+    )
+    stage2_debug_max_direct_upper_arm_lift_p95_cm = max(debug_direct_upper_arm_lift_p95, default=math.nan)
+    stage2_debug_max_direct_lower_arm_lift_p95_cm = max(debug_direct_lower_arm_lift_p95, default=math.nan)
+    stage2_debug_max_direct_hand_lift_p95_cm = max(debug_direct_hand_lift_p95, default=math.nan)
+    stage2_no_direct_arm_stage2_write = (
+        np.isfinite(stage2_debug_max_direct_upper_arm_lift_p95_cm)
+        and np.isfinite(stage2_debug_max_direct_lower_arm_lift_p95_cm)
+        and np.isfinite(stage2_debug_max_direct_hand_lift_p95_cm)
+        and stage2_debug_max_direct_upper_arm_lift_p95_cm <= 0.25
+        and stage2_debug_max_direct_lower_arm_lift_p95_cm <= 0.25
+        and stage2_debug_max_direct_hand_lift_p95_cm <= 0.25
+    )
     input_stem = Path(input_path).stem.lower()
     is_conflict_stress_capture = "conflict" in input_stem and "stress" in input_stem
     instrumentation_ready = (
@@ -3636,6 +4349,8 @@ def summarize_stage2_conflict_readiness(input_path, rows, stage2_debug_rows, sol
         and bool(stage2_output_rows)
         and len(stage2_output_pass) == len(stage2_output_rows)
         and arm_rows_measurement_only
+        and arm_raise_gate_debug_ready
+        and stage2_no_direct_arm_stage2_write
     )
     if instrumentation_ready and is_conflict_stress_capture:
         status = "conflict_stress_capture_ready_for_review"
@@ -3670,17 +4385,76 @@ def summarize_stage2_conflict_readiness(input_path, rows, stage2_debug_rows, sol
             "pre_solve_clavicle_lift",
             "target_clavicle_lift",
             "applied_clavicle_lift",
+            "applied_clavicle_helper_lift",
+            "neutral_ready_fraction",
+            "arm_ownership_suppressed_fraction",
+            "neutral_sample_during_suppression_fraction",
+            "neutral_sample_during_arm_ownership_suppression_fraction",
+            "clamp_hit_fraction",
+            "had_quest_arm_raise_source_fraction",
+            "quest_wrist_lift_from_pelvis_p95",
+            "ownership_fade_active_fraction",
+            "ownership_fade_full_fraction",
+            "lift_weight_p05",
+            "unfaded_positive_target_lift_p95",
+            "direct_upper_arm_lift_p95",
+            "direct_lower_arm_lift_p95",
+            "direct_hand_lift_p95",
             "visible_clavicle_output_correlation",
         ],
         "stage2_debug_max_suppressed_fraction": max(debug_suppressed_fraction, default=math.nan),
+        "stage2_debug_min_neutral_ready_fraction": min(debug_neutral_ready_fraction, default=math.nan),
+        "stage2_debug_max_arm_ownership_suppressed_fraction": max(debug_arm_ownership_suppressed_fraction, default=math.nan),
+        "stage2_debug_max_neutral_sample_during_suppression_fraction": max(
+            debug_neutral_sample_during_suppression_fraction,
+            default=math.nan,
+        ),
+        "stage2_debug_max_neutral_sample_during_arm_ownership_suppression_fraction": max(
+            debug_neutral_sample_during_arm_ownership_suppression_fraction,
+            default=math.nan,
+        ),
+        "stage2_debug_max_clamp_hit_fraction": max(debug_clamp_hit_fraction, default=math.nan),
+        "stage2_arm_raise_gate_debug_ready": arm_raise_gate_debug_ready,
+        "stage2_debug_max_had_quest_arm_raise_source_fraction": max(debug_had_quest_arm_raise_source_fraction, default=math.nan),
+        "stage2_debug_max_ownership_fade_active_fraction": max(debug_ownership_fade_active_fraction, default=math.nan),
+        "stage2_debug_mean_ownership_fade_active_fraction": float(np.nanmean(debug_ownership_fade_active_fraction)) if debug_ownership_fade_active_fraction else math.nan,
+        "stage2_debug_max_ownership_fade_full_fraction": max(debug_ownership_fade_full_fraction, default=math.nan),
+        "stage2_debug_min_lift_weight_p05": min(debug_lift_weight_p05, default=math.nan),
+        "stage2_debug_max_quest_wrist_lift_from_pelvis_p95_cm": max(debug_quest_wrist_lift_p95, default=math.nan),
+        "stage2_debug_max_unfaded_positive_target_lift_p95_cm": max(debug_unfaded_target_p95, default=math.nan),
+        "stage2_debug_max_direct_upper_arm_lift_p95_cm": stage2_debug_max_direct_upper_arm_lift_p95_cm,
+        "stage2_debug_max_direct_lower_arm_lift_p95_cm": stage2_debug_max_direct_lower_arm_lift_p95_cm,
+        "stage2_debug_max_direct_hand_lift_p95_cm": stage2_debug_max_direct_hand_lift_p95_cm,
+        "stage2_no_direct_arm_stage2_write": stage2_no_direct_arm_stage2_write,
+        "stage2_arm_raise_gate_max_source_fraction": max(debug_had_quest_arm_raise_source_fraction, default=math.nan),
+        "stage2_arm_raise_gate_max_ownership_fade_active_fraction": max(debug_ownership_fade_active_fraction, default=math.nan),
+        "stage2_arm_raise_gate_mean_ownership_fade_active_fraction": float(np.nanmean(debug_ownership_fade_active_fraction)) if debug_ownership_fade_active_fraction else math.nan,
+        "stage2_arm_raise_gate_max_ownership_fade_full_fraction": max(debug_ownership_fade_full_fraction, default=math.nan),
+        "stage2_arm_raise_gate_min_lift_weight_p05": min(debug_lift_weight_p05, default=math.nan),
+        "stage2_arm_raise_gate_max_quest_wrist_lift_from_pelvis_p95_cm": max(debug_quest_wrist_lift_p95, default=math.nan),
+        "stage2_arm_raise_gate_max_unfaded_positive_target_lift_p95_cm": max(debug_unfaded_target_p95, default=math.nan),
+        "stage2_direct_arm_write_max_p95_cm": max(
+            (
+                value
+                for value in (
+                    stage2_debug_max_direct_upper_arm_lift_p95_cm,
+                    stage2_debug_max_direct_lower_arm_lift_p95_cm,
+                    stage2_debug_max_direct_hand_lift_p95_cm,
+                )
+                if np.isfinite(value)
+            ),
+            default=math.nan,
+        ),
+        "stage2_direct_arm_write_absent": stage2_no_direct_arm_stage2_write,
         "stage2_debug_max_applied_lift_p95_cm": max(debug_applied_lift_p95, default=math.nan),
+        "stage2_debug_max_applied_helper_lift_p95_cm": max(debug_helper_lift_p95, default=math.nan),
         "stage2_debug_min_applied_to_visible_corr": min(debug_applied_visible_corr, default=math.nan),
         "arm_rows_measurement_only_no_authority": arm_rows_measurement_only,
         "arm_row_count": len(arm_rows),
         "authority_policy": {
             "head": "HMD remains authoritative; MediaPipe head/face is diagnostic only.",
             "arms": "Quest remains authoritative for wrists, hands, fingers, and reliable arm endpoints; MediaPipe arm fallback remains off.",
-            "stage2": "MediaPipe may contribute only bounded vertical shoulder/clavicle lift.",
+            "stage2": "MediaPipe may contribute only neutral-gated main-clavicle lift before the Quest arm solve; helper bones are not Stage 2 outputs.",
             "legacy_signal_namespace": "manny.* names are analyzer signal lanes, not proof that the driven avatar is Manny.",
         },
     }
@@ -3822,9 +4596,9 @@ def main():
             metadata = comparison_metadata(group, pair_kind, source, target)
             if stage2_active and pair_kind == "stage2_output_shoulder_compare":
                 metadata = {
-                    "comparison_role": "stage2_clavicle_vertical_hint_output_verification",
-                    "authority_policy": "stage2_clavicle_vertical_hint_only_no_arm_endpoint_authority",
-                    "interpretation": "Stage 2A visible-output row; MediaPipe may affect only bounded vertical clavicle translation while arms, wrists, hands, fingers, and full arm IK endpoints remain under existing authority.",
+                    "comparison_role": "direct_stage_output_disabled_diagnostic",
+                    "authority_policy": "stage2_direct_metahuman_clavicle_output_disabled",
+                    "interpretation": "Direct Stage 2 clavicle/helper output is disabled; non-zero applied Stage output is a failure, flat direct output is expected.",
                 }
             missing["comparison_role"] = metadata["comparison_role"]
             missing["authority_policy"] = metadata["authority_policy"]
@@ -4056,7 +4830,17 @@ def main():
         "sample_count",
         "valid_fraction",
         "suppressed_fraction",
+        "arm_ownership_suppressed_fraction",
         "had_contradiction_source_fraction",
+        "had_quest_arm_raise_source_fraction",
+        "neutral_ready_fraction",
+        "neutral_sample_fraction",
+        "neutral_sample_during_suppression_fraction",
+        "neutral_sample_during_arm_ownership_suppression_fraction",
+        "clamp_hit_fraction",
+        "signal_source_mode_p50",
+        "signal_source_reliability_p50",
+        "neutral_observation_seconds_p50",
         "candidate_lift_p05",
         "candidate_lift_p50",
         "candidate_lift_p95",
@@ -4064,6 +4848,34 @@ def main():
         "raw_lift_delta_p05",
         "raw_lift_delta_p50",
         "raw_lift_delta_p95",
+        "shoulder_head_clearance_p50",
+        "shoulder_head_clearance_reference_p50",
+        "shoulder_head_clearance_shrug_p05",
+        "shoulder_head_clearance_shrug_p50",
+        "shoulder_head_clearance_shrug_p95",
+        "clearance_primary_evidence_p05",
+        "clearance_primary_evidence_p50",
+        "clearance_primary_evidence_p95",
+        "raw_lift_confirmation_weight_p50",
+        "signed_lift_evidence_p05",
+        "signed_lift_evidence_p50",
+        "signed_lift_evidence_p95",
+        "signed_target_lift_p95",
+        "applied_response_scale_p50",
+        "positive_lift_evidence_p05",
+        "positive_lift_evidence_p50",
+        "positive_lift_evidence_p95",
+        "unfaded_positive_target_lift_p95",
+        "quest_wrist_lift_from_pelvis_p50",
+        "quest_wrist_lift_from_pelvis_p95",
+        "quest_elbow_lift_from_pelvis_p50",
+        "quest_elbow_lift_from_pelvis_p95",
+        "ownership_fade_active_fraction",
+        "ownership_fade_full_fraction",
+        "ownership_fade_p50",
+        "ownership_fade_p95",
+        "lift_weight_p05",
+        "lift_weight_p50",
         "positive_target_lift_p95",
         "contradiction_delta_p95",
         "smoothed_lift_p95",
@@ -4072,6 +4884,10 @@ def main():
         "applied_clavicle_lift_p05",
         "applied_clavicle_lift_p50",
         "applied_clavicle_lift_p95",
+        "applied_clavicle_helper_lift_p95",
+        "direct_upper_arm_lift_p95",
+        "direct_lower_arm_lift_p95",
+        "direct_hand_lift_p95",
         "candidate_to_smoothed_corr",
         "candidate_to_smoothed_best_lag_ms",
         "target_to_visible_corr",
@@ -4082,6 +4898,32 @@ def main():
         "interpretation",
     ]
     write_csv(stage2_debug_csv, stage2_debug_rows, stage2_debug_fields)
+
+    stage2_motion_window_rows_out = stage2_motion_window_rows(len(samples), signals)
+    stage2_motion_windows_csv = out_dir / "mpq_shadow_stage2_motion_windows.csv"
+    stage2_motion_window_fields = [
+        "window",
+        "side",
+        "role",
+        "sample_count",
+        "valid_fraction",
+        "applied_lift_mean_cm",
+        "applied_lift_p50_cm",
+        "applied_lift_p95_cm",
+        "smoothed_lift_p95_cm",
+        "positive_target_lift_p95_cm",
+        "signed_evidence_p50_cm",
+        "signed_evidence_p95_cm",
+        "clamp_hit_fraction",
+        "neutral_ready_fraction",
+        "arm_ownership_suppressed_fraction",
+        "over_2cm_fraction",
+        "sticky_neutral_samples_over_2cm",
+        "sticky_neutral_fraction_over_2cm",
+        "diagnostic_status",
+        "interpretation",
+    ]
+    write_csv(stage2_motion_windows_csv, stage2_motion_window_rows_out, stage2_motion_window_fields)
 
     reason_rows = not_valid_reason_rows(rows, fitted_rows, rotation_rows)
     reason_csv = out_dir / "mpq_shadow_not_valid_reasons.csv"
@@ -4152,6 +4994,7 @@ def main():
     runtime_cvar_summary = summarize_runtime_cvars(runtime_cvars)
     solver_snapshot_source_summary = summarize_solver_snapshot_sources(samples)
     stage2_debug_summary = summarize_stage2_debug(stage2_debug_rows)
+    stage2_motion_window_summary = summarize_stage2_motion_windows(stage2_motion_window_rows_out)
     driven_component_summary = summarize_driven_components(samples)
     stage2_conflict_readiness_summary = summarize_stage2_conflict_readiness(
         args.input,
@@ -4195,6 +5038,7 @@ def main():
         "main_bone_movement_correlation_summary_csv": str(movement_csv),
         "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
         "stage2_debug_csv": str(stage2_debug_csv),
+        "stage2_motion_windows_csv": str(stage2_motion_windows_csv),
         "axis_search_diagnostics_csv": str(axis_csv),
         "poor_area_compensation_csv": str(compensation_csv),
         "charts": charts,
@@ -4210,6 +5054,7 @@ def main():
             "main_bone_movement_correlation_summary_csv": str(movement_csv),
             "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
             "stage2_debug_csv": str(stage2_debug_csv),
+            "stage2_motion_windows_csv": str(stage2_motion_windows_csv),
             "axis_search_diagnostics_csv": str(axis_csv),
             "poor_area_compensation_csv": str(compensation_csv),
             "charts": charts,
@@ -4227,6 +5072,7 @@ def main():
         "solver_snapshot_source_summary": solver_snapshot_source_summary,
         "stage_recommendations": stage_recommendations(rows, timing_rows, landmark_rows),
         "stage2_debug_summary": stage2_debug_summary,
+        "stage2_motion_window_summary": stage2_motion_window_summary,
         "stage2_conflict_readiness_summary": stage2_conflict_readiness_summary,
         "standardized_alignment_summary": summarize_standardized_alignment(rows),
         "fitted_alignment_summary": summarize_fitted_alignment(fitted_rows),
@@ -4252,6 +5098,7 @@ def main():
                 "main_bone_movement_correlation_summary_csv": str(movement_csv),
                 "main_bone_rotation_correlation_summary_csv": str(rotation_csv),
                 "stage2_debug_csv": str(stage2_debug_csv),
+                "stage2_motion_windows_csv": str(stage2_motion_windows_csv),
                 "axis_search_diagnostics_csv": str(axis_csv),
                 "poor_area_compensation_csv": str(compensation_csv),
                 "charts": charts,

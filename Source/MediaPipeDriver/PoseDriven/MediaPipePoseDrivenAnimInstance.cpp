@@ -15,6 +15,8 @@
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseFrameContinuity.h"
 #include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeStage2ShoulderEvidence.h"
+#include "MediaPipeTrackingFusionDatasetReplay.h"
 #include "MediaPipeQuestHandDebugReporter.h"
 #include "MediaPipeQuestHandCompareDiagnostics.h"
 #include "MediaPipeQuestFingerSolver.h"
@@ -35,6 +37,8 @@
 #include "HAL/CriticalSection.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/ScopeLock.h"
+
+#include <atomic>
 
 namespace
 {
@@ -126,6 +130,149 @@ namespace
 	{
 		const uint32 Key = IsValid(KeyObject) ? KeyObject->GetUniqueID() : 0u;
 		ResetQuestWristRuntimeState(Key);
+	}
+
+	void SetReplayFullArmJointFromLocation(
+		FMediaPipeFullArmChainJointSnapshot& OutJoint,
+		const FVector& LocationWorld)
+	{
+		OutJoint.Reset();
+		if (LocationWorld.ContainsNaN())
+		{
+			return;
+		}
+
+		OutJoint.WorldTransform = FTransform::Identity;
+		OutJoint.WorldTransform.SetLocation(LocationWorld);
+		OutJoint.bValid = 1;
+		OutJoint.bPositionValid = 1;
+		OutJoint.bOrientationValid = 0;
+	}
+
+	bool PopulateReplayFullArmChainSide(
+		const FMediaPipeTrackingArmChainSideSnapshot& SourceSide,
+		const double NowSeconds,
+		FMediaPipeFullArmChainSideSnapshot& OutSide)
+	{
+		OutSide.Reset();
+		if (!SourceSide.bHasChain ||
+			SourceSide.ShoulderWorld.ContainsNaN() ||
+			SourceSide.ElbowWorld.ContainsNaN() ||
+			SourceSide.WristWorld.ContainsNaN())
+		{
+			return false;
+		}
+
+		OutSide.bActive = 1;
+		OutSide.bWristOrPalmUsesPalm = 0;
+		OutSide.Confidence = FMath::Clamp(SourceSide.Confidence > 0.0f ? SourceSide.Confidence : 1.0f, 0.0f, 1.0f);
+		OutSide.TimestampSeconds = SourceSide.TimestampSeconds >= 0.0
+			? SourceSide.TimestampSeconds
+			: NowSeconds;
+		SetReplayFullArmJointFromLocation(OutSide.Shoulder, SourceSide.ShoulderWorld);
+		SetReplayFullArmJointFromLocation(OutSide.UpperArm, SourceSide.ShoulderWorld);
+		SetReplayFullArmJointFromLocation(OutSide.LowerArm, SourceSide.ElbowWorld);
+		SetReplayFullArmJointFromLocation(OutSide.WristOrPalm, SourceSide.WristWorld);
+		return OutSide.HasRequiredPositionChain() && OutSide.TimestampSeconds >= 0.0;
+	}
+
+	bool BuildReplayFullArmChainSnapshot(
+		const FMediaPipeTrackingArmChainSourceSnapshot& SourceArmChain,
+		const double NowSeconds,
+		const uint32 Sequence,
+		FMediaPipeFullArmChainSnapshot& OutSnapshot)
+	{
+		OutSnapshot.Reset();
+		const bool bHasLeft = PopulateReplayFullArmChainSide(SourceArmChain.Left, NowSeconds, OutSnapshot.Left);
+		const bool bHasRight = PopulateReplayFullArmChainSide(SourceArmChain.Right, NowSeconds, OutSnapshot.Right);
+		if (!bHasLeft && !bHasRight)
+		{
+			return false;
+		}
+
+		OutSnapshot.Source = EMediaPipeFullArmChainSource::TrackingFusionReplay;
+		OutSnapshot.bActive = 1;
+		OutSnapshot.Sequence = Sequence;
+		OutSnapshot.TimestampSeconds = NowSeconds;
+		OutSnapshot.Confidence = FMath::Max(
+			bHasLeft ? OutSnapshot.Left.Confidence : 0.0f,
+			bHasRight ? OutSnapshot.Right.Confidence : 0.0f);
+		return true;
+	}
+
+	bool BuildReplayPoseFrameFromBodyPose(
+		const FMediaPipeTrackingBodyPoseSnapshot& SourceBodyPose,
+		const double NowSeconds,
+		FMediaPipePoseFrame& OutFrame,
+		TStaticArray<FVector, MediaPipePoseLandmarkCount>& OutPoseWorld,
+		TStaticArray<uint8, MediaPipePoseLandmarkCount>& OutEverMeasured)
+	{
+		OutFrame = FMediaPipePoseFrame();
+		bool bHasRequiredTorso = true;
+		for (const EMediaPipePoseLandmark RequiredLandmark : {
+			EMediaPipePoseLandmark::LeftShoulder,
+			EMediaPipePoseLandmark::RightShoulder,
+			EMediaPipePoseLandmark::LeftHip,
+			EMediaPipePoseLandmark::RightHip })
+		{
+			const int32 RequiredIndex = static_cast<int32>(RequiredLandmark);
+			bHasRequiredTorso = bHasRequiredTorso &&
+				SourceBodyPose.LandmarkValid[RequiredIndex] != 0 &&
+				!SourceBodyPose.LandmarksWorld[RequiredIndex].ContainsNaN();
+		}
+
+		if (!bHasRequiredTorso)
+		{
+			return false;
+		}
+
+		OutFrame.TimestampUs = static_cast<int64>(NowSeconds * 1000000.0);
+		OutFrame.SourceCaptureWallSeconds = NowSeconds;
+		OutFrame.EnqueueWallSeconds = NowSeconds;
+		OutFrame.WorkerStartWallSeconds = NowSeconds;
+		OutFrame.NativeProcessEndWallSeconds = NowSeconds;
+		OutFrame.LandmarkEndWallSeconds = NowSeconds;
+		OutFrame.PublishWallSeconds = NowSeconds;
+		OutFrame.ConditionedQueryWallSeconds = NowSeconds;
+		OutFrame.bValid = true;
+		OutFrame.bSourceConditioned = true;
+		OutFrame.ConditioningDiagnostics.QualityScore = 1.0f;
+		OutFrame.ConditioningDiagnostics.MeanLandmarkConfidence = 1.0f;
+		OutFrame.ConditioningDiagnostics.RootPelvisQuality = 1.0f;
+		OutFrame.ConditioningDiagnostics.TorsoSpineQuality = 1.0f;
+		OutFrame.ConditioningDiagnostics.HipsQuality = 1.0f;
+		OutFrame.ConditioningDiagnostics.LegsQuality = 1.0f;
+		OutFrame.ConditioningDiagnostics.FeetAnklesQuality = 1.0f;
+
+		for (int32 Index = 0; Index < MediaPipePoseLandmarkCount; ++Index)
+		{
+			const bool bValidLandmark =
+				SourceBodyPose.LandmarkValid[Index] != 0 &&
+				!SourceBodyPose.LandmarksWorld[Index].ContainsNaN();
+			const FVector LocationWorld = bValidLandmark
+				? SourceBodyPose.LandmarksWorld[Index]
+				: FVector::ZeroVector;
+			const float Reliability = bValidLandmark
+				? FMath::Clamp(SourceBodyPose.LandmarkReliability[Index] > 0.0f ? SourceBodyPose.LandmarkReliability[Index] : 1.0f, 0.0f, 1.0f)
+				: 0.0f;
+
+			OutPoseWorld[Index] = LocationWorld;
+			OutEverMeasured[Index] = bValidLandmark ? 1 : 0;
+			OutFrame.World.Points[Index].X = LocationWorld.X;
+			OutFrame.World.Points[Index].Y = LocationWorld.Y;
+			OutFrame.World.Points[Index].Z = LocationWorld.Z;
+			OutFrame.World.Points[Index].Visibility = Reliability;
+			OutFrame.World.Points[Index].Presence = Reliability;
+			OutFrame.World.Points[Index].Reliability = Reliability;
+			OutFrame.Normalized.Points[Index].X = LocationWorld.X;
+			OutFrame.Normalized.Points[Index].Y = LocationWorld.Y;
+			OutFrame.Normalized.Points[Index].Z = LocationWorld.Z;
+			OutFrame.Normalized.Points[Index].Visibility = Reliability;
+			OutFrame.Normalized.Points[Index].Presence = Reliability;
+			OutFrame.Normalized.Points[Index].Reliability = Reliability;
+		}
+
+		return true;
 	}
 
 	struct FDerivedSignalRuntimeState
@@ -650,12 +797,18 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		BodyState.SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 		BodyState.bHasSmoothedStage2ClavicleLiftL = false;
 		BodyState.SmoothedStage2ClavicleLiftCmL = 0.0f;
-		BodyState.bHasStage2ShoulderLiftBaselineL = false;
-		BodyState.Stage2ShoulderLiftBaselineCmL = 0.0f;
+		BodyState.bHasStage2NeutralReferenceL = false;
+		BodyState.Stage2NeutralShoulderLiftFromPelvisCmL = 0.0f;
+		BodyState.Stage2NeutralShoulderHeadClearanceCmL = 0.0f;
+		BodyState.Stage2NeutralObservationSecondsL = 0.0f;
+		BodyState.Stage2NeutralObservationFramesL = 0;
 		BodyState.bHasSmoothedStage2ClavicleLiftR = false;
 		BodyState.SmoothedStage2ClavicleLiftCmR = 0.0f;
-		BodyState.bHasStage2ShoulderLiftBaselineR = false;
-		BodyState.Stage2ShoulderLiftBaselineCmR = 0.0f;
+		BodyState.bHasStage2NeutralReferenceR = false;
+		BodyState.Stage2NeutralShoulderLiftFromPelvisCmR = 0.0f;
+		BodyState.Stage2NeutralShoulderHeadClearanceCmR = 0.0f;
+		BodyState.Stage2NeutralObservationSecondsR = 0.0f;
+		BodyState.Stage2NeutralObservationFramesR = 0;
 		BodyState.bHasSmoothedFkRootGroundOffset = false;
 		BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
 		LeftArmState.bHasSmoothedArmIK = false;
@@ -713,6 +866,99 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	const FMediaPipeBodyFusionRuntimePolicySnapshot BodyFusionRuntimePolicy =
 		FMediaPipeBodyFusionRuntimePolicy::ReadGameThread();
 	const bool bBodyFusionRuntimeActive = BodyFusionRuntimePolicy.bBodyFusionEnabled;
+	FEmbodiedFusionSourceObservations ReplayObservations;
+	FString ReplayPhaseName;
+	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().GetCurrentObservations(
+		FPlatformTime::Seconds(),
+		ReplayObservations,
+		&ReplayPhaseName))
+	{
+		const double ReplayNowSeconds = ReplayObservations.NowSeconds >= 0.0
+			? ReplayObservations.NowSeconds
+			: FPlatformTime::Seconds();
+		FMediaPipeFullArmChainSnapshot ReplayFullArmChain;
+		if (BuildReplayFullArmChainSnapshot(
+			ReplayObservations.ArmChain,
+			ReplayNowSeconds,
+			FullArmChain.Sequence + 1u,
+			ReplayFullArmChain))
+		{
+			FullArmChain = ReplayFullArmChain;
+		}
+		else
+		{
+			FullArmChain.Reset();
+		}
+
+		EmbodiedFusionComponent->SetReplaySourceObservations_GameThread(ReplayObservations);
+		bHasCachedQuestHmdPose = ReplayObservations.HmdPose.bHasPose;
+		CachedQuestHmdWorld = ReplayObservations.HmdPose.LocationWorld;
+		CachedQuestHmdRotWorld = ReplayObservations.HmdPose.RotationWorld;
+		CachedQuestTrackingUpWorld = ReplayObservations.HmdPose.TrackingUpWorld;
+
+		const bool bHasReplayBodyPose = BuildReplayPoseFrameFromBodyPose(
+			ReplayObservations.BodyPose,
+			ReplayNowSeconds,
+			PoseFrame,
+			PoseWorld,
+			EverMeasured);
+		if (bHasReplayBodyPose)
+		{
+			bHasPoseFrame = true;
+			PoseTimestampSeconds = ReplayNowSeconds;
+			PoseToWorldTransform = FTransform::Identity;
+			WorldScale = 1.0f;
+			bMirrorLandmarksLR = false;
+			PoseHands = FMediaPipeRawHandPair();
+			PoseHandsTimestampUs = PoseFrame.TimestampUs;
+			bHasPoseHands = false;
+		}
+		else
+		{
+			MediaPipePoseFrameContinuity::ResetHeldFrame(
+				bHasPoseFrame,
+				PoseFrame,
+				PoseTimestampSeconds,
+				bHasPoseHands,
+				PoseHands,
+				PoseHandsTimestampUs);
+			for (int32 LandmarkIndex = 0; LandmarkIndex < MediaPipePoseLandmarkCount; ++LandmarkIndex)
+			{
+				PoseWorld[LandmarkIndex] = FVector::ZeroVector;
+				EverMeasured[LandmarkIndex] = 0;
+			}
+		}
+		bHasQuestOrHmdRuntimeInput =
+			bHasCachedQuestHmdPose ||
+			ReplayObservations.Hands.bHasLeft != 0 ||
+			ReplayObservations.Hands.bHasRight != 0 ||
+			FullArmChain.bActive != 0 ||
+			bHasReplayBodyPose;
+
+		FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
+			? TargetEmbodimentProfile
+			: FMediaPipeAvatarEmbodimentProfile();
+		ConfigureBodyFusionProfileForCurrentTarget(BodyFusionProfile);
+
+		FEmbodiedFusionUpdateInput FusionInput;
+		FusionInput.TargetActorName = TargetActorName;
+		FusionInput.NowSeconds = ReplayNowSeconds;
+		FusionInput.AvatarProfile = BodyFusionProfile;
+		FusionInput.TargetComponentTransform = TargetCompTransform;
+		FusionInput.TargetForwardWorld = GetTargetForwardWorld();
+		FusionInput.RefPelvisTranslationComp = RefPelvisTranslationComp;
+		FusionInput.RefHeadPosComp = RefHeadPosComp;
+		FusionInput.RefChestPosComp = RefSpine05TransformComp.GetTranslation();
+		FusionInput.RefNeckPosComp = RefNeckPosComp;
+		FusionInput.bOverrideArmChainMaxAgeSeconds =
+			TargetMetaHumanProfile.IsValidForPoseDriving();
+		FusionInput.ArmChainMaxAgeSeconds =
+			ResolveMediaPipeMetaHumanFullArmChainMaxAgeSeconds(TargetMetaHumanProfile);
+		FusionInput.bHasRefChestPosComp = !RefSpine05TransformComp.GetTranslation().IsNearlyZero();
+		EmbodiedFusionComponent->UpdateFusion_GameThread(FusionInput);
+		BodyFusionFrame = EmbodiedFusionComponent->GetLatestFusionFrame();
+		return;
+	}
 	FEmbodiedFusionQuestSourcePollInput QuestRuntimeInput;
 	QuestRuntimeInput.World = World;
 	QuestRuntimeInput.TargetComponent = SkelComp;
@@ -766,11 +1012,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 			FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
 				? TargetEmbodimentProfile
 				: FMediaPipeAvatarEmbodimentProfile();
-			BodyFusionProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
-			BodyFusionProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
-				? TargetEyeLocalOffset
-				: BodyFusionProfile.DefaultEyeLocalOffset;
-			BodyFusionProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
+			ConfigureBodyFusionProfileForCurrentTarget(BodyFusionProfile);
 
 			FEmbodiedFusionUpdateInput FusionInput;
 			FusionInput.TargetActorName = TargetActorName;
@@ -1018,11 +1260,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		FMediaPipeAvatarEmbodimentProfile BodyFusionProfile = bHasTargetEmbodimentProfile
 			? TargetEmbodimentProfile
 			: FMediaPipeAvatarEmbodimentProfile();
-		BodyFusionProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
-		BodyFusionProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
-			? TargetEyeLocalOffset
-			: BodyFusionProfile.DefaultEyeLocalOffset;
-		BodyFusionProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
+		ConfigureBodyFusionProfileForCurrentTarget(BodyFusionProfile);
 
 		if (EmbodiedFusionComponent)
 		{
@@ -1074,12 +1312,27 @@ FQuat FAnimNode_MediaPipePoseDriven::MakeQuatFromForwardUp(const FVector& Forwar
 	return M.ToQuat();
 }
 
+void FAnimNode_MediaPipePoseDriven::ConfigureBodyFusionProfileForCurrentTarget(FMediaPipeAvatarEmbodimentProfile& InOutProfile) const
+{
+	InOutProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
+	InOutProfile.DefaultEyeLocalOffset = bHasTargetEyeLocalOffset
+		? TargetEyeLocalOffset
+		: InOutProfile.DefaultEyeLocalOffset;
+	InOutProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
+
+	if (ShouldUseAvatarLockedMetaHumanReplay())
+	{
+		InOutProfile.PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::MediaPipeHipsVerticalOnly;
+		InOutProfile.UpperBodyFollowAlpha = 1.0f;
+	}
+}
+
 FVector FAnimNode_MediaPipePoseDriven::GetTargetForwardWorld() const
 {
 	FMediaPipeAvatarEmbodimentProfile ForwardProfile = bHasTargetEmbodimentProfile
 		? TargetEmbodimentProfile
 		: FMediaPipeAvatarEmbodimentProfile();
-	ForwardProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
+	ConfigureBodyFusionProfileForCurrentTarget(ForwardProfile);
 	return FMediaPipeAvatarEmbodimentSolver::GetAvatarForwardWorld(TargetCompTransform, ForwardProfile);
 }
 
@@ -1676,26 +1929,27 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionPoseForEvaluation() const
 	return FMediaPipeAvatarPoseWriter::CanWritePose(BodyFusionFrame.Pose, Profile);
 }
 
-bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const
+bool FAnimNode_MediaPipePoseDriven::ShouldUseAvatarLockedMetaHumanReplay() const
 {
-	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread())
-	{
-		return false;
-	}
-	if (FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread())
-	{
-		return false;
-	}
-	if (!FMediaPipeBodyFusionRuntimePolicy::IsStage1TorsoPelvisHintEnabledAnyThread())
+	if (!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
 	{
 		return false;
 	}
 
-	const FEmbodiedFusionMediaPipeCandidate& Candidate = BodyFusionFrame.MediaPipeCandidate;
-	return Candidate.bCalibrationUsable != 0 &&
-		Candidate.bHasCalibratedPose != 0 &&
-		Candidate.BodyPoseStatus.IsFresh() &&
-		(Candidate.Pose.Pelvis.bValid || Candidate.Pose.Chest.bValid);
+	if (TargetMetaHumanProfile.IsValidForPoseDriving())
+	{
+		return true;
+	}
+
+	const FMediaPipeAvatarEmbodimentProfile Profile = bHasTargetEmbodimentProfile
+		? TargetEmbodimentProfile
+		: FMediaPipeAvatarEmbodimentProfile();
+	return Profile.SkeletonFamily == EMediaPipeAvatarSkeletonFamily::MetaHuman;
+}
+
+bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const
+{
+	return false;
 }
 
 bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const
@@ -1713,166 +1967,17 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage2ShoulderClavicleHin
 		return false;
 	}
 
-	const FEmbodiedFusionMediaPipeCandidate& Candidate = BodyFusionFrame.MediaPipeCandidate;
-	return Candidate.bCalibrationUsable != 0 &&
-		Candidate.bHasCalibratedPose != 0 &&
-		Candidate.BodyPoseStatus.IsFresh() &&
-		Candidate.Pose.Pelvis.bValid &&
-		(Candidate.Pose.LeftShoulder.bValid || Candidate.Pose.RightShoulder.bValid);
+	const FMediaPipeTrackingSourceFrame& SourceFrame = BodyFusionFrame.SourceFrame;
+	return BodyFusionFrame.Calibration.IsUsable() &&
+		SourceFrame.bHasBodyPose &&
+		SourceFrame.BodyPoseStatus.IsFresh();
 }
 
 bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionStage1TorsoPelvisHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
 {
-	if (!FMediaPipeBodyFusionRuntimePolicy::IsStage1TorsoPelvisHintEnabledAnyThread())
-	{
-		return false;
-	}
-
-	const FEmbodiedFusionMediaPipeCandidate& Candidate = BodyFusionFrame.MediaPipeCandidate;
-	if (Candidate.bCalibrationUsable == 0 ||
-		Candidate.bHasCalibratedPose == 0 ||
-		!Candidate.BodyPoseStatus.IsFresh())
-	{
-		return false;
-	}
-
-	const FTransform WorldToComponent = TargetCompTransform.Inverse();
-	const float Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage1TorsoPelvisHintBlendAnyThread();
-	const float MaxVerticalCm = FMediaPipeBodyFusionRuntimePolicy::GetStage1TorsoPelvisMaxVerticalCmAnyThread();
-	const float Stage1HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage1TorsoPelvisHintHalfLifeSecondsAnyThread();
-	if (Blend <= KINDA_SMALL_NUMBER || MaxVerticalCm <= KINDA_SMALL_NUMBER)
-	{
-		return false;
-	}
-
-	auto VerticalHintOffset = [Blend, MaxVerticalCm](const FVector& TargetComp, const FVector& ReferenceComp) -> FVector
-	{
-		if (TargetComp.ContainsNaN() || ReferenceComp.ContainsNaN())
-		{
-			return FVector::ZeroVector;
-		}
-
-		const float TargetZ = FMath::Clamp((TargetComp.Z - ReferenceComp.Z) * Blend, -MaxVerticalCm, MaxVerticalCm);
-		return FVector(0.0f, 0.0f, TargetZ);
-	};
-
-	auto UpdateSmoothedOffset = [DeltaSeconds](bool& bInOutHasValue, FVector& InOutOffset, const FVector& TargetOffset, const float HalfLifeSeconds)
-	{
-		const float Alpha = HalfLifeToAlpha(HalfLifeSeconds, DeltaSeconds);
-		if (!bInOutHasValue)
-		{
-			InOutOffset = TargetOffset;
-			bInOutHasValue = true;
-		}
-		else
-		{
-			InOutOffset = FMath::Lerp(InOutOffset, TargetOffset, Alpha);
-		}
-	};
-
-	auto SetComponentTranslation = [&CSPose](const FBoneReference& Bone, const FVector& TranslationComp) -> bool
-	{
-		if (!Bone.IsValidToEvaluate() || TranslationComp.ContainsNaN())
-		{
-			return false;
-		}
-
-		const FCompactPoseBoneIndex BoneIdx = Bone.CachedCompactPoseIndex;
-		FTransform BoneCS = CSPose.GetComponentSpaceTransform(BoneIdx);
-		BoneCS.SetTranslation(TranslationComp);
-		const FBoneTransform BoneTransform(BoneIdx, BoneCS);
-		CSPose.SafeSetCSBoneTransforms(MakeArrayView(&BoneTransform, 1));
-		return true;
-	};
-
-	bool bWroteAny = false;
-	if (Pelvis.IsValidToEvaluate())
-	{
-		FVector TargetPelvisOffsetComp = FVector::ZeroVector;
-		if (Candidate.Pose.Pelvis.bValid)
-		{
-			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(Candidate.Pose.Pelvis.LocationWorld);
-			TargetPelvisOffsetComp = VerticalHintOffset(TargetPelvisComp, RefPelvisTranslationComp);
-		}
-
-		UpdateSmoothedOffset(
-			BodyState.bHasSmoothedPelvisOffset,
-			BodyState.SmoothedPelvisOffsetComp,
-			TargetPelvisOffsetComp,
-			Stage1HalfLifeSeconds);
-		bWroteAny |= SetComponentTranslation(Pelvis, RefPelvisTranslationComp + BodyState.SmoothedPelvisOffsetComp);
-	}
-
-	if (NumSpineBones > 0 && bHasRefChestPosComp && Candidate.Pose.Chest.bValid)
-	{
-		const FVector TargetChestComp = WorldToComponent.TransformPosition(Candidate.Pose.Chest.LocationWorld);
-		const FVector TargetChestOffsetComp = VerticalHintOffset(TargetChestComp, RefChestPosComp);
-
-		UpdateSmoothedOffset(
-			BodyState.bHasSmoothedStage1ChestOffset,
-			BodyState.SmoothedStage1ChestOffsetComp,
-			TargetChestOffsetComp,
-			Stage1HalfLifeSeconds);
-
-		const FVector PelvisComp = Pelvis.IsValidToEvaluate()
-			? CSPose.GetComponentSpaceTransform(Pelvis.CachedCompactPoseIndex).GetTranslation()
-			: RefPelvisTranslationComp + BodyState.SmoothedPelvisOffsetComp;
-		const FVector ChestComp = RefChestPosComp + BodyState.SmoothedStage1ChestOffsetComp;
-		const FVector RefPelvisToChestComp = RefChestPosComp - RefPelvisTranslationComp;
-		const FVector SolvedPelvisToChestComp = ChestComp - PelvisComp;
-		const float RefPelvisToChestLenSq = RefPelvisToChestComp.SizeSquared();
-
-		if (RefPelvisToChestLenSq > KINDA_SMALL_NUMBER &&
-			!SolvedPelvisToChestComp.IsNearlyZero() &&
-			!SolvedPelvisToChestComp.ContainsNaN())
-		{
-			auto GetSpineRefBySlot = [&](const uint8 Slot) -> const FBoneReference&
-			{
-				switch (Slot)
-				{
-				case 1: return Spine01;
-				case 2: return Spine02;
-				case 3: return Spine03;
-				case 4: return Spine04;
-				case 5: return Spine05;
-				default: return Spine03;
-				}
-			};
-
-			const float Denom = FMath::Max(1.0f, static_cast<float>(NumSpineBones));
-			for (int32 i = 0; i < NumSpineBones; ++i)
-			{
-				const uint8 Slot = SpineBoneSlots[i];
-				if (Slot == 0)
-				{
-					continue;
-				}
-
-				const FVector RefSpineOffsetComp = RefSpineTranslationComp[i] - RefPelvisTranslationComp;
-				float SpineWeight =
-					FVector::DotProduct(RefSpineOffsetComp, RefPelvisToChestComp) / RefPelvisToChestLenSq;
-				if (!FMath::IsFinite(SpineWeight))
-				{
-					SpineWeight = static_cast<float>(i + 1) / Denom;
-				}
-				SpineWeight = FMath::Clamp(SpineWeight, 0.0f, 1.0f);
-				if (SpineWeight <= KINDA_SMALL_NUMBER)
-				{
-					SpineWeight = FMath::Clamp(static_cast<float>(i + 1) / Denom, 0.0f, 1.0f);
-				}
-
-				const FVector TargetSpineComp = PelvisComp + SolvedPelvisToChestComp * SpineWeight;
-				bWroteAny |= SetComponentTranslation(GetSpineRefBySlot(Slot), TargetSpineComp);
-			}
-		}
-	}
-	else
-	{
-		BodyState.bHasSmoothedStage1ChestOffset = false;
-		BodyState.SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
-	}
-
-	return bWroteAny;
+	(void)CSPose;
+	(void)DeltaSeconds;
+	return false;
 }
 
 bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionStage2ShoulderClavicleHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
@@ -1881,210 +1986,190 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionStage2ShoulderClavicleHintCS(
 	{
 		return false;
 	}
-	if (FMediaPipeBodyFusionRuntimePolicy::IsPoseWriteEnabledAnyThread())
+
+	auto ResetStage2Side = [](
+		bool& bHasSmoothedLift,
+		float& SmoothedLiftCm,
+		bool& bHasNeutralReference,
+		float& NeutralShoulderLiftFromPelvisCm,
+		float& NeutralShoulderHeadClearanceCm,
+		float& NeutralObservationSeconds,
+		int32& NeutralObservationFrames)
 	{
+		bHasSmoothedLift = false;
+		SmoothedLiftCm = 0.0f;
+		bHasNeutralReference = false;
+		NeutralShoulderLiftFromPelvisCm = 0.0f;
+		NeutralShoulderHeadClearanceCm = 0.0f;
+		NeutralObservationSeconds = 0.0f;
+		NeutralObservationFrames = 0;
+	};
+
+	auto ResetAllStage2Sides = [&]()
+	{
+		ResetStage2Side(
+			BodyState.bHasSmoothedStage2ClavicleLiftL,
+			BodyState.SmoothedStage2ClavicleLiftCmL,
+			BodyState.bHasStage2NeutralReferenceL,
+			BodyState.Stage2NeutralShoulderLiftFromPelvisCmL,
+			BodyState.Stage2NeutralShoulderHeadClearanceCmL,
+			BodyState.Stage2NeutralObservationSecondsL,
+			BodyState.Stage2NeutralObservationFramesL);
+		ResetStage2Side(
+			BodyState.bHasSmoothedStage2ClavicleLiftR,
+			BodyState.SmoothedStage2ClavicleLiftCmR,
+			BodyState.bHasStage2NeutralReferenceR,
+			BodyState.Stage2NeutralShoulderLiftFromPelvisCmR,
+			BodyState.Stage2NeutralShoulderHeadClearanceCmR,
+			BodyState.Stage2NeutralObservationSecondsR,
+			BodyState.Stage2NeutralObservationFramesR);
+	};
+
+	const FMediaPipeTrackingSourceFrame& SourceFrame = BodyFusionFrame.SourceFrame;
+	if (!SourceFrame.bHasBodyPose ||
+		!SourceFrame.BodyPoseStatus.IsFresh() ||
+		!BodyFusionFrame.Calibration.IsUsable())
+	{
+		ResetAllStage2Sides();
 		return false;
 	}
 
-	const FEmbodiedFusionMediaPipeCandidate& Candidate = BodyFusionFrame.MediaPipeCandidate;
-	if (Candidate.bCalibrationUsable == 0 ||
-		Candidate.bHasCalibratedPose == 0 ||
-		!Candidate.BodyPoseStatus.IsFresh() ||
-		!Candidate.Pose.Pelvis.bValid)
+	FMediaPipeStage2ShoulderEvidenceSettings Settings;
+	Settings.Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHintBlendAnyThread();
+	Settings.ResponseScale = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleResponseScaleAnyThread();
+	Settings.MaxLiftCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleMaxLiftCmAnyThread();
+	Settings.HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
+	Settings.ContradictionCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThread();
+	Settings.QuestArmRaiseFadeStartCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeStartCmAnyThread();
+	Settings.QuestArmRaiseFadeFullCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderArmRaiseFadeFullCmAnyThread();
+	Settings.ShrugStartCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugStartCmAnyThread();
+	Settings.ShrugFullCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderShrugFullCmAnyThread();
+	if (Settings.MaxLiftCm <= KINDA_SMALL_NUMBER)
 	{
-		BodyState.bHasSmoothedStage2ClavicleLiftL = false;
-		BodyState.SmoothedStage2ClavicleLiftCmL = 0.0f;
-		BodyState.bHasStage2ShoulderLiftBaselineL = false;
-		BodyState.Stage2ShoulderLiftBaselineCmL = 0.0f;
-		BodyState.bHasSmoothedStage2ClavicleLiftR = false;
-		BodyState.SmoothedStage2ClavicleLiftCmR = 0.0f;
-		BodyState.bHasStage2ShoulderLiftBaselineR = false;
-		BodyState.Stage2ShoulderLiftBaselineCmR = 0.0f;
-		return false;
-	}
-
-	const float Blend = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHintBlendAnyThread();
-	const float ResponseScale = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleResponseScaleAnyThread();
-	const float MaxLiftCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleMaxLiftCmAnyThread();
-	const float HalfLifeSeconds = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderClavicleHalfLifeSecondsAnyThread();
-	const float ContradictionCm = FMediaPipeBodyFusionRuntimePolicy::GetStage2ShoulderContradictionCmAnyThread();
-	if (Blend <= KINDA_SMALL_NUMBER || MaxLiftCm <= KINDA_SMALL_NUMBER)
-	{
+		ResetAllStage2Sides();
 		return false;
 	}
 
 	const FTransform WorldToComponent = TargetCompTransform.Inverse();
-	const FVector CandidatePelvisComp = WorldToComponent.TransformPosition(Candidate.Pose.Pelvis.LocationWorld);
-	if (CandidatePelvisComp.ContainsNaN())
-	{
-		return false;
-	}
-
-	auto UpdateSmoothedLift = [DeltaSeconds](bool& bInOutHasValue, float& InOutLiftCm, const float TargetLiftCm, const float InHalfLifeSeconds)
-	{
-		const float Alpha = HalfLifeToAlpha(InHalfLifeSeconds, DeltaSeconds);
-		if (!bInOutHasValue)
-		{
-			InOutLiftCm = TargetLiftCm;
-			bInOutHasValue = true;
-		}
-		else
-		{
-			InOutLiftCm = FMath::Lerp(InOutLiftCm, TargetLiftCm, Alpha);
-		}
-	};
-	auto UpdateShoulderLiftBaseline = [DeltaSeconds](bool& bInOutHasBaseline, float& InOutBaselineCm, const float CandidateLiftCm)
-	{
-		constexpr float BaselineFollowThresholdCm = 0.5f;
-		constexpr float BaselineFollowHalfLifeSeconds = 1.5f;
-		if (!bInOutHasBaseline)
-		{
-			InOutBaselineCm = CandidateLiftCm;
-			bInOutHasBaseline = true;
-		}
-		else if (CandidateLiftCm < InOutBaselineCm)
-		{
-			InOutBaselineCm = CandidateLiftCm;
-		}
-		else if (CandidateLiftCm - InOutBaselineCm <= BaselineFollowThresholdCm)
-		{
-			const float Alpha = HalfLifeToAlpha(BaselineFollowHalfLifeSeconds, DeltaSeconds);
-			InOutBaselineCm = FMath::Lerp(InOutBaselineCm, CandidateLiftCm, Alpha);
-		}
-		return InOutBaselineCm;
-	};
 
 	auto ApplySide = [&](const bool bIsLeft) -> bool
 	{
-		const FMediaPipeFusedBodyPoint& CandidateShoulder = bIsLeft
-			? Candidate.Pose.LeftShoulder
-			: Candidate.Pose.RightShoulder;
 		const FBoneReference& ClavicleBone = bIsLeft ? ClavicleL : ClavicleR;
 		const bool bHasRefClavicle = bIsLeft ? bHasRefClavL : bHasRefClavR;
 		bool& bHasSmoothedLift = bIsLeft ? BodyState.bHasSmoothedStage2ClavicleLiftL : BodyState.bHasSmoothedStage2ClavicleLiftR;
 		float& SmoothedLiftCm = bIsLeft ? BodyState.SmoothedStage2ClavicleLiftCmL : BodyState.SmoothedStage2ClavicleLiftCmR;
-		bool& bHasShoulderLiftBaseline = bIsLeft ? BodyState.bHasStage2ShoulderLiftBaselineL : BodyState.bHasStage2ShoulderLiftBaselineR;
-		float& ShoulderLiftBaselineCm = bIsLeft ? BodyState.Stage2ShoulderLiftBaselineCmL : BodyState.Stage2ShoulderLiftBaselineCmR;
+		bool& bHasNeutralReference = bIsLeft ? BodyState.bHasStage2NeutralReferenceL : BodyState.bHasStage2NeutralReferenceR;
+		float& NeutralShoulderLiftFromPelvisCm = bIsLeft ? BodyState.Stage2NeutralShoulderLiftFromPelvisCmL : BodyState.Stage2NeutralShoulderLiftFromPelvisCmR;
+		float& NeutralShoulderHeadClearanceCm = bIsLeft ? BodyState.Stage2NeutralShoulderHeadClearanceCmL : BodyState.Stage2NeutralShoulderHeadClearanceCmR;
+		float& NeutralObservationSeconds = bIsLeft ? BodyState.Stage2NeutralObservationSecondsL : BodyState.Stage2NeutralObservationSecondsR;
+		int32& NeutralObservationFrames = bIsLeft ? BodyState.Stage2NeutralObservationFramesL : BodyState.Stage2NeutralObservationFramesR;
 		FMediaPipePoseDrivenShoulderSignalSnapshot& ShoulderSnapshot =
 			bIsLeft ? LatestSignalSnapshot.LeftShoulder : LatestSignalSnapshot.RightShoulder;
 		auto PublishSignalSnapshot = [&]()
 		{
 			LatestSignalSnapshot.bValid = true;
 			LatestSignalSnapshot.RuntimeStateKey = RuntimeStateKey;
+			LatestSignalSnapshot.PoseTimestampUs = static_cast<int64>(SourceFrame.BodyPoseTimestampSeconds * 1000000.0);
 			UMediaPipePoseDrivenAnimInstance::PublishLatestSignalSnapshotForRuntimeKey(RuntimeStateKey, LatestSignalSnapshot);
 		};
 
-		if (!CandidateShoulder.bValid || !ClavicleBone.IsValidToEvaluate() || !bHasRefClavicle)
+		if (!ClavicleBone.IsValidToEvaluate() || !bHasRefClavicle)
 		{
-			bHasSmoothedLift = false;
-			SmoothedLiftCm = 0.0f;
-			bHasShoulderLiftBaseline = false;
-			ShoulderLiftBaselineCm = 0.0f;
+			ResetStage2Side(
+				bHasSmoothedLift,
+				SmoothedLiftCm,
+				bHasNeutralReference,
+				NeutralShoulderLiftFromPelvisCm,
+				NeutralShoulderHeadClearanceCm,
+				NeutralObservationSeconds,
+				NeutralObservationFrames);
 			return false;
 		}
 
-		const FVector CandidateShoulderComp = WorldToComponent.TransformPosition(CandidateShoulder.LocationWorld);
-		if (CandidateShoulderComp.ContainsNaN())
+		FMediaPipeStage2ShoulderEvidenceSideState SideState;
+		SideState.bHasSmoothedLift = bHasSmoothedLift;
+		SideState.SmoothedLiftCm = SmoothedLiftCm;
+		SideState.bHasNeutralReference = bHasNeutralReference;
+		SideState.NeutralShoulderLiftFromPelvisCm = NeutralShoulderLiftFromPelvisCm;
+		SideState.NeutralShoulderHeadClearanceCm = NeutralShoulderHeadClearanceCm;
+		SideState.NeutralObservationSeconds = NeutralObservationSeconds;
+		SideState.NeutralObservationFrames = NeutralObservationFrames;
+
+		FMediaPipeStage2ShoulderEvidenceResult Evidence;
+		if (!FMediaPipeStage2ShoulderEvidence::BuildSideEvidence(
+				SourceFrame,
+				BodyFusionFrame.Calibration,
+				bIsLeft,
+				WorldToComponent,
+				Settings,
+				DeltaSeconds,
+				SideState,
+				Evidence))
 		{
-			bHasSmoothedLift = false;
-			SmoothedLiftCm = 0.0f;
-			bHasShoulderLiftBaseline = false;
-			ShoulderLiftBaselineCm = 0.0f;
+			bHasSmoothedLift = SideState.bHasSmoothedLift;
+			SmoothedLiftCm = SideState.SmoothedLiftCm;
+			bHasNeutralReference = SideState.bHasNeutralReference;
+			NeutralShoulderLiftFromPelvisCm = SideState.NeutralShoulderLiftFromPelvisCm;
+			NeutralShoulderHeadClearanceCm = SideState.NeutralShoulderHeadClearanceCm;
+			NeutralObservationSeconds = SideState.NeutralObservationSeconds;
+			NeutralObservationFrames = SideState.NeutralObservationFrames;
 			return false;
 		}
 
-		const FMediaPipeTrackingSourceFrame& SourceFrame = BodyFusionFrame.SourceFrame;
-		const FMediaPipeBodyFusionSourceStatus& ArmChainStatus = bIsLeft
-			? SourceFrame.LeftArmChainStatus
-			: SourceFrame.RightArmChainStatus;
-		float ContradictionDeltaCm = 0.0f;
-		bool bHadContradictionSource = false;
-		if (ContradictionCm > KINDA_SMALL_NUMBER && ArmChainStatus.IsFresh())
-		{
-			const FVector QuestShoulderWorld = bIsLeft
-				? SourceFrame.LeftArmShoulderWorld
-				: SourceFrame.RightArmShoulderWorld;
-			const FVector QuestShoulderComp = WorldToComponent.TransformPosition(QuestShoulderWorld);
-			if (!QuestShoulderComp.ContainsNaN())
-			{
-				bHadContradictionSource = true;
-				ContradictionDeltaCm = FMath::Abs(CandidateShoulderComp.Z - QuestShoulderComp.Z);
-				if (ContradictionDeltaCm > ContradictionCm)
-				{
-					const float CandidateShoulderLiftFromPelvisCm = CandidateShoulderComp.Z - CandidatePelvisComp.Z;
-					const float ReferenceShoulderLiftFromPelvisCm = bHasShoulderLiftBaseline
-						? ShoulderLiftBaselineCm
-						: CandidateShoulderLiftFromPelvisCm;
-					ShoulderSnapshot.bStage2ShoulderClavicleHintValid = true;
-					ShoulderSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = true;
-					ShoulderSnapshot.bStage2ShoulderClavicleHadContradictionSource = true;
-					ShoulderSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = CandidateShoulderLiftFromPelvisCm;
-					ShoulderSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = ReferenceShoulderLiftFromPelvisCm;
-					ShoulderSnapshot.Stage2RawLiftDeltaCm =
-						ShoulderSnapshot.Stage2CandidateShoulderLiftFromPelvisCm -
-						ShoulderSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm;
-					ShoulderSnapshot.Stage2PositiveTargetLiftCm =
-						FMath::Clamp(FMath::Max(0.0f, ShoulderSnapshot.Stage2RawLiftDeltaCm) * Blend * ResponseScale, 0.0f, MaxLiftCm);
-					ShoulderSnapshot.Stage2ContradictionDeltaCm = ContradictionDeltaCm;
-					ShoulderSnapshot.Stage2SmoothedLiftCm = 0.0f;
-					ShoulderSnapshot.Stage2PreSolveClavicleLiftFromPelvisCm = 0.0f;
-					ShoulderSnapshot.Stage2TargetClavicleLiftFromPelvisCm =
-						ShoulderSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm;
-					ShoulderSnapshot.Stage2AppliedClavicleLiftCm = 0.0f;
-					PublishSignalSnapshot();
-					bHasSmoothedLift = false;
-					SmoothedLiftCm = 0.0f;
-					bHasShoulderLiftBaseline = false;
-					ShoulderLiftBaselineCm = 0.0f;
-					return false;
-				}
-			}
-		}
-
-		const float CandidateShoulderLiftFromPelvisCm = CandidateShoulderComp.Z - CandidatePelvisComp.Z;
-		const float RefShoulderLiftFromPelvisCm =
-			UpdateShoulderLiftBaseline(bHasShoulderLiftBaseline, ShoulderLiftBaselineCm, CandidateShoulderLiftFromPelvisCm);
-		const float RawLiftCm = CandidateShoulderLiftFromPelvisCm - RefShoulderLiftFromPelvisCm;
-		const float TargetLiftCm = FMath::Clamp(FMath::Max(0.0f, RawLiftCm) * Blend * ResponseScale, 0.0f, MaxLiftCm);
-		UpdateSmoothedLift(bHasSmoothedLift, SmoothedLiftCm, TargetLiftCm, HalfLifeSeconds);
+		bHasSmoothedLift = SideState.bHasSmoothedLift;
+		SmoothedLiftCm = SideState.SmoothedLiftCm;
+		bHasNeutralReference = SideState.bHasNeutralReference;
+		NeutralShoulderLiftFromPelvisCm = SideState.NeutralShoulderLiftFromPelvisCm;
+		NeutralShoulderHeadClearanceCm = SideState.NeutralShoulderHeadClearanceCm;
+		NeutralObservationSeconds = SideState.NeutralObservationSeconds;
+		NeutralObservationFrames = SideState.NeutralObservationFrames;
 
 		const FCompactPoseBoneIndex ClavicleIdx = ClavicleBone.CachedCompactPoseIndex;
 		FTransform ClavicleCS = CSPose.GetComponentSpaceTransform(ClavicleIdx);
-		const FVector PreSolveTranslationComp = ClavicleCS.GetTranslation();
 		const float PreSolveClavicleLiftFromPelvisCm = ClavicleCS.GetTranslation().Z - RefPelvisTranslationComp.Z;
 		const float TargetClavicleLiftFromPelvisCm = PreSolveClavicleLiftFromPelvisCm + SmoothedLiftCm;
-		FVector TargetTranslationComp = PreSolveTranslationComp;
-		TargetTranslationComp.Z = RefPelvisTranslationComp.Z + TargetClavicleLiftFromPelvisCm;
-		const float AppliedClavicleLiftCm = SmoothedLiftCm;
 		ShoulderSnapshot.bValid = true;
 		ShoulderSnapshot.bStage2ShoulderClavicleHintValid = true;
-		ShoulderSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = false;
-		ShoulderSnapshot.bStage2ShoulderClavicleHadContradictionSource = bHadContradictionSource;
-		ShoulderSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = CandidateShoulderLiftFromPelvisCm;
-		ShoulderSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = RefShoulderLiftFromPelvisCm;
-		ShoulderSnapshot.Stage2RawLiftDeltaCm = RawLiftCm;
-		ShoulderSnapshot.Stage2PositiveTargetLiftCm = TargetLiftCm;
-		ShoulderSnapshot.Stage2ContradictionDeltaCm = ContradictionDeltaCm;
+		ShoulderSnapshot.bStage2ShoulderClavicleSuppressedByContradiction = Evidence.bSuppressedByContradiction;
+		ShoulderSnapshot.bStage2ShoulderClavicleSuppressedByArmOwnership = Evidence.bSuppressedByArmOwnership;
+		ShoulderSnapshot.bStage2ShoulderClavicleHadContradictionSource = Evidence.bHadContradictionSource;
+		ShoulderSnapshot.bStage2ShoulderClavicleHadQuestArmRaiseSource = Evidence.bHadQuestArmRaiseSource;
+		ShoulderSnapshot.bStage2NeutralReferenceReady = Evidence.bNeutralReferenceReady;
+		ShoulderSnapshot.bStage2NeutralSampleAccepted = Evidence.bNeutralSampleAccepted;
+		ShoulderSnapshot.bStage2ClampHit = Evidence.bClampHit;
+		ShoulderSnapshot.Stage2SignalSourceMode = static_cast<float>(static_cast<uint8>(Evidence.SourceMode));
+		ShoulderSnapshot.Stage2SignalSourceReliability = Evidence.SourceReliability;
+		ShoulderSnapshot.Stage2NeutralObservationSeconds = Evidence.NeutralObservationSeconds;
+		ShoulderSnapshot.Stage2CandidateShoulderLiftFromPelvisCm = Evidence.CandidateShoulderLiftFromPelvisCm;
+		ShoulderSnapshot.Stage2ReferenceShoulderLiftFromPelvisCm = Evidence.ReferenceShoulderLiftFromPelvisCm;
+		ShoulderSnapshot.Stage2RawLiftDeltaCm = Evidence.RawLiftDeltaCm;
+		ShoulderSnapshot.Stage2ShoulderHeadClearanceCm = Evidence.ShoulderHeadClearanceCm;
+		ShoulderSnapshot.Stage2ShoulderHeadClearanceReferenceCm = Evidence.ShoulderHeadClearanceReferenceCm;
+		ShoulderSnapshot.Stage2ShoulderHeadClearanceShrugCm = Evidence.ShoulderHeadClearanceShrugCm;
+		ShoulderSnapshot.Stage2ClearancePrimaryEvidenceCm = Evidence.ClearancePrimaryEvidenceCm;
+		ShoulderSnapshot.Stage2RawLiftConfirmationWeight = Evidence.RawLiftConfirmationWeight;
+		ShoulderSnapshot.Stage2SignedLiftEvidenceCm = Evidence.SignedLiftEvidenceCm;
+		ShoulderSnapshot.Stage2SignedTargetLiftCm = Evidence.SignedTargetLiftCm;
+		ShoulderSnapshot.Stage2AppliedResponseScale = Evidence.AppliedResponseScale;
+		ShoulderSnapshot.Stage2PositiveLiftEvidenceCm = Evidence.PositiveLiftEvidenceCm;
+		ShoulderSnapshot.Stage2UnfadedPositiveTargetLiftCm = Evidence.UnfadedPositiveTargetLiftCm;
+		ShoulderSnapshot.Stage2QuestWristLiftFromPelvisCm = Evidence.QuestWristLiftFromPelvisCm;
+		ShoulderSnapshot.Stage2QuestElbowLiftFromPelvisCm = Evidence.QuestElbowLiftFromPelvisCm;
+		ShoulderSnapshot.Stage2QuestArmRaiseOwnershipFade = Evidence.QuestArmRaiseOwnershipFade;
+		ShoulderSnapshot.Stage2QuestArmRaiseLiftWeight = Evidence.QuestArmRaiseLiftWeight;
+		ShoulderSnapshot.Stage2PositiveTargetLiftCm = Evidence.PositiveTargetLiftCm;
+		ShoulderSnapshot.Stage2ContradictionDeltaCm = Evidence.ContradictionDeltaCm;
 		ShoulderSnapshot.Stage2SmoothedLiftCm = SmoothedLiftCm;
 		ShoulderSnapshot.Stage2PreSolveClavicleLiftFromPelvisCm = PreSolveClavicleLiftFromPelvisCm;
 		ShoulderSnapshot.Stage2TargetClavicleLiftFromPelvisCm = TargetClavicleLiftFromPelvisCm;
-		ShoulderSnapshot.Stage2AppliedClavicleLiftCm = AppliedClavicleLiftCm;
+		ShoulderSnapshot.Stage2AppliedClavicleLiftCm = 0.0f;
+		ShoulderSnapshot.Stage2AppliedClavicleHelperLiftCm = 0.0f;
+		ShoulderSnapshot.Stage2DirectUpperArmLiftCm = 0.0f;
+		ShoulderSnapshot.Stage2DirectLowerArmLiftCm = 0.0f;
+		ShoulderSnapshot.Stage2DirectHandLiftCm = 0.0f;
 		PublishSignalSnapshot();
 
-		if (AppliedClavicleLiftCm <= KINDA_SMALL_NUMBER)
-		{
-			return false;
-		}
-
-		if (TargetTranslationComp.ContainsNaN())
-		{
-			return false;
-		}
-		ClavicleCS.SetTranslation(TargetTranslationComp);
-		const FBoneTransform BoneTransform(ClavicleIdx, ClavicleCS);
-		CSPose.SafeSetCSBoneTransforms(MakeArrayView(&BoneTransform, 1));
-		PublishSignalSnapshot();
-		return true;
+		return false;
 	};
 
 	bool bWroteAny = false;
@@ -2097,9 +2182,16 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 {
 	if (!ShouldUseBodyFusionPoseForEvaluation())
 	{
-		return ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation()
-			? DriveBodyFusionStage1TorsoPelvisHintCS(CSPose, DeltaSeconds)
-			: false;
+		return false;
+	}
+
+	const bool bAvatarLockedMetaHumanReplay = ShouldUseAvatarLockedMetaHumanReplay();
+	if (bAvatarLockedMetaHumanReplay)
+	{
+		// Replay output must be driven by its recorded MediaPipe body landmarks.
+		// BodyFusion may still produce diagnostics/freshness/calibration state, but
+		// it must not preload pelvis smoothing or write visible lower-body/root pose.
+		return false;
 	}
 
 	const FTransform ComponentToWorld = TargetCompTransform;
@@ -2107,12 +2199,71 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	FMediaPipeAvatarEmbodimentProfile ForwardProfile = bHasTargetEmbodimentProfile
 		? TargetEmbodimentProfile
 		: FMediaPipeAvatarEmbodimentProfile();
-	ForwardProfile.bUseTargetFaceForwardAxis = bUseTargetFaceForwardAxis;
+	ConfigureBodyFusionProfileForCurrentTarget(ForwardProfile);
 
 	// BodyFusion owns the fused torso/lower-body writes once enabled; the legacy
 	// MediaPipeDrive* CVars only gate the raw landmark path.
 	if (Pelvis.IsValidToEvaluate())
 	{
+		auto ApplyAvatarLockedUpperBodyTranslationDelta = [&](const FVector& DeltaComp)
+		{
+			if (DeltaComp.IsNearlyZero())
+			{
+				return;
+			}
+
+			ApplyTranslationDeltaCS(CSPose, Spine01, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Spine02, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Spine03, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Spine04, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Spine05, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Neck, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Neck02, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, Head, DeltaComp);
+
+			ApplyTranslationDeltaCS(CSPose, ClavicleL, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmL, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmTwist01L, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmTwist02L, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmL, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmTwist01L, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmTwist02L, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, HandL, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, ClavicleR, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmR, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmTwist01R, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, UpperArmTwist02R, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmR, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmTwist01R, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, LowerArmTwist02R, DeltaComp);
+			ApplyTranslationDeltaCS(CSPose, HandR, DeltaComp);
+
+			for (FBoneReference& HelperBone : MetaHumanClavicleHelpersL)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+			for (FBoneReference& HelperBone : MetaHumanClavicleHelpersR)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+			for (FBoneReference& HelperBone : MetaHumanUpperArmHelpersL)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+			for (FBoneReference& HelperBone : MetaHumanUpperArmHelpersR)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+			for (FBoneReference& HelperBone : MetaHumanLowerArmHelpersL)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+			for (FBoneReference& HelperBone : MetaHumanLowerArmHelpersR)
+			{
+				ApplyTranslationDeltaCS(CSPose, HelperBone, DeltaComp);
+			}
+		};
+
 		FVector TargetPelvisOffsetComp = FVector::ZeroVector;
 		bool bHasTargetPelvisOffset = false;
 		if (BodyFusionFrame.Pose.Pelvis.bValid &&
@@ -2121,7 +2272,27 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		{
 			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Pelvis.LocationWorld);
 			TargetPelvisOffsetComp = TargetPelvisComp - RefPelvisTranslationComp;
-			bHasTargetPelvisOffset = true;
+			bHasTargetPelvisOffset = !TargetPelvisOffsetComp.ContainsNaN();
+		}
+
+		if (bAvatarLockedMetaHumanReplay && BodyFusionFrame.Pose.Head.bValid && !RefHeadPosComp.IsNearlyZero())
+		{
+			const FVector TargetHeadComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Head.LocationWorld);
+			const FVector HeadOffsetComp = TargetHeadComp - RefHeadPosComp;
+			FVector CompUp = WorldToComponent.TransformVectorNoScale(FVector::UpVector).GetSafeNormal();
+			if (CompUp.IsNearlyZero())
+			{
+				CompUp = FVector::UpVector;
+			}
+			const float HeadVerticalOffsetCm = FVector::DotProduct(HeadOffsetComp, CompUp);
+			const float PelvisVerticalOffsetCm = FVector::DotProduct(TargetPelvisOffsetComp, CompUp);
+			if (FMath::IsFinite(HeadVerticalOffsetCm) &&
+				FMath::IsFinite(PelvisVerticalOffsetCm) &&
+				HeadVerticalOffsetCm < PelvisVerticalOffsetCm)
+			{
+				TargetPelvisOffsetComp += CompUp * (HeadVerticalOffsetCm - PelvisVerticalOffsetCm);
+				bHasTargetPelvisOffset = true;
+			}
 		}
 
 		const float PelvisAlpha = HalfLifeToAlpha(PelvisTranslationHalfLifeSeconds, DeltaSeconds);
@@ -2140,9 +2311,16 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 
 		const FCompactPoseBoneIndex PelvisIdx = Pelvis.CachedCompactPoseIndex;
 		FTransform PelvisCS = CSPose.GetComponentSpaceTransform(PelvisIdx);
-		PelvisCS.SetTranslation(RefPelvisTranslationComp + BodyState.SmoothedPelvisOffsetComp);
+		const FVector PreviousPelvisComp = PelvisCS.GetTranslation();
+		const FVector TargetPelvisComp = RefPelvisTranslationComp + BodyState.SmoothedPelvisOffsetComp;
+		PelvisCS.SetTranslation(TargetPelvisComp);
 		const FBoneTransform BoneTransform(PelvisIdx, PelvisCS);
 		CSPose.SafeSetCSBoneTransforms(MakeArrayView(&BoneTransform, 1));
+
+		if (bAvatarLockedMetaHumanReplay)
+		{
+			ApplyAvatarLockedUpperBodyTranslationDelta(TargetPelvisComp - PreviousPelvisComp);
+		}
 	}
 
 	if (NumSpineBones <= 0)
@@ -2271,6 +2449,10 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 
 	auto ApplyBodyFusionSpineTranslationTargets = [&]()
 	{
+		if (bAvatarLockedMetaHumanReplay)
+		{
+			return;
+		}
 		if (ForwardProfile.SkeletonFamily != EMediaPipeAvatarSkeletonFamily::MetaHuman ||
 			NumSpineBones <= 0 ||
 			!bHasRefChestPosComp)
@@ -2439,9 +2621,12 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	// eye anchors all remain authoritative after deep lean poses.
 	// Regression guard: final translation order is spine/chest -> neck -> neck_02 -> head.
 	ApplyBodyFusionSpineTranslationTargets();
-	ApplyComponentTranslationToBone(Neck, NeckTargetComp);
-	ApplyComponentTranslationToBone(Neck02, Neck02TargetComp);
-	ApplyComponentTranslationToBone(Head, HeadComp);
+	if (!bAvatarLockedMetaHumanReplay)
+	{
+		ApplyComponentTranslationToBone(Neck, NeckTargetComp);
+		ApplyComponentTranslationToBone(Neck02, Neck02TargetComp);
+		ApplyComponentTranslationToBone(Head, HeadComp);
+	}
 
 	float EyeAnchorResidualCm = 0.0f;
 	FVector EyeAnchorResidualDeltaComp = FVector::ZeroVector;
@@ -2826,12 +3011,18 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 			BodyState.SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 			BodyState.bHasSmoothedStage2ClavicleLiftL = false;
 			BodyState.SmoothedStage2ClavicleLiftCmL = 0.0f;
-			BodyState.bHasStage2ShoulderLiftBaselineL = false;
-			BodyState.Stage2ShoulderLiftBaselineCmL = 0.0f;
+			BodyState.bHasStage2NeutralReferenceL = false;
+			BodyState.Stage2NeutralShoulderLiftFromPelvisCmL = 0.0f;
+			BodyState.Stage2NeutralShoulderHeadClearanceCmL = 0.0f;
+			BodyState.Stage2NeutralObservationSecondsL = 0.0f;
+			BodyState.Stage2NeutralObservationFramesL = 0;
 			BodyState.bHasSmoothedStage2ClavicleLiftR = false;
 			BodyState.SmoothedStage2ClavicleLiftCmR = 0.0f;
-			BodyState.bHasStage2ShoulderLiftBaselineR = false;
-			BodyState.Stage2ShoulderLiftBaselineCmR = 0.0f;
+			BodyState.bHasStage2NeutralReferenceR = false;
+			BodyState.Stage2NeutralShoulderLiftFromPelvisCmR = 0.0f;
+			BodyState.Stage2NeutralShoulderHeadClearanceCmR = 0.0f;
+			BodyState.Stage2NeutralObservationSecondsR = 0.0f;
+			BodyState.Stage2NeutralObservationFramesR = 0;
 			BodyState.bHasSmoothedFkRootGroundOffset = false;
 			BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
 			LeftArmState.bHasSmoothedArmIK = false;
@@ -2873,7 +3064,9 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	const bool bBodyFusionFullPoseInput = ShouldUseBodyFusionPoseForEvaluation();
 	const bool bBodyFusionPoseWritten = DriveBodyFusionPoseCS(CSPose, DeltaSeconds);
-	if (!bBodyFusionPoseWritten && bHasPoseFrame)
+	const bool bReplayBodyPoseDirectOverride =
+		FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() && bHasPoseFrame;
+	if ((!bBodyFusionPoseWritten || bReplayBodyPoseDirectOverride) && bHasPoseFrame)
 	{
 		DrivePelvisTranslationCS(CSPose, DeltaSeconds);
 		DriveSpineCS(CSPose, DeltaSeconds);
@@ -2883,7 +3076,7 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 		DriveLegCS(CSPose, true, DeltaSeconds);
 		DriveLegCS(CSPose, false, DeltaSeconds);
 	}
-	if (!bBodyFusionPoseWritten && bHasPoseFrame)
+	if ((!bBodyFusionPoseWritten || bReplayBodyPoseDirectOverride) && bHasPoseFrame)
 	{
 		UpdateFkRootGroundingCS(CSPose, DeltaSeconds);
 	}
@@ -2897,7 +3090,7 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPosesSafe(CSPose, Output.Pose);
 
-	if (!bBodyFusionPoseWritten && bHasPoseFrame && !BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
+	if ((!bBodyFusionPoseWritten || bReplayBodyPoseDirectOverride) && bHasPoseFrame && !BodyState.SmoothedFkRootGroundOffsetComp.IsNearlyZero())
 	{
 		FBoneReference RootToTranslate = Root;
 		if (!RootToTranslate.IsValidToEvaluate())
@@ -3052,6 +3245,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	const bool bNewDriveLegs = CVarMediaPipeDriveLegs.GetValueOnGameThread() != 0;
 	const bool bNewUseArmIK = CVarMediaPipeUseArmIK.GetValueOnGameThread() != 0;
 	const bool bNewUseLegIK = CVarMediaPipeUseLegIK.GetValueOnGameThread() != 0;
+	const bool bNewUseLegIKFootPlant = CVarMediaPipeUseLegIKFootPlant.GetValueOnGameThread() != 0;
 	const bool bNewUseFkRootGrounding = CVarMediaPipeUseFkRootGrounding.GetValueOnGameThread() != 0;
 	const bool bNewDriveHandRotation = CVarMediaPipeDriveHandRotation.GetValueOnGameThread() != 0;
 	const bool bNewUseQuestHandTracking = CVarQuestHandTracking.GetValueOnGameThread() != 0;
@@ -3075,6 +3269,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 		PoseNode.bDriveLegs != bNewDriveLegs ||
 		PoseNode.bUseArmIK != bNewUseArmIK ||
 		PoseNode.bUseLegIK != bNewUseLegIK ||
+		PoseNode.bUseLegIKFootPlant != bNewUseLegIKFootPlant ||
 		PoseNode.bUseFkRootGrounding != bNewUseFkRootGrounding ||
 		PoseNode.bDriveHandRotation != bNewDriveHandRotation ||
 		PoseNode.bUseQuestHandTracking != bNewUseQuestHandTracking ||
@@ -3097,6 +3292,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	PoseNode.bDriveLegs = bNewDriveLegs;
 	PoseNode.bUseArmIK = bNewUseArmIK;
 	PoseNode.bUseLegIK = bNewUseLegIK;
+	PoseNode.bUseLegIKFootPlant = bNewUseLegIKFootPlant;
 	PoseNode.bUseFkRootGrounding = bNewUseFkRootGrounding;
 	PoseNode.bDriveHandRotation = bNewDriveHandRotation;
 	PoseNode.bUseQuestHandTracking = bNewUseQuestHandTracking;

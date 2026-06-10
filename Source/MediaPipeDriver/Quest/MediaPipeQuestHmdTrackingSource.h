@@ -7,6 +7,7 @@ struct MEDIAPIPEDRIVER_API FMediaPipeQuestHmdPoseSnapshot
 	FVector LocationWorld = FVector::ZeroVector;
 	FQuat RotationWorld = FQuat::Identity;
 	FVector TrackingUpWorld = FVector::UpVector;
+	double TimestampSeconds = -1.0;
 	bool bHasPose = false;
 };
 

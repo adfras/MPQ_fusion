@@ -18,6 +18,8 @@ struct MEDIAPIPEDRIVER_API FQuestHandTrackingSnapshot
 	uint8 bHasRight = 0;
 	uint8 bLeftTracked = 0;
 	uint8 bRightTracked = 0;
+	double LeftTimestampSeconds = -1.0;
+	double RightTimestampSeconds = -1.0;
 	TStaticArray<FVector, QuestHandKeypointCount> LeftPositionsWorld;
 	TStaticArray<FQuat, QuestHandKeypointCount> LeftRotationsWorld;
 	TStaticArray<float, QuestHandKeypointCount> LeftRadii;
@@ -33,6 +35,8 @@ struct MEDIAPIPEDRIVER_API FQuestHandTrackingSnapshot
 		bHasRight = 0;
 		bLeftTracked = 0;
 		bRightTracked = 0;
+		LeftTimestampSeconds = -1.0;
+		RightTimestampSeconds = -1.0;
 		for (int32 Index = 0; Index < QuestHandKeypointCount; ++Index)
 		{
 			LeftPositionsWorld[Index] = FVector::ZeroVector;
