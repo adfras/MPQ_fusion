@@ -1,30 +1,59 @@
 # TestingKit5 Documentation Index
 
-Status: active index created 2026-06-07.
-
-Start here for current Codex work in TestingKit5. Date-stamped files are historical unless this index or `MEDIAPIPE_VALIDATION_AND_OPERATIONS.md` marks them as current.
+Status: single authoritative index. Created 2026-06-07, restructured 2026-06-11 (all project
+documentation now lives under `Docs/`; root keeps only `AGENTS.md`). Date-stamped files are
+historical unless this index marks them active.
 
 ## Active Operational Docs
 
-- `MEDIAPIPE_VALIDATION_AND_OPERATIONS.md`: current build, VR proof, Camo/iPhone setup, MPQ Stage 0/1/2A validation, and review-packaging rules.
-- `../MPQ_Stage2A_Conflict_Stress_Test_Plan.md`: current clean-fusion MPQ shoulder/shrug evidence script and pass criteria.
+- `MEDIAPIPE_VALIDATION_AND_OPERATIONS.md`: current build, VR proof, Camo/iPhone setup,
+  MPQ Stage 0/1/2A validation, and review-packaging rules.
+- `MPQ_Stage2A_Conflict_Stress_Test_Plan.md`: current clean-fusion MPQ shoulder/shrug evidence
+  script and pass criteria.
 - `MEDIAPIPE_PIPELINE_WALKTHROUGH.md`: broader MediaPipe/Quest architecture and historical context.
 - `METAHUMAN_PROFILE_DRIVEN_RETARGETING.md`: MetaHuman profile and retargeting context.
 - `AVATAR_PROFILE_DRIVEN_EMBODIMENT.md`: profile-driven embodied avatar setup.
-- `AVATAR_LOCKED_SYNC_CALIBRATION_CAPTURE_PROTOCOL.md`: current one-run avatar-locked sync calibration capture protocol with seven green 30-second movement blocks and lower-body policy/source interpretation.
-- `AVATAR_REPLAY_OUTPUT_FIX_CHECKLIST.md`: active checklist for deterministic replay-output avatar following fixes on `/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01`.
+- `AVATAR_LOCKED_SYNC_CALIBRATION_CAPTURE_PROTOCOL.md`: current one-run avatar-locked sync
+  calibration capture protocol with seven green 30-second movement blocks and lower-body
+  policy/source interpretation.
+- `AVATAR_REPLAY_OUTPUT_FIX_CHECKLIST.md`: replay-output avatar following fixes on
+  `/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01`, including the 2026-06-10
+  replay quality pass (policy guard, FK root grounding, region-quality diagnostics, hair fix).
+- `MEDIAPIPE_VR_MIRROR_BASELINE.md`: VR mirror baseline setup.
+- `MEDIAPIPE_WEBCAM_INCLUSION.md`: webcam source inclusion notes.
+- `WALLACE_QUEST_VR_CURRENT_DEFAULTS_HANDOFF.md` / `WALLACE_QUEST_VR_EMBODIMENT_GUARDRAILS.md`:
+  Wallace VR defaults and guardrails reference.
+
+## Structure / Cleanup Work
+
+- `REFACTOR_PLAN.md`: the phased structural refactor and cleanup plan (gates, evidence,
+  execution log). Read this before moving, deleting, or restructuring anything.
 
 ## Current MPQ Fusion State
 
 - Primary MPQ test map: `/Game/MetaHumanRooms/L_MetaHumanPreviewRoom_MPQSignalCompare_01`.
 - Active MediaPipe-only reference map: `/Game/MCPBench/Maps/L_MCP_MediaPipeMannyRoom`.
-- BodyFusion owns avatar authority and final pose output.
+- Recorded Quest+MediaPipe replay map: `/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01`
+  (canonical dataset: `Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source*`;
+  hash-verified backup at `D:\Backups\TestingKit5_CanonicalReplayDataset`).
+- BodyFusion owns avatar authority and final pose output; during dataset replay the lower body
+  is diagnostics-only for ALL avatars and the recorded landmarks drive the direct segment solve.
 - Quest/HMD provide source observations for HMD/head plus wrist, hand, and finger endpoints.
-- MediaPipe provides body-pose observations, including shoulders and shrugs that Quest cannot directly track.
-- Stage 1/Stage 2 direct MetaHuman bone-offset layers and raw AutoQuest clavicle/spine/pelvis writes are not the active fusion path; shoulder output is routed through the fused pose writer and avatar profile.
-- MetaHuman helper leaf coverage is part of the fused pose writer path: clavicle out/scap/pec, upper-arm twist/corrective/bicep/tricep, lower-arm corrective, and wrist inner/outer helper groups are accounted for from the current main-chain pose. Do not force-set the upper-arm shoulder socket to the MediaPipe shoulder point.
+- MediaPipe provides body-pose observations, including shoulders and shrugs that Quest cannot
+  directly track.
+- Stage 1/Stage 2 direct MetaHuman bone-offset layers and raw AutoQuest clavicle/spine/pelvis
+  writes are not the active fusion path; shoulder output is routed through the fused pose
+  writer and avatar profile.
+- MetaHuman helper leaf coverage is part of the fused pose writer path. Do not force-set the
+  upper-arm shoulder socket to the MediaPipe shoulder point.
 - MediaPipe arm fallback remains out of scope.
+
+## Archive
+
+- `Archive/INDEX.md`: one-line index of all historical/superseded docs (TestingKit3-era
+  snapshots, completed checklists, dated investigations).
 
 ## Build Rule
 
-Do not use Live Coding for Codex-driven builds. Close Unreal and `LiveCodingConsole.exe`, then run the normal editor build command from `AGENTS.md`.
+Do not use Live Coding for Codex-driven builds. Close Unreal and `LiveCodingConsole.exe`, then
+build with `Tools\BuildTestingKit5EditorFast.ps1` (or the raw bounded command in `AGENTS.md`).

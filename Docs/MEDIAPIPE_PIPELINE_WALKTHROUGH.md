@@ -4,7 +4,7 @@ Last updated: 2026-05-20
 
 This document describes the current TestingKit3 MediaPipe implementation: how video frames become MediaPipe landmarks, how those landmarks are conditioned and converted into Unreal space, and how the final pose drives a Manny-like skeletal mesh.
 
-The current shoulder state is the frozen baseline captured in `MediaPipe_Shoulder_Baseline.md`. That baseline is the best visual state so far, not a claim that shoulder roll is finished.
+The current shoulder state is the frozen baseline captured in `Archive/MediaPipe_Shoulder_Baseline.md`. That baseline is the best visual state so far, not a claim that shoulder roll is finished.
 
 ## Purpose
 
@@ -392,7 +392,7 @@ Source/MediaPipeDriverEditor/MediaPipeLiveVideoCommands.cpp
 and described in:
 
 ```text
-MediaPipe_Shoulder_Baseline.md
+Archive/MediaPipe_Shoulder_Baseline.md
 ```
 
 The historical live-video arm/shoulder path is:
@@ -687,5 +687,5 @@ Source/MediaPipeDriverEditor/MediaPipeLiveVideoCommands.cpp
 Current shoulder baseline note:
 
 ```text
-MediaPipe_Shoulder_Baseline.md
+Archive/MediaPipe_Shoulder_Baseline.md
 ```
