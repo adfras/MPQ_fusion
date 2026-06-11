@@ -30,6 +30,10 @@ DEF_RE = re.compile(
 )
 SETCONSOLE_RE = re.compile(
     r"SetConsole(?:Int|Float|Bool|String)\w*\(\s*TEXT\(\"(?P<name>[^\"]+)\"\)")
+# CVar policy-stack layer tables (Runtime/MediaPipeCVarPolicy.h): a table entry IS a write,
+# performed by the stack when the layer applies. Attribute it to the file declaring the table.
+POLICYSETTING_RE = re.compile(
+    r"FMediaPipeCVarSetting::Make(?:Int|Float|String)\(\s*TEXT\(\"(?P<name>[^\"]+)\"\)")
 FINDSET_RE = re.compile(
     r"FindConsoleVariable\(\s*TEXT\(\"(?P<name>[^\"]+)\"\)\s*\)\s*(?:;|,|\))")
 
@@ -88,6 +92,8 @@ def collect():
     for path, text in files.items():
         r = rel(path)
         for m in SETCONSOLE_RE.finditer(text):
+            writers[m.group("name")].add(r)
+        for m in POLICYSETTING_RE.finditer(text):
             writers[m.group("name")].add(r)
         # IConsoleVariable*->Set( after a Find by name: attribute the write to this file.
         for m in re.finditer(r"FindConsoleVariable\(\s*TEXT\(\"(mp\.[^\"]+)\"\)", text):
