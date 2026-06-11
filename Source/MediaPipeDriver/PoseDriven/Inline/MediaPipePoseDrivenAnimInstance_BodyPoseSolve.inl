@@ -314,8 +314,10 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 
 	float TargetOffsetZ = 0.0f;
 	bool bHasGroundedFoot = false;
+	float LowestBallDeltaZ = TNumericLimits<float>::Max();
+	bool bHasBallDelta = false;
 
-	auto ConsiderFoot = [&](bool bSourceGrounded, const FBoneReference& BallBone)
+	auto ConsiderFoot = [&](bool bSourceGrounded, bool bSourceNearFloor, const FBoneReference& BallBone)
 	{
 		if (!BallBone.IsValidToEvaluate())
 		{
@@ -324,6 +326,10 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 
 		const float CurrentBallZ = CSPose.GetComponentSpaceTransform(BallBone.CachedCompactPoseIndex).GetTranslation().Z;
 		const float FloorDeltaCm = CurrentBallZ - RefFootFloorZComp;
+		// Track the lowest foot independent of hover eligibility so the smoother's penetration
+		// guard sees every foot, including ones that are descending too fast to count as grounded.
+		LowestBallDeltaZ = bHasBallDelta ? FMath::Min(LowestBallDeltaZ, FloorDeltaCm) : FloorDeltaCm;
+		bHasBallDelta = true;
 		if (FMath::Abs(FloorDeltaCm) <= KINDA_SMALL_NUMBER ||
 			FMath::Abs(FloorDeltaCm) > FkRootGroundingMaxCorrectionCm)
 		{
@@ -332,7 +338,11 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 
 		const float CandidateOffsetZ = -FloorDeltaCm;
 		const bool bCandidateFixesPenetration = CandidateOffsetZ > 0.0f;
-		if (!bSourceGrounded && !bCandidateFixesPenetration)
+		// Downward (hover) correction needs source evidence the foot is at or near its observed
+		// floor. Requiring the full velocity-gated grounded state left the avatar hovering through
+		// entire stepping/squat blocks: recorded soft knees shorten the leg chain while the pelvis
+		// sits at reference height, and feet rarely settle long enough to count as grounded.
+		if (!bSourceGrounded && !bSourceNearFloor && !bCandidateFixesPenetration)
 		{
 			return;
 		}
@@ -340,32 +350,28 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 		const bool bCurrentFixesPenetration = TargetOffsetZ > 0.0f;
 		if (!bHasGroundedFoot ||
 			(bCandidateFixesPenetration && (!bCurrentFixesPenetration || CandidateOffsetZ > TargetOffsetZ)) ||
-			(!bCandidateFixesPenetration && !bCurrentFixesPenetration && CandidateOffsetZ < TargetOffsetZ))
+			(!bCandidateFixesPenetration && !bCurrentFixesPenetration && CandidateOffsetZ > TargetOffsetZ))
 		{
+			// For hover, ground the LOWEST eligible foot (the least-negative correction) so a
+			// lifted foot stays lifted and the planted foot is not pushed through the floor.
 			TargetOffsetZ = CandidateOffsetZ;
 			bHasGroundedFoot = true;
 		}
 	};
 
-	ConsiderFoot(LeftLegState.bCurrentSourceFootGrounded, BallL);
-	ConsiderFoot(RightLegState.bCurrentSourceFootGrounded, BallR);
+	ConsiderFoot(LeftLegState.bCurrentSourceFootGrounded, LeftLegState.bCurrentSourceFootNearFloor, BallL);
+	ConsiderFoot(RightLegState.bCurrentSourceFootGrounded, RightLegState.bCurrentSourceFootNearFloor, BallR);
 
-	const FVector TargetOffsetComp(0.0f, 0.0f, bHasGroundedFoot ? TargetOffsetZ : 0.0f);
-	const float Alpha = HalfLifeToAlpha(FkRootGroundingHalfLifeSeconds, DeltaSeconds);
-	if (!BodyState.bHasSmoothedFkRootGroundOffset)
-	{
-		BodyState.SmoothedFkRootGroundOffsetComp = TargetOffsetComp;
-		BodyState.bHasSmoothedFkRootGroundOffset = true;
-	}
-	else
-	{
-		FVector SmoothedOffsetComp = FMath::Lerp(BodyState.SmoothedFkRootGroundOffsetComp, TargetOffsetComp, Alpha);
-		if (TargetOffsetComp.Z > BodyState.SmoothedFkRootGroundOffsetComp.Z)
-		{
-			SmoothedOffsetComp.Z = TargetOffsetComp.Z;
-		}
-		BodyState.SmoothedFkRootGroundOffsetComp = SmoothedOffsetComp;
-	}
+	MediaPipeBodySolverMath::FMediaPipeFkRootGroundingSmoothInput SmoothInput;
+	SmoothInput.bHasSmoothedOffset = BodyState.bHasSmoothedFkRootGroundOffset;
+	SmoothInput.SmoothedOffsetZ = BodyState.SmoothedFkRootGroundOffsetComp.Z;
+	SmoothInput.TargetOffsetZ = bHasGroundedFoot ? TargetOffsetZ : 0.0f;
+	SmoothInput.Alpha = HalfLifeToAlpha(FkRootGroundingHalfLifeSeconds, DeltaSeconds);
+	SmoothInput.LowestBallDeltaZ = bHasBallDelta ? LowestBallDeltaZ : FkRootGroundingMaxCorrectionCm;
+	SmoothInput.MaxCorrectionCm = FkRootGroundingMaxCorrectionCm;
+	BodyState.SmoothedFkRootGroundOffsetComp =
+		FVector(0.0f, 0.0f, MediaPipeBodySolverMath::SmoothFkRootGroundingOffsetZ(SmoothInput));
+	BodyState.bHasSmoothedFkRootGroundOffset = true;
 }
 
 void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)

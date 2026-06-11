@@ -1128,6 +1128,16 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, use projected torso forward instead of noisy ankle-to-toe heading for unreliable MediaPipe foot samples."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeLegKneeBackwardPoleSuppression(
+		TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"),
+		0.0f,
+		TEXT("0..1 fraction of an implausible backward MediaPipe knee pole (knee behind the hip-ankle line relative to avatar forward) rotated toward forward/lateral while preserving bend magnitude. Front-facing monocular depth cannot observe knee depth reliably; 0 keeps raw landmarks. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFootGroundedWorldUp(
+		TEXT("mp.MediaPipeFootGroundedWorldUp"),
+		0,
+		TEXT("When non-zero, grounded/near-floor MediaPipe feet build their up axis from world up (the floor) instead of torso up, so squat or lean torso tilt does not roll planted feet. Airborne feet keep following the body. Replay-output evaluation enables this."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeDriveArmTwistBones(
 		TEXT("mp.MediaPipeDriveArmTwistBones"),
 		0,

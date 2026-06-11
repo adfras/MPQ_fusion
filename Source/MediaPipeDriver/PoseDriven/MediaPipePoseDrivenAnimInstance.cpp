@@ -1320,7 +1320,7 @@ void FAnimNode_MediaPipePoseDriven::ConfigureBodyFusionProfileForCurrentTarget(F
 		: InOutProfile.DefaultEyeLocalOffset;
 	InOutProfile.EmbodiedCameraForwardOffsetCm = TargetEmbodiedCameraForwardOffsetCm;
 
-	if (ShouldUseAvatarLockedMetaHumanReplay())
+	if (ShouldUseAvatarLockedReplay())
 	{
 		InOutProfile.PelvisAuthorityMode = EMediaPipePelvisAuthorityMode::MediaPipeHipsVerticalOnly;
 		InOutProfile.UpperBodyFollowAlpha = 1.0f;
@@ -1929,22 +1929,13 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionPoseForEvaluation() const
 	return FMediaPipeAvatarPoseWriter::CanWritePose(BodyFusionFrame.Pose, Profile);
 }
 
-bool FAnimNode_MediaPipePoseDriven::ShouldUseAvatarLockedMetaHumanReplay() const
+bool FAnimNode_MediaPipePoseDriven::ShouldUseAvatarLockedReplay() const
 {
-	if (!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
-	{
-		return false;
-	}
-
-	if (TargetMetaHumanProfile.IsValidForPoseDriving())
-	{
-		return true;
-	}
-
-	const FMediaPipeAvatarEmbodimentProfile Profile = bHasTargetEmbodimentProfile
-		? TargetEmbodimentProfile
-		: FMediaPipeAvatarEmbodimentProfile();
-	return Profile.SkeletonFamily == EMediaPipeAvatarSkeletonFamily::MetaHuman;
+	// Dataset replay drives every avatar the same way - Manny and all MetaHuman profiles - through
+	// the avatar-local direct solve fed by the recorded landmarks. BodyFusion stays
+	// diagnostics-only for replay lower body regardless of skeleton family, so no avatar's legs
+	// can be owned, pinned, or translated by fused-pose writes during replay evaluation.
+	return FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive();
 }
 
 bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const
@@ -2185,8 +2176,8 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		return false;
 	}
 
-	const bool bAvatarLockedMetaHumanReplay = ShouldUseAvatarLockedMetaHumanReplay();
-	if (bAvatarLockedMetaHumanReplay)
+	const bool bAvatarLockedReplay = ShouldUseAvatarLockedReplay();
+	if (bAvatarLockedReplay)
 	{
 		// Replay output must be driven by its recorded MediaPipe body landmarks.
 		// BodyFusion may still produce diagnostics/freshness/calibration state, but
@@ -2275,7 +2266,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			bHasTargetPelvisOffset = !TargetPelvisOffsetComp.ContainsNaN();
 		}
 
-		if (bAvatarLockedMetaHumanReplay && BodyFusionFrame.Pose.Head.bValid && !RefHeadPosComp.IsNearlyZero())
+		if (bAvatarLockedReplay && BodyFusionFrame.Pose.Head.bValid && !RefHeadPosComp.IsNearlyZero())
 		{
 			const FVector TargetHeadComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Head.LocationWorld);
 			const FVector HeadOffsetComp = TargetHeadComp - RefHeadPosComp;
@@ -2317,7 +2308,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		const FBoneTransform BoneTransform(PelvisIdx, PelvisCS);
 		CSPose.SafeSetCSBoneTransforms(MakeArrayView(&BoneTransform, 1));
 
-		if (bAvatarLockedMetaHumanReplay)
+		if (bAvatarLockedReplay)
 		{
 			ApplyAvatarLockedUpperBodyTranslationDelta(TargetPelvisComp - PreviousPelvisComp);
 		}
@@ -2449,7 +2440,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 
 	auto ApplyBodyFusionSpineTranslationTargets = [&]()
 	{
-		if (bAvatarLockedMetaHumanReplay)
+		if (bAvatarLockedReplay)
 		{
 			return;
 		}
@@ -2621,7 +2612,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	// eye anchors all remain authoritative after deep lean poses.
 	// Regression guard: final translation order is spine/chest -> neck -> neck_02 -> head.
 	ApplyBodyFusionSpineTranslationTargets();
-	if (!bAvatarLockedMetaHumanReplay)
+	if (!bAvatarLockedReplay)
 	{
 		ApplyComponentTranslationToBone(Neck, NeckTargetComp);
 		ApplyComponentTranslationToBone(Neck02, Neck02TargetComp);
@@ -2987,6 +2978,34 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	CachedDeltaTimeSeconds = 0.0f;
 
 	Output.ResetToRefPose();
+
+	// Per-node input/reference gate diagnostic for replay evaluation: armed together with the leg
+	// solve debug rows, this explains WHY a target stays at the reference pose (missing pose
+	// frame, missing reference cache, invalid pelvis/leg bone references) instead of leaving the
+	// freeze silent. One row per node per second while armed.
+	if (CVarMediaPipeLegSolveDebugOnce.GetValueOnAnyThread() > 0 &&
+		FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
+	{
+		const double NowSecondsForGateLog = FPlatformTime::Seconds();
+		if (LastReplayInputGateLogTimeSeconds < 0.0 ||
+			NowSecondsForGateLog - LastReplayInputGateLogTimeSeconds >= 1.0)
+		{
+			LastReplayInputGateLogTimeSeconds = NowSecondsForGateLog;
+			UE_LOG(LogMediaPipePose, Warning,
+				TEXT("mp.MediaPipeReplayInputGate actor=%s hasReferencePose=%d hasPoseFrame=%d hasQuestOrHmd=%d driveLegs=%d drivePelvisTranslation=%d hasRefLegL=%d hasRefLegR=%d pelvisBoneValid=%d thighLBoneValid=%d ballLBoneValid=%d"),
+				*TargetActorName.ToString(),
+				bHasReferencePose ? 1 : 0,
+				bHasPoseFrame ? 1 : 0,
+				bHasQuestOrHmdRuntimeInput ? 1 : 0,
+				bDriveLegs ? 1 : 0,
+				bDrivePelvisTranslation ? 1 : 0,
+				bHasRefLegL ? 1 : 0,
+				bHasRefLegR ? 1 : 0,
+				Pelvis.IsValidToEvaluate() ? 1 : 0,
+				ThighL.IsValidToEvaluate() ? 1 : 0,
+				BallL.IsValidToEvaluate() ? 1 : 0);
+		}
+	}
 
 	const bool bHasBodyFusionPoseInput =
 		ShouldUseBodyFusionPoseForEvaluation() ||

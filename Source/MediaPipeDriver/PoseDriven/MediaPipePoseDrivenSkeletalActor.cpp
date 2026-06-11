@@ -5422,6 +5422,25 @@ void AMediaPipePoseDrivenSkeletalActor::Tick(float DeltaSeconds)
 		MediaPipeAnim->ApplyRetargetQualitySettings();
 	}
 
+	// When a presentation mesh is the driven target, this actor's own mesh (the Manny-style
+	// verification/reference avatar) still runs its own pose-driven anim instance. It must
+	// receive the same source/retarget configuration every tick, otherwise its anim node keeps
+	// the class-default drive flags (legs and pelvis translation off) and the reference avatar
+	// silently freezes at the reference pose while arms keep following the source. It binds to
+	// this actor's own fusion component so its evidence stream stays separate from the
+	// presentation avatar's.
+	if (DrivenMesh != Mesh && Mesh && Mesh->GetSkeletalMeshAsset())
+	{
+		if (UMediaPipePoseDrivenAnimInstance* OwnMeshAnim =
+			Cast<UMediaPipePoseDrivenAnimInstance>(Mesh->GetAnimInstance()))
+		{
+			OwnMeshAnim->SetSourceActor(AnimSourceActor);
+			OwnMeshAnim->SetEmbodiedFusionComponent(
+				DefaultEmbodiedFusionComponent ? DefaultEmbodiedFusionComponent : GetActiveEmbodiedFusionComponent());
+			OwnMeshAnim->ApplyRetargetQualitySettings();
+		}
+	}
+
 	RecordMannyBoneTimeseriesSample(this, DrivenMesh, DeltaSeconds);
 
 	if (!AnimSourceActor)

@@ -5,6 +5,7 @@
 #include "MediaPipeAvatarEmbodimentProfile.h"
 #include "MediaPipeBodyFusion.h"
 #include "MediaPipeBodyFusionAuthorityPolicy.h"
+#include "MediaPipeBodyFusionRegionQuality.h"
 #include "MediaPipeBodyFusionRuntime.h"
 #include "MediaPipeFullArmChainProvider.h"
 #include "MediaPipePoseTypes.h"
@@ -229,6 +230,10 @@ public:
 	void UpdateMovementReplicaPose_GameThread(const FEmbodiedFusionMovementReplicaPoseInput& Input);
 	const FEmbodiedFusionFrame& GetLatestFusionFrame() const { return LatestFrame; }
 	const FEmbodiedFusionBestAvailablePose& GetBestAvailablePose() const { return LatestFrame.BestAvailablePose; }
+	const FMediaPipeBodyFusionRegionQualityTracker* FindRegionQualityTracker(FName TargetActorName) const
+	{
+		return RegionQualityTrackers.Find(TargetActorName);
+	}
 	static bool BuildMediaPipeCandidatePose(
 		const FMediaPipeTrackingSourceFrame& SourceFrame,
 		const FMediaPipeEmbodimentCalibration& Calibration,
@@ -252,6 +257,10 @@ private:
 		double NowSeconds);
 
 	FEmbodiedFusionFrame LatestFrame;
+	// One tracker per driven target so co-hosted streams (for example a MetaHuman and the Manny
+	// reference avatar updating through the same component) keep separate evidence windows and
+	// separate capture files.
+	TMap<FName, FMediaPipeBodyFusionRegionQualityTracker> RegionQualityTrackers;
 	FMediaPipeTrackingSourceAlignmentRuntime SourceAlignmentRuntime;
 	FEmbodiedFusionSourceObservations SourceObservations;
 	FMediaPipeEmbodimentCalibration Calibration;

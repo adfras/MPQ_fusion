@@ -166,6 +166,7 @@ struct FMediaPipeLegSolverState
 	bool bHasObservedSourceFloor = false;
 	float ObservedSourceFloorZ = 0.0f;
 	bool bCurrentSourceFootGrounded = false;
+	bool bCurrentSourceFootNearFloor = false;
 	bool bHasSmoothedThighRotCS = false;
 	FQuat SmoothedThighRotCS = FQuat::Identity;
 	bool bHasSmoothedCalfRotCS = false;
@@ -189,6 +190,7 @@ struct FMediaPipeLegSolverState
 		bHasObservedSourceFloor = false;
 		ObservedSourceFloorZ = 0.0f;
 		bCurrentSourceFootGrounded = false;
+		bCurrentSourceFootNearFloor = false;
 	}
 
 	void ResetRotationSmoothing()

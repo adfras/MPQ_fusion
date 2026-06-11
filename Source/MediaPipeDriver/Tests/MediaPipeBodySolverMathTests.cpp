@@ -240,4 +240,135 @@ bool FMediaPipeBodySolverMathPelvisPlanarAutomationTest::RunTest(const FString& 
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathKneePoleSuppressionAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.KneePoleSuppression",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathKneePoleSuppressionAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// Vertical-ish leg: hip above ankle, knee bent 10 cm PURELY BEHIND the hip-ankle line —
+	// the worst monocular-depth artifact, with no lateral component to rotate toward.
+	FMediaPipeKneePoleSuppressionInput Input;
+	Input.HipWorld = FVector(0.0f, 0.0f, 90.0f);
+	Input.AnkleWorld = FVector(0.0f, 0.0f, 10.0f);
+	Input.KneeWorld = FVector(-10.0f, 0.0f, 50.0f);
+	Input.ForwardHintWorld = FVector::ForwardVector;
+	Input.OutwardHintWorld = FVector::RightVector;
+	Input.BackwardSuppression01 = 1.0f;
+
+	const FVector FullCorrected = SuppressBackwardKneePole(Input);
+	const FVector Axis = (Input.AnkleWorld - Input.HipWorld).GetSafeNormal();
+	const FVector CorrectedPerp =
+		(FullCorrected - Input.HipWorld) - FVector::DotProduct(FullCorrected - Input.HipWorld, Axis) * Axis;
+	TestTrue(TEXT("Full suppression removes the backward knee component"),
+		FVector::DotProduct(CorrectedPerp, FVector::ForwardVector) >= -0.001f);
+	TestTrue(TEXT("Knee bend magnitude is preserved by suppression"),
+		FMath::IsNearlyEqual(CorrectedPerp.Size(), 10.0f, 0.01f));
+	TestTrue(TEXT("Pure backward poles swing toward the outward hint"),
+		FVector::DotProduct(CorrectedPerp, FVector::RightVector) > 9.99f);
+
+	Input.BackwardSuppression01 = 0.5f;
+	const FVector HalfCorrected = SuppressBackwardKneePole(Input);
+	const FVector HalfPerp =
+		(HalfCorrected - Input.HipWorld) - FVector::DotProduct(HalfCorrected - Input.HipWorld, Axis) * Axis;
+	TestTrue(TEXT("Partial suppression halves the backward component"),
+		FMath::IsNearlyEqual(FVector::DotProduct(HalfPerp, FVector::ForwardVector), -5.0f, 0.01f));
+	TestTrue(TEXT("Partial suppression preserves bend magnitude"),
+		FMath::IsNearlyEqual(HalfPerp.Size(), 10.0f, 0.01f));
+
+	// A backward pole with a lateral part keeps its own lateral direction instead of the hint.
+	Input.KneeWorld = FVector(-8.0f, -6.0f, 50.0f);
+	Input.BackwardSuppression01 = 1.0f;
+	const FVector MixedCorrected = SuppressBackwardKneePole(Input);
+	const FVector MixedPerp =
+		(MixedCorrected - Input.HipWorld) - FVector::DotProduct(MixedCorrected - Input.HipWorld, Axis) * Axis;
+	TestTrue(TEXT("Mixed poles keep their own lateral direction"),
+		FVector::DotProduct(MixedPerp, FVector(0.0f, -1.0f, 0.0f)) > 9.99f);
+	TestTrue(TEXT("Mixed pole bend magnitude is preserved"),
+		FMath::IsNearlyEqual(MixedPerp.Size(), 10.0f, 0.01f));
+
+	// A forward knee pole (normal squat) must pass through untouched.
+	Input.KneeWorld = FVector(12.0f, 0.0f, 50.0f);
+	Input.BackwardSuppression01 = 1.0f;
+	TestTrue(TEXT("Forward knee poles are not modified"),
+		SuppressBackwardKneePole(Input).Equals(FVector(12.0f, 0.0f, 50.0f), 0.001f));
+
+	// A lateral (side-lunge) knee pole has no backward component and must pass through.
+	Input.KneeWorld = FVector(0.0f, 11.0f, 50.0f);
+	TestTrue(TEXT("Lateral knee poles are not modified"),
+		SuppressBackwardKneePole(Input).Equals(FVector(0.0f, 11.0f, 50.0f), 0.001f));
+
+	// Nearly straight legs (tiny perpendicular) stay untouched so suppression cannot straighten
+	// or otherwise invent knee bend.
+	Input.KneeWorld = FVector(-0.5f, 0.0f, 50.0f);
+	TestTrue(TEXT("Nearly straight legs are not modified"),
+		SuppressBackwardKneePole(Input).Equals(FVector(-0.5f, 0.0f, 50.0f), 0.001f));
+
+	// Suppression disabled keeps the raw landmark knee.
+	Input.KneeWorld = FVector(-10.0f, 0.0f, 50.0f);
+	Input.BackwardSuppression01 = 0.0f;
+	TestTrue(TEXT("Zero suppression keeps the raw knee"),
+		SuppressBackwardKneePole(Input).Equals(FVector(-10.0f, 0.0f, 50.0f), 0.001f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathFkRootGroundingSmoothAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.FkRootGroundingSmooth",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathFkRootGroundingSmoothAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// Hover correction approaches the target smoothly instead of jumping.
+	FMediaPipeFkRootGroundingSmoothInput Input;
+	Input.bHasSmoothedOffset = true;
+	Input.SmoothedOffsetZ = 0.0f;
+	Input.TargetOffsetZ = -6.0f;
+	Input.Alpha = 0.5f;
+	Input.LowestBallDeltaZ = 6.0f;
+	Input.MaxCorrectionCm = 35.0f;
+	const float HoverStep = SmoothFkRootGroundingOffsetZ(Input);
+	TestTrue(TEXT("Hover correction moves smoothly toward the target"),
+		FMath::IsNearlyEqual(HoverStep, -3.0f, 0.01f));
+
+	// A descending foot can never be pushed below the floor by smoother lag: the lowest ball is
+	// only 1 cm above the floor, so the offset clamps to -1 even though the stale target is -6.
+	Input.SmoothedOffsetZ = -6.0f;
+	Input.TargetOffsetZ = -6.0f;
+	Input.LowestBallDeltaZ = 1.0f;
+	TestTrue(TEXT("Penetration guard clamps the offset to the lowest foot"),
+		FMath::IsNearlyEqual(SmoothFkRootGroundingOffsetZ(Input), -1.0f, 0.01f));
+
+	// Actual penetration (ball below floor) forces an immediate upward offset.
+	Input.SmoothedOffsetZ = 0.0f;
+	Input.TargetOffsetZ = 0.0f;
+	Input.LowestBallDeltaZ = -2.5f;
+	TestTrue(TEXT("Penetration forces an immediate upward correction"),
+		FMath::IsNearlyEqual(SmoothFkRootGroundingOffsetZ(Input), 2.5f, 0.01f));
+
+	// Airborne feet (large positive delta) do not drag the root: release relaxes via the alpha.
+	Input.SmoothedOffsetZ = -5.0f;
+	Input.TargetOffsetZ = 0.0f;
+	Input.Alpha = 0.5f;
+	Input.LowestBallDeltaZ = 20.0f;
+	TestTrue(TEXT("Hover release relaxes smoothly when no foot is eligible"),
+		FMath::IsNearlyEqual(SmoothFkRootGroundingOffsetZ(Input), -2.5f, 0.01f));
+
+	// The configured maximum correction bounds the result in both directions.
+	Input.SmoothedOffsetZ = 0.0f;
+	Input.TargetOffsetZ = 0.0f;
+	Input.Alpha = 1.0f;
+	Input.LowestBallDeltaZ = -100.0f;
+	TestTrue(TEXT("Upward correction is capped at the configured maximum"),
+		FMath::IsNearlyEqual(SmoothFkRootGroundingOffsetZ(Input), 35.0f, 0.01f));
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

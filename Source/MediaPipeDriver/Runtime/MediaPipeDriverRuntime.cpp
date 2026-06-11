@@ -14,6 +14,7 @@
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestWebcamSourceActor.h"
 #include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeTrackingFusionDatasetReplay.h"
 
 #include "Camera/CameraComponent.h"
 #include "Camera/CameraTypes.h"
@@ -554,6 +555,23 @@ void ApplyAutoQuestVrPerformanceProfile()
 	SetConsoleFloat(TEXT("t.MaxFPS"), 0.0f);
 }
 
+// Live retarget profiles below stomp the visible body-drive CVars. While a recorded
+// tracking-fusion dataset replay is active, the replay policy (spine/pelvis/legs on,
+// leg IK and foot plant off, FK root grounding on) must stay authoritative or the
+// avatar-locked replay lower body silently freezes at the reference pose.
+void ReassertTrackingFusionReplayPoseCVarsIfActive(const TCHAR* ProfileName)
+{
+	if (!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
+	{
+		return;
+	}
+
+	FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThread();
+	UE_LOG(LogMediaPipePose, Log,
+		TEXT("%s: tracking-fusion dataset replay active; re-asserted replay body-drive policy (driveSpine=1 drivePelvisTranslation=1 driveLegs=1 useLegIK=0 useLegIKFootPlant=0 useFkRootGrounding=1 driveFootRotation=1)."),
+		ProfileName);
+}
+
 void ApplyStableMediaPipeRetargetProfile()
 {
 	// Same MediaPipe-side baseline used by mp.PlayMediaPipeVisualCycle. Keep this
@@ -603,6 +621,8 @@ void ApplyStableMediaPipeRetargetProfile()
 	SetConsoleInt(TEXT("mp.MediaPipeConstrainLegSource"), 0);
 	SetConsoleInt(TEXT("mp.MediaPipeLegUseBasisRoll"), 1);
 	SetConsoleInt(TEXT("mp.MediaPipeFootForwardHysteresis"), 1);
+
+	ReassertTrackingFusionReplayPoseCVarsIfActive(TEXT("ApplyStableMediaPipeRetargetProfile"));
 }
 
 void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
@@ -3607,6 +3627,8 @@ void ApplyAutoQuestProfile()
 		GetConsoleFloatValue(TEXT("mp.QuestHandRotationMaxStepDegrees")),
 		GetConsoleFloatValue(TEXT("mp.QuestHandRotationLostTrackingGraceSeconds")),
 		GetConsoleFloatValue(TEXT("mp.QuestWristMaxRelativeDeltaCm")));
+
+	ReassertTrackingFusionReplayPoseCVarsIfActive(TEXT("ApplyAutoQuestProfile"));
 }
 
 void SpawnAutoQuestWebcamHands(UWorld* World)

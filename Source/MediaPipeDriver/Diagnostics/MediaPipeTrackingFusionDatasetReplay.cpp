@@ -849,6 +849,25 @@ void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThre
 	SetConsoleInt(TEXT("mp.MediaPipeUseLegIKFootPlant"), 0);
 	SetConsoleInt(TEXT("mp.MediaPipeUseFkRootGrounding"), 1);
 	SetConsoleInt(TEXT("mp.MediaPipeDriveFootRotation"), 1);
+	// Depth-cautious lower-body quality policy for replay-output evaluation: rotate implausible
+	// backward knee poles toward forward/lateral and reference grounded feet to the floor.
+	SetConsoleFloat(TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"), 0.6f);
+	SetConsoleInt(TEXT("mp.MediaPipeFootGroundedWorldUp"), 1);
+	// Region-quality diagnostics: ownership/confidence/evidence rows in the log plus JSONL
+	// timelines for offline plots. Diagnostics only; no pose authority changes.
+	SetConsoleInt(TEXT("mp.BodyFusion.RegionQualityLog"), 1);
+	SetConsoleInt(TEXT("mp.BodyFusion.RegionQualityCapture"), 1);
+	// Replay evaluation runs in desktop PIE, not on a Quest. The Auto Quest VR performance
+	// profile turns shadows off, which makes grounded feet look like they hover in evidence
+	// screenshots; restore desktop shadow/resolution quality whenever the replay policy applies.
+	SetConsoleInt(TEXT("sg.ShadowQuality"), 3);
+	SetConsoleInt(TEXT("r.ShadowQuality"), 5);
+	SetConsoleInt(TEXT("r.Shadow.MaxResolution"), 2048);
+	SetConsoleFloat(TEXT("r.ScreenPercentage"), 100.0f);
+	// Replay seeks and loop wraps teleport the head every time; groom physics cannot survive
+	// those jumps and long MetaHuman hair explodes into giant ribbons. Render strands statically
+	// (bound pose follows the head, no simulation) while replay evaluation is active.
+	SetConsoleInt(TEXT("r.HairStrands.Simulation"), 0);
 }
 
 void FMediaPipeTrackingFusionDatasetReplayRuntime::Start(const double NowSeconds)

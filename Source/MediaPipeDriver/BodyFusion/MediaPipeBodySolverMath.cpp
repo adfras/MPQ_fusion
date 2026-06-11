@@ -269,4 +269,86 @@ namespace MediaPipeBodySolverMath
 
 		return TargetPlanarOffsetComp;
 	}
+
+	FVector SuppressBackwardKneePole(const FMediaPipeKneePoleSuppressionInput& Input)
+	{
+		const float Suppression = FMath::Clamp(Input.BackwardSuppression01, 0.0f, 1.0f);
+		if (Suppression <= KINDA_SMALL_NUMBER)
+		{
+			return Input.KneeWorld;
+		}
+
+		const FVector HipToAnkle = Input.AnkleWorld - Input.HipWorld;
+		const FVector AxisN = HipToAnkle.GetSafeNormal();
+		if (AxisN.IsNearlyZero())
+		{
+			return Input.KneeWorld;
+		}
+
+		const FVector KneeOffset = Input.KneeWorld - Input.HipWorld;
+		const FVector AlongAxis = FVector::DotProduct(KneeOffset, AxisN) * AxisN;
+		const FVector KneePerp = KneeOffset - AlongAxis;
+		const float PerpLen = KneePerp.Size();
+		if (PerpLen <= FMath::Max(Input.MinPerpCm, KINDA_SMALL_NUMBER))
+		{
+			return Input.KneeWorld;
+		}
+
+		const FVector ForwardPerp =
+			(Input.ForwardHintWorld - FVector::DotProduct(Input.ForwardHintWorld, AxisN) * AxisN).GetSafeNormal();
+		if (ForwardPerp.IsNearlyZero())
+		{
+			return Input.KneeWorld;
+		}
+
+		const float ForwardCm = FVector::DotProduct(KneePerp, ForwardPerp);
+		if (ForwardCm >= 0.0f)
+		{
+			return Input.KneeWorld;
+		}
+
+		// Shrink the backward component and move the removed energy into the lateral part of
+		// the bend plane, keeping the perpendicular magnitude (the amount of knee bend) exact.
+		const float SuppressedForwardCm = ForwardCm * (1.0f - Suppression);
+		const FVector LateralVec = KneePerp - ForwardPerp * ForwardCm;
+		FVector LateralDir = LateralVec.GetSafeNormal();
+		if (LateralDir.IsNearlyZero())
+		{
+			LateralDir = (Input.OutwardHintWorld -
+				FVector::DotProduct(Input.OutwardHintWorld, AxisN) * AxisN -
+				FVector::DotProduct(Input.OutwardHintWorld, ForwardPerp) * ForwardPerp).GetSafeNormal();
+		}
+		if (LateralDir.IsNearlyZero())
+		{
+			return Input.KneeWorld;
+		}
+
+		const float LateralLenSq = PerpLen * PerpLen - SuppressedForwardCm * SuppressedForwardCm;
+		const float LateralLen = FMath::Sqrt(FMath::Max(LateralLenSq, 0.0f));
+		const FVector CorrectedPerp = ForwardPerp * SuppressedForwardCm + LateralDir * LateralLen;
+		if (CorrectedPerp.IsNearlyZero())
+		{
+			return Input.KneeWorld;
+		}
+
+		return Input.HipWorld + AlongAxis + CorrectedPerp;
+	}
+
+	float SmoothFkRootGroundingOffsetZ(const FMediaPipeFkRootGroundingSmoothInput& Input)
+	{
+		const float MaxCorrectionCm = FMath::Max(Input.MaxCorrectionCm, 0.0f);
+		float OffsetZ = Input.bHasSmoothedOffset
+			? FMath::Lerp(Input.SmoothedOffsetZ, Input.TargetOffsetZ, FMath::Clamp(Input.Alpha, 0.0f, 1.0f))
+			: Input.TargetOffsetZ;
+
+		// Exact penetration guard: never leave the lowest foot below the reference floor because
+		// the hover smoother is still catching up to a descending foot.
+		const float MinSafeOffsetZ = FMath::Min(-Input.LowestBallDeltaZ, MaxCorrectionCm);
+		if (OffsetZ < MinSafeOffsetZ)
+		{
+			OffsetZ = MinSafeOffsetZ;
+		}
+
+		return FMath::Clamp(OffsetZ, -MaxCorrectionCm, MaxCorrectionCm);
+	}
 }

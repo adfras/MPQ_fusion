@@ -232,6 +232,8 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipeFootPlanarMinLength;
 	extern TAutoConsoleVariable<float> CVarMediaPipeFootPlanarMaxGroundTurnDeg;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeFootUnreliableUseTorsoForward;
+	extern TAutoConsoleVariable<float> CVarMediaPipeLegKneeBackwardPoleSuppression;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeFootGroundedWorldUp;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveArmTwistBones;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveMetaHumanArmHelpers;
 	extern TAutoConsoleVariable<float> CVarMediaPipeUpperArmTwistWeight;

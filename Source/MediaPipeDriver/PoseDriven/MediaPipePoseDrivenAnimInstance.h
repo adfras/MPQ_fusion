@@ -639,6 +639,9 @@ private:
 	// Accumulate delta time from Update_AnyThread so Evaluate_AnyThread can use it if needed later.
 	float CachedDeltaTimeSeconds = 0.0f;
 
+	// Throttle for the armed replay input-gate diagnostic row (mp.MediaPipeReplayInputGate).
+	double LastReplayInputGateLogTimeSeconds = -1.0;
+
 	// Per-leg solver state.
 	FMediaPipeLegSolverState LeftLegState;
 	FMediaPipeLegSolverState RightLegState;
@@ -685,7 +688,7 @@ private:
 
 	void ApplyRotationCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FQuat& TargetRotCS) const;
 	void ApplyTranslationDeltaCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FVector& DeltaComp) const;
-	bool ShouldUseAvatarLockedMetaHumanReplay() const;
+	bool ShouldUseAvatarLockedReplay() const;
 	bool ShouldUseBodyFusionPoseForEvaluation() const;
 	bool ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const;
 	bool ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const;

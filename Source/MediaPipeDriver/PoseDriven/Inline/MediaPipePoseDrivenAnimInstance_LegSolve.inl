@@ -13,12 +13,12 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	FVector ToeWorld = FVector::ZeroVector;
 	bool bHeelMeasured = false;
 	bool bFootMeasured = false;
-	const bool bAvatarLockedMetaHumanReplay = ShouldUseAvatarLockedMetaHumanReplay();
+	const bool bAvatarLockedReplay = ShouldUseAvatarLockedReplay();
 	const bool bBodyFusionPoseUsableForEvaluation = ShouldUseBodyFusionPoseForEvaluation();
 	const bool bUseBodyFusionLowerBody =
 		bDriveLegs &&
 		bBodyFusionPoseUsableForEvaluation &&
-		!bAvatarLockedMetaHumanReplay;
+		!bAvatarLockedReplay;
 	if (!bDriveLegs)
 	{
 		return;
@@ -146,6 +146,24 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		return FootForwardResult.SolvedForwardWorld;
 	};
 
+	// Depth-cautious knee pole: front-facing monocular MediaPipe observes lateral/vertical knee
+	// motion well but knee depth poorly. Rotate an implausible backward bend plane toward
+	// forward/lateral without changing the bend magnitude, so knees stay bent but stop flipping
+	// behind the hip-ankle line on depth noise.
+	const float KneeBackwardSuppression =
+		FMath::Clamp(CVarMediaPipeLegKneeBackwardPoleSuppression.GetValueOnAnyThread(), 0.0f, 1.0f);
+	if (KneeBackwardSuppression > KINDA_SMALL_NUMBER && bHasLegTorsoBasis)
+	{
+		MediaPipeBodySolverMath::FMediaPipeKneePoleSuppressionInput KneePoleInput;
+		KneePoleInput.HipWorld = HipWorld;
+		KneePoleInput.KneeWorld = KneeWorld;
+		KneePoleInput.AnkleWorld = AnkleWorld;
+		KneePoleInput.ForwardHintWorld = LegForwardWorld;
+		KneePoleInput.OutwardHintWorld = OutwardWorldSeed;
+		KneePoleInput.BackwardSuppression01 = KneeBackwardSuppression;
+		KneeWorld = MediaPipeBodySolverMath::SuppressBackwardKneePole(KneePoleInput);
+	}
+
 	const FVector DesiredThighWorld = (KneeWorld - HipWorld).GetSafeNormal();
 	const FVector DesiredCalfWorld = (AnkleWorld - KneeWorld).GetSafeNormal();
 	const FVector RawDesiredFootWorld = bCanDriveFoot
@@ -199,6 +217,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	bool& bHasObservedSourceFloor = bIsLeft ? LeftLegState.bHasObservedSourceFloor : RightLegState.bHasObservedSourceFloor;
 	float& ObservedSourceFloorZ = bIsLeft ? LeftLegState.ObservedSourceFloorZ : RightLegState.ObservedSourceFloorZ;
 	bool& bCurrentSourceFootGrounded = bIsLeft ? LeftLegState.bCurrentSourceFootGrounded : RightLegState.bCurrentSourceFootGrounded;
+	bool& bCurrentSourceFootNearFloor = bIsLeft ? LeftLegState.bCurrentSourceFootNearFloor : RightLegState.bCurrentSourceFootNearFloor;
 	const FVector& RefAnklePosComp = bIsLeft ? RefAnklePosCompL : RefAnklePosCompR;
 	const FVector& RefBallPosComp = bIsLeft ? RefBallPosCompL : RefBallPosCompR;
 
@@ -256,11 +275,17 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		bNearObservedFloorForAcquire &&
 		bFootMotionGroundLike;
 	bCurrentSourceFootGrounded = bAcquireGrounded || (bFootPlantLocked && bFootShouldStayPlanted);
+	bCurrentSourceFootNearFloor = bNearObservedFloorForRelease;
+
+	// Grounded feet should be referenced to the floor, not the (possibly squat-tilted) torso.
+	const bool bFootUpFromWorld =
+		CVarMediaPipeFootGroundedWorldUp.GetValueOnAnyThread() != 0 &&
+		(bCurrentSourceFootGrounded || bNearObservedFloorForRelease);
 
 	FVector FootForwardForRotationWorld = DesiredFootWorld;
 	if (bCanDriveFoot && CVarMediaPipeFootPlanarWhenGrounded.GetValueOnAnyThread() != 0)
 	{
-		FVector FootPlaneUpWorld = bHasLegTorsoBasis ? LegUpWorld : FVector::UpVector;
+		FVector FootPlaneUpWorld = (bHasLegTorsoBasis && !bFootUpFromWorld) ? LegUpWorld : FVector::UpVector;
 		if (FootPlaneUpWorld.IsNearlyZero())
 		{
 			FootPlaneUpWorld = FVector::UpVector;
@@ -395,7 +420,8 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 
 		// MediaPipe gives ankle/toe points but not a full foot quaternion. Use the tracked
 		// ankle-to-toe pitch, then build the missing roll from the body/floor up hint.
-		const FVector FootUpSeedWorld = bHasLegTorsoBasis ? LegUpWorld : FVector::UpVector;
+		// Grounded feet take world up so torso lean during squats does not roll planted feet.
+		const FVector FootUpSeedWorld = (bHasLegTorsoBasis && !bFootUpFromWorld) ? LegUpWorld : FVector::UpVector;
 		FVector TargetFootUpSeedComp = TargetCompTransform.InverseTransformVectorNoScale(FootUpSeedWorld).GetSafeNormal();
 		if (TargetFootUpSeedComp.IsNearlyZero())
 		{
@@ -464,7 +490,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			bDriveLegs ? 1 : 0,
 			bHasRefLegL ? 1 : 0,
 			bHasRefLegR ? 1 : 0,
-			bAvatarLockedMetaHumanReplay ? 1 : 0,
+			bAvatarLockedReplay ? 1 : 0,
 			bBodyFusionPoseUsableForEvaluation ? 1 : 0,
 			bUseBodyFusionLowerBody ? 1 : 0,
 			bUsingBodyFusionLowerBody ? 1 : 0,

@@ -8,6 +8,7 @@
 #include "MediaPipeQuestHandTrackingSource.h"
 #include "MediaPipeQuestRuntimeDebugService.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
+#include "MediaPipeTrackingFusionDatasetReplay.h"
 
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
@@ -387,6 +388,7 @@ void UEmbodiedFusionComponent::ResetFusionState()
 	LastAcceptedHmdPose = FMediaPipeQuestHmdPoseSnapshot();
 	LastAcceptedHmdPoseTimeSeconds = -1.0;
 	HmdPoseConditionedFrameCount = 0;
+	RegionQualityTrackers.Reset();
 }
 
 bool UEmbodiedFusionComponent::BuildMediaPipeCandidatePose(
@@ -807,6 +809,26 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 	}
 
 	RefreshBestAvailablePose_GameThread();
+
+	{
+		FMediaPipeBodyFusionRegionQualityUpdateInput RegionQualityInput;
+		RegionQualityInput.Frame = &LatestFrame;
+		RegionQualityInput.NowSeconds = NowSeconds;
+		RegionQualityInput.TargetActorName = Input.TargetActorName;
+		RegionQualityInput.bPoseWriteEnabled = RuntimePolicy.bPoseWriteEnabled;
+		// Dataset replay locks lower-body ownership to the avatar-local solve for every avatar
+		// (Manny and all MetaHuman profiles), so the policy flag follows replay state alone.
+		RegionQualityInput.bAvatarLockedReplayActive =
+			FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive();
+		RegionQualityInput.AvatarForwardWorld =
+			FMediaPipeAvatarEmbodimentSolver::GetAvatarForwardWorld(Input.TargetComponentTransform, Input.AvatarProfile);
+		RegionQualityInput.AvatarUpWorld =
+			FMediaPipeAvatarEmbodimentSolver::GetAvatarUpWorld(Input.TargetComponentTransform, RegionQualityInput.AvatarForwardWorld);
+		FMediaPipeBodyFusionRegionQualityTracker& RegionQualityTracker =
+			RegionQualityTrackers.FindOrAdd(Input.TargetActorName);
+		RegionQualityTracker.Update(RegionQualityInput);
+		RegionQualityTracker.EmitDiagnostics(RegionQualityInput);
+	}
 
 	if (RuntimePolicy.bDebugEnabled)
 	{

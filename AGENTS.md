@@ -14,6 +14,9 @@ You are controlling an Unreal Engine 5.8 editor project through local tools.
 - Editor build command:
   - `D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat TestingKit5Editor Win64 Development -Project="D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -WaitMutex`
 - Build rule: never use Live Coding or `LiveCoding.Compile` for Codex-driven builds. Before running the editor build command, close the Unreal editor completely and verify no `UnrealEditor.exe` or `LiveCodingConsole.exe` process remains. If UnrealBuildTool reports that Live Coding is active, stop, close the editor, terminate any leftover Live Coding process, and rerun the normal build command.
+- Fast-build rule for all Codex agents/threads: use `Tools\BuildTestingKit5EditorFast.ps1` for C++ editor builds unless the user explicitly requests the raw command. The wrapper runs the normal `TestingKit5Editor Win64 Development` target with `-NoUBA -UBANoDetour -MaxParallelActions=4`, rejects Live Coding/editor processes, watches for stalls, and fails instead of waiting indefinitely.
+- If using the raw build command directly, append `-NoUBA -UBANoDetour -MaxParallelActions=4`. In UE 5.8, `-NoUBA` alone is not enough; UBT can still print `Using Unreal Build Accelerator local executor`, while `-UBANoDetour` makes compile actions run as `[NoUba]`.
+- Do not let a quiet UBT/UBA build sit open-ended. If stdout/stderr and `C:\Users\Alan\AppData\Local\UnrealBuildTool\Log.txt` do not advance within 120 seconds while the same `cl.exe` processes remain, treat it as a stall: stop only the current TestingKit5 build processes, rerun once with the fast-build wrapper, and report exact process/log evidence if it stalls again.
 
 ## MCP Preference
 
