@@ -108,11 +108,32 @@ $process = Start-Process -FilePath $BuildBat `
     -RedirectStandardOutput $stdoutLog `
     -RedirectStandardError $stderrLog `
     -PassThru
+# Cache the process handle now; without this, reading .ExitCode after the process exits
+# can return $null and a successful build is misreported as a failure.
+$null = $process.Handle
+
+function Get-TestingKitCompilerActivity {
+    # Composite activity signature of this project's build processes. Large single-TU
+    # compiles (the MediaPipe anim-instance TU runs minutes with no stdout/UBT-log output,
+    # sometimes at near-zero CPU while page-mapping PCHs) still move CPU time, IO transfer
+    # counts, or page-fault counts every few seconds. ANY change in the signature counts as
+    # progress; only a build whose processes are completely frozen for the stall window is
+    # treated as stalled.
+    $cpu = 0.0; $io = [double]0; $faults = [double]0; $count = 0
+    foreach ($proc in @(Get-TestingKitBuildProcesses)) {
+        $cpu += ([double]$proc.UserModeTime + [double]$proc.KernelModeTime) / 1e7
+        $io += [double]$proc.ReadTransferCount + [double]$proc.WriteTransferCount
+        $faults += [double]$proc.PageFaults
+        $count++
+    }
+    return [PSCustomObject]@{ Cpu = [math]::Round($cpu, 2); Io = $io; Faults = $faults; Count = $count }
+}
 
 $lastProgress = Get-Date
 $lastOutLength = 0
 $lastErrLength = 0
 $lastUbtWrite = if (Test-Path $UbtLog) { (Get-Item $UbtLog).LastWriteTimeUtc } else { [datetime]::MinValue }
+$lastActivity = Get-TestingKitCompilerActivity
 
 while (-not $process.HasExited) {
     Start-Sleep -Seconds 5
@@ -120,22 +141,36 @@ while (-not $process.HasExited) {
     $outLength = if (Test-Path $stdoutLog) { (Get-Item $stdoutLog).Length } else { 0 }
     $errLength = if (Test-Path $stderrLog) { (Get-Item $stderrLog).Length } else { 0 }
     $ubtWrite = if (Test-Path $UbtLog) { (Get-Item $UbtLog).LastWriteTimeUtc } else { [datetime]::MinValue }
+    $activity = Get-TestingKitCompilerActivity
 
-    if ($outLength -ne $lastOutLength -or $errLength -ne $lastErrLength -or $ubtWrite -ne $lastUbtWrite) {
+    $logsAdvanced = ($outLength -ne $lastOutLength -or $errLength -ne $lastErrLength -or $ubtWrite -ne $lastUbtWrite)
+    $procsAdvanced = ($activity.Cpu -ne $lastActivity.Cpu -or
+        $activity.Io -ne $lastActivity.Io -or
+        $activity.Faults -ne $lastActivity.Faults -or
+        $activity.Count -ne $lastActivity.Count)
+
+    if ($logsAdvanced -or $procsAdvanced) {
         $lastProgress = Get-Date
         $lastOutLength = $outLength
         $lastErrLength = $errLength
         $lastUbtWrite = $ubtWrite
     }
+    $lastActivity = $activity
 
     $idleSeconds = ((Get-Date) - $lastProgress).TotalSeconds
     if ($idleSeconds -ge $StallSeconds) {
         Stop-ProcessTree -RootPid $process.Id
-        throw "Build stalled for $([int]$idleSeconds)s with no stdout/stderr/UBT log progress. Killed build tree. See $stdoutLog and $stderrLog."
+        throw "Build stalled for $([int]$idleSeconds)s: no stdout/stderr/UBT log progress AND build processes frozen (procs=$($activity.Count) cpu=$($activity.Cpu)s io=$($activity.Io)B faults=$($activity.Faults) all unchanged). Killed build tree. See $stdoutLog and $stderrLog."
     }
 }
 
+$process.WaitForExit()
 $exitCode = $process.ExitCode
+if ($null -eq $exitCode) {
+    # Last-resort fallback: trust UBT's own result line rather than failing a good build.
+    $resultLine = if (Test-Path $stdoutLog) { Select-String -Path $stdoutLog -Pattern "^Result: " | Select-Object -Last 1 } else { $null }
+    $exitCode = if ($resultLine -and $resultLine.Line -match "Succeeded") { 0 } else { 1 }
+}
 if (Test-Path $stdoutLog) {
     Get-Content $stdoutLog -Tail 120
 }
