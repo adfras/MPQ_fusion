@@ -29,7 +29,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseFrameValidationAutomationTest,
-	"TestingKit3.MediaPipe.FramePath.Validation",
+	"TestingKit5.MediaPipe.FramePath.Validation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseFrameValidationAutomationTest::RunTest(const FString& Parameters)
@@ -72,7 +72,7 @@ bool FMediaPipePoseFrameValidationAutomationTest::RunTest(const FString& Paramet
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseFrameWorkerAutomationTest,
-	"TestingKit3.MediaPipe.FramePath.WorkerAndTracker",
+	"TestingKit5.MediaPipe.FramePath.WorkerAndTracker",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseFrameWorkerAutomationTest::RunTest(const FString& Parameters)

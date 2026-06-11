@@ -264,7 +264,7 @@ FMediaPipeStage2ShoulderEvidenceResult PrimeStage2NeutralForTest(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionSourceFreshnessAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.SourceFreshness",
+	"TestingKit5.MediaPipe.BodyFusion.SourceFreshness",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionSourceFreshnessAutomationTest::RunTest(const FString& Parameters)
@@ -300,7 +300,7 @@ bool FMediaPipeBodyFusionSourceFreshnessAutomationTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionAuthorityDefaultsAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.AuthorityDefaults",
+	"TestingKit5.MediaPipe.BodyFusion.AuthorityDefaults",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString& Parameters)
@@ -355,7 +355,7 @@ bool FMediaPipeBodyFusionAuthorityDefaultsAutomationTest::RunTest(const FString&
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionTraceOnlyAuthorityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.TraceOnlyAuthorityBlocksMediaPipePose",
+	"TestingKit5.MediaPipe.BodyFusion.TraceOnlyAuthorityBlocksMediaPipePose",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionTraceOnlyAuthorityAutomationTest::RunTest(const FString& Parameters)
@@ -390,7 +390,7 @@ bool FMediaPipeBodyFusionTraceOnlyAuthorityAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionMediaPipeCandidateAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.MediaPipeCandidateIgnoresQuestAndHmd",
+	"TestingKit5.MediaPipe.BodyFusion.MediaPipeCandidateIgnoresQuestAndHmd",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionMediaPipeCandidateAutomationTest::RunTest(const FString& Parameters)
@@ -439,7 +439,7 @@ bool FMediaPipeBodyFusionMediaPipeCandidateAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionCalibrationAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.CalibrationRejectsRawHeightRoot",
+	"TestingKit5.MediaPipe.BodyFusion.CalibrationRejectsRawHeightRoot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionCalibrationAutomationTest::RunTest(const FString& Parameters)
@@ -475,7 +475,7 @@ bool FMediaPipeBodyFusionCalibrationAutomationTest::RunTest(const FString& Param
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionHeadAnchorAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.HeadAnchor",
+	"TestingKit5.MediaPipe.BodyFusion.HeadAnchor",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionHeadAnchorAutomationTest::RunTest(const FString& Parameters)
@@ -499,7 +499,7 @@ bool FMediaPipeBodyFusionHeadAnchorAutomationTest::RunTest(const FString& Parame
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionHmdHorizontalBoundsAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.HmdHorizontalBounds",
+	"TestingKit5.MediaPipe.BodyFusion.HmdHorizontalBounds",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionHmdHorizontalBoundsAutomationTest::RunTest(const FString& Parameters)
@@ -529,7 +529,7 @@ bool FMediaPipeBodyFusionHmdHorizontalBoundsAutomationTest::RunTest(const FStrin
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionProfileHeadFromEyeOffsetAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.ProfileHeadFromEyeOffset",
+	"TestingKit5.MediaPipe.BodyFusion.ProfileHeadFromEyeOffset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionProfileHeadFromEyeOffsetAutomationTest::RunTest(const FString& Parameters)
@@ -549,7 +549,7 @@ bool FMediaPipeBodyFusionProfileHeadFromEyeOffsetAutomationTest::RunTest(const F
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionProfileHeadLocalAnchorAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.ProfileHeadLocalAnchor",
+	"TestingKit5.MediaPipe.BodyFusion.ProfileHeadLocalAnchor",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionProfileHeadLocalAnchorAutomationTest::RunTest(const FString& Parameters)
@@ -597,7 +597,7 @@ bool FMediaPipeBodyFusionProfileHeadLocalAnchorAutomationTest::RunTest(const FSt
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionLeanBackAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.LeanBackBridge",
+	"TestingKit5.MediaPipe.BodyFusion.LeanBackBridge",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionLeanBackAutomationTest::RunTest(const FString& Parameters)
@@ -629,7 +629,7 @@ bool FMediaPipeBodyFusionLeanBackAutomationTest::RunTest(const FString& Paramete
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionEmbodiedHipsOnlyPelvisStabilityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.EmbodiedHipsOnlyPelvisStability",
+	"TestingKit5.MediaPipe.BodyFusion.EmbodiedHipsOnlyPelvisStability",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionEmbodiedHipsOnlyPelvisStabilityAutomationTest::RunTest(const FString& Parameters)
@@ -678,7 +678,7 @@ bool FMediaPipeBodyFusionEmbodiedHipsOnlyPelvisStabilityAutomationTest::RunTest(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionUpperBodyFollowAlphaAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.UpperBodyFollowAlpha",
+	"TestingKit5.MediaPipe.BodyFusion.UpperBodyFollowAlpha",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionUpperBodyFollowAlphaAutomationTest::RunTest(const FString& Parameters)
@@ -716,7 +716,7 @@ bool FMediaPipeBodyFusionUpperBodyFollowAlphaAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionFirstPersonTorsoVisibilityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.FirstPersonTorsoVisibility",
+	"TestingKit5.MediaPipe.BodyFusion.FirstPersonTorsoVisibility",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionFirstPersonTorsoVisibilityAutomationTest::RunTest(const FString& Parameters)
@@ -741,7 +741,7 @@ bool FMediaPipeBodyFusionFirstPersonTorsoVisibilityAutomationTest::RunTest(const
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionEmbodiedHipsOnlyTorsoAnchorAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.EmbodiedHipsOnlyTorsoAnchor",
+	"TestingKit5.MediaPipe.BodyFusion.EmbodiedHipsOnlyTorsoAnchor",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionEmbodiedHipsOnlyTorsoAnchorAutomationTest::RunTest(const FString& Parameters)
@@ -787,7 +787,7 @@ bool FMediaPipeBodyFusionEmbodiedHipsOnlyTorsoAnchorAutomationTest::RunTest(cons
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionSourceOwnerTagsAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.SourceOwnerTags",
+	"TestingKit5.MediaPipe.BodyFusion.SourceOwnerTags",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& Parameters)
@@ -1003,7 +1003,7 @@ bool FMediaPipeBodyFusionSourceOwnerTagsAutomationTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.FusedUpperBodyAuthority",
+	"TestingKit5.MediaPipe.BodyFusion.FusedUpperBodyAuthority",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FString& Parameters)
@@ -1037,7 +1037,7 @@ bool FMediaPipeBodyFusionQuestUpperBodyAuthorityAutomationTest::RunTest(const FS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.QuestHandMediaPipeHints",
+	"TestingKit5.MediaPipe.BodyFusion.QuestHandMediaPipeHints",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest::RunTest(const FString& Parameters)
@@ -1070,7 +1070,7 @@ bool FMediaPipeBodyFusionQuestHandMediaPipeHintAutomationTest::RunTest(const FSt
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.MetaHumanProfileArmAuthority",
+	"TestingKit5.MediaPipe.BodyFusion.MetaHumanProfileArmAuthority",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest::RunTest(const FString& Parameters)
@@ -1116,7 +1116,7 @@ bool FMediaPipeBodyFusionMetaHumanProfileArmAuthorityAutomationTest::RunTest(con
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2ShoulderNeutralGateAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2ShoulderNeutralGate",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2ShoulderNeutralGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2ShoulderNeutralGateAutomationTest::RunTest(const FString& Parameters)
@@ -1145,7 +1145,7 @@ bool FMediaPipeBodyFusionStage2ShoulderNeutralGateAutomationTest::RunTest(const 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2QuestArmOwnershipAllowsShrugAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2QuestArmOwnershipAllowsShrugWithFreshEndpoints",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2QuestArmOwnershipAllowsShrugWithFreshEndpoints",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2QuestArmOwnershipAllowsShrugAutomationTest::RunTest(const FString& Parameters)
@@ -1186,7 +1186,7 @@ bool FMediaPipeBodyFusionStage2QuestArmOwnershipAllowsShrugAutomationTest::RunTe
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2ContradictionFailsClosedAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2ContradictionFailsClosed",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2ContradictionFailsClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2ContradictionFailsClosedAutomationTest::RunTest(const FString& Parameters)
@@ -1243,7 +1243,7 @@ bool FMediaPipeBodyFusionStage2ContradictionFailsClosedAutomationTest::RunTest(c
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2MissingQuestArmFailsClosedAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2MissingQuestArmFailsClosed",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2MissingQuestArmFailsClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2MissingQuestArmFailsClosedAutomationTest::RunTest(const FString& Parameters)
@@ -1308,7 +1308,7 @@ bool FMediaPipeBodyFusionStage2MissingQuestArmFailsClosedAutomationTest::RunTest
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2PartialQuestArmFailsClosedAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2PartialQuestArmFailsClosed",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2PartialQuestArmFailsClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2PartialQuestArmFailsClosedAutomationTest::RunTest(const FString& Parameters)
@@ -1369,7 +1369,7 @@ bool FMediaPipeBodyFusionStage2PartialQuestArmFailsClosedAutomationTest::RunTest
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2SignedShoulderEvidenceAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2SignedShoulderEvidenceRecorded",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2SignedShoulderEvidenceRecorded",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2SignedShoulderEvidenceAutomationTest::RunTest(const FString& Parameters)
@@ -1420,7 +1420,7 @@ bool FMediaPipeBodyFusionStage2SignedShoulderEvidenceAutomationTest::RunTest(con
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2SideSpecificShrugAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2SideSpecificShrugNoOppositeClamp",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2SideSpecificShrugNoOppositeClamp",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2SideSpecificShrugAutomationTest::RunTest(const FString& Parameters)
@@ -1457,7 +1457,7 @@ bool FMediaPipeBodyFusionStage2SideSpecificShrugAutomationTest::RunTest(const FS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionStage2ShrugReleaseAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.Stage2ShrugReleaseClearsLift",
+	"TestingKit5.MediaPipe.BodyFusion.Stage2ShrugReleaseClearsLift",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionStage2ShrugReleaseAutomationTest::RunTest(const FString& Parameters)
@@ -1500,7 +1500,7 @@ bool FMediaPipeBodyFusionStage2ShrugReleaseAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionLowerBodyReliabilityAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.LowerBodyReliabilityGates",
+	"TestingKit5.MediaPipe.BodyFusion.LowerBodyReliabilityGates",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionLowerBodyReliabilityAutomationTest::RunTest(const FString& Parameters)
@@ -1528,7 +1528,7 @@ bool FMediaPipeBodyFusionLowerBodyReliabilityAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionLowerBodyAuthorityAdapterAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.LowerBodyAuthorityAdapter",
+	"TestingKit5.MediaPipe.BodyFusion.LowerBodyAuthorityAdapter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionLowerBodyAuthorityAdapterAutomationTest::RunTest(const FString& Parameters)
@@ -1576,7 +1576,7 @@ bool FMediaPipeBodyFusionLowerBodyAuthorityAdapterAutomationTest::RunTest(const 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionLowerBodySourceLossAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.LowerBodySourceLossFallbacks",
+	"TestingKit5.MediaPipe.BodyFusion.LowerBodySourceLossFallbacks",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionLowerBodySourceLossAutomationTest::RunTest(const FString& Parameters)
@@ -1620,7 +1620,7 @@ bool FMediaPipeBodyFusionLowerBodySourceLossAutomationTest::RunTest(const FStrin
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyFusionAutoQuestBodyDrivePolicyAutomationTest,
-	"TestingKit3.MediaPipe.BodyFusion.AutoQuestBodyDrivePolicy",
+	"TestingKit5.MediaPipe.BodyFusion.AutoQuestBodyDrivePolicy",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyFusionAutoQuestBodyDrivePolicyAutomationTest::RunTest(const FString& Parameters)

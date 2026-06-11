@@ -6,7 +6,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseDrivenBodySolverStateResetAutomationTest,
-	"TestingKit3.MediaPipe.PoseDrivenSolverState.Body.Reset",
+	"TestingKit5.MediaPipe.PoseDrivenSolverState.Body.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseDrivenBodySolverStateResetAutomationTest::RunTest(const FString& Parameters)
@@ -81,7 +81,7 @@ bool FMediaPipePoseDrivenBodySolverStateResetAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseDrivenLimbSolverStateResetAutomationTest,
-	"TestingKit3.MediaPipe.PoseDrivenSolverState.Limb.Reset",
+	"TestingKit5.MediaPipe.PoseDrivenSolverState.Limb.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseDrivenLimbSolverStateResetAutomationTest::RunTest(const FString& Parameters)
@@ -209,7 +209,7 @@ bool FMediaPipePoseDrivenLimbSolverStateResetAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseDrivenQuestSolverStateResetAutomationTest,
-	"TestingKit3.MediaPipe.PoseDrivenSolverState.Quest.Reset",
+	"TestingKit5.MediaPipe.PoseDrivenSolverState.Quest.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseDrivenQuestSolverStateResetAutomationTest::RunTest(const FString& Parameters)
@@ -299,7 +299,7 @@ bool FMediaPipePoseDrivenQuestSolverStateResetAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseDrivenDiagnosticsStateResetAutomationTest,
-	"TestingKit3.MediaPipe.PoseDrivenSolverState.Diagnostics.Reset",
+	"TestingKit5.MediaPipe.PoseDrivenSolverState.Diagnostics.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseDrivenDiagnosticsStateResetAutomationTest::RunTest(const FString& Parameters)

@@ -6,7 +6,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseFrameContinuityTests,
-	"TestingKit3.MediaPipe.PoseFrameContinuity.HoldLastFrameOnDropout",
+	"TestingKit5.MediaPipe.PoseFrameContinuity.HoldLastFrameOnDropout",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseFrameContinuityTests::RunTest(const FString& Parameters)

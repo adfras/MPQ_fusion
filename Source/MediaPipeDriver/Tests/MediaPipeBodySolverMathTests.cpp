@@ -6,7 +6,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathFootForwardAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.FootForward",
+	"TestingKit5.MediaPipe.BodySolverMath.FootForward",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathFootForwardAutomationTest::RunTest(const FString& Parameters)
@@ -32,7 +32,7 @@ bool FMediaPipeBodySolverMathFootForwardAutomationTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathLegBasisAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.LegBasis",
+	"TestingKit5.MediaPipe.BodySolverMath.LegBasis",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathLegBasisAutomationTest::RunTest(const FString& Parameters)
@@ -61,7 +61,7 @@ bool FMediaPipeBodySolverMathLegBasisAutomationTest::RunTest(const FString& Para
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathSolvedArmBasisAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.SolvedElbowPlaneArmBasis",
+	"TestingKit5.MediaPipe.BodySolverMath.SolvedElbowPlaneArmBasis",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathSolvedArmBasisAutomationTest::RunTest(const FString& Parameters)
@@ -142,7 +142,7 @@ bool FMediaPipeBodySolverMathSolvedArmBasisAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathBodyBasisAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.BodyBasis",
+	"TestingKit5.MediaPipe.BodySolverMath.BodyBasis",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathBodyBasisAutomationTest::RunTest(const FString& Parameters)
@@ -166,7 +166,7 @@ bool FMediaPipeBodySolverMathBodyBasisAutomationTest::RunTest(const FString& Par
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathAvatarArmBasisAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.AvatarArmBasis",
+	"TestingKit5.MediaPipe.BodySolverMath.AvatarArmBasis",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathAvatarArmBasisAutomationTest::RunTest(const FString& Parameters)
@@ -209,7 +209,7 @@ bool FMediaPipeBodySolverMathAvatarArmBasisAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodySolverMathPelvisPlanarAutomationTest,
-	"TestingKit3.MediaPipe.BodySolverMath.PelvisPlanar",
+	"TestingKit5.MediaPipe.BodySolverMath.PelvisPlanar",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodySolverMathPelvisPlanarAutomationTest::RunTest(const FString& Parameters)

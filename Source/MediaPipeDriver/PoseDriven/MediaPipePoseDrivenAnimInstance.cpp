@@ -384,7 +384,7 @@ namespace
 #if WITH_DEV_AUTOMATION_TESTS
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FMediaPipePoseDrivenMetaHumanNoMediaPipeNeckAlphaAutomationTest,
-		"TestingKit3.MediaPipe.PoseDriven.MetaHumanNoMediaPipeNeckAlpha",
+		"TestingKit5.MediaPipe.PoseDriven.MetaHumanNoMediaPipeNeckAlpha",
 		EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 	bool FMediaPipePoseDrivenMetaHumanNoMediaPipeNeckAlphaAutomationTest::RunTest(const FString& Parameters)

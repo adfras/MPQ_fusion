@@ -40,7 +40,7 @@ namespace MediaPipeBodyDiagnosticsTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeBodyDiagnosticsAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.BodyFormatting",
+	"TestingKit5.MediaPipe.Diagnostics.BodyFormatting",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeBodyDiagnosticsAutomationTest::RunTest(const FString& Parameters)
@@ -435,6 +435,36 @@ bool FMediaPipeTrackingFusionDatasetCVarAutomationTest::RunTest(const FString& P
 		MediaPipeDriveFootRotation })
 	{
 		SnapshotConsoleVariable(Variable);
+	}
+
+	// The prepare commands below run the full replay/capture CVar policy
+	// (ApplyReplayPoseCVars_GameThread plus the replay-output tick policy), which writes
+	// more CVars than the handles asserted above. Snapshot every one of them so this test
+	// cannot leak policy values into later tests in the same automation process (leaked
+	// mp.BodyFusion.Calibration* values broke Runtime.CVars default assertions).
+	for (const TCHAR* PolicyTouchedName : {
+		TEXT("mp.BodyFusion.CalibrationStableFrames"),
+		TEXT("mp.BodyFusion.CalibrationHoldSeconds"),
+		TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"),
+		TEXT("mp.MediaPipeFootGroundedWorldUp"),
+		TEXT("mp.BodyFusion.RegionQualityLog"),
+		TEXT("mp.BodyFusion.RegionQualityCapture"),
+		TEXT("mp.QuestHandTracking"),
+		TEXT("mp.QuestHandDriveFingerBones"),
+		TEXT("mp.QuestArmDropoutDownFallback"),
+		TEXT("mp.QuestConstrainedArmBodyFallback"),
+		TEXT("mp.MediaPipeArmHoldOnQuestHandLoss"),
+		TEXT("sg.ShadowQuality"),
+		TEXT("r.ShadowQuality"),
+		TEXT("r.Shadow.MaxResolution"),
+		TEXT("r.ScreenPercentage"),
+		TEXT("r.HairStrands.Simulation"),
+		TEXT("r.VSync"),
+		TEXT("t.MaxFPS"),
+		TEXT("t.IdleWhenNotForeground"),
+		TEXT("Slate.bAllowThrottling") })
+	{
+		SnapshotConsoleVariable(IConsoleManager::Get().FindConsoleVariable(PolicyTouchedName));
 	}
 
 	if (MediaPipeDrivePelvisTranslation)
@@ -1339,7 +1369,7 @@ namespace MediaPipePoseDiagnosticReporterTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipePoseDiagnosticReporterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.Throttle",
+	"TestingKit5.MediaPipe.Diagnostics.Throttle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipePoseDiagnosticReporterAutomationTest::RunTest(const FString& Parameters)
@@ -1392,7 +1422,7 @@ namespace MediaPipeQuestHandCompareDiagnosticsTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandCompareDiagnosticsFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandCompareFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandCompareFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandCompareDiagnosticsFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -1462,7 +1492,7 @@ bool FMediaPipeQuestHandCompareDiagnosticsFormatterAutomationTest::RunTest(const
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandCompareDiagnosticsSnapshotAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandCompareSnapshot",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandCompareSnapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandCompareDiagnosticsSnapshotAutomationTest::RunTest(const FString& Parameters)
@@ -1528,7 +1558,7 @@ namespace MediaPipeQuestHandDebugReporterTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandDebugReporterFormattingAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandDebugReporterFormatting",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandDebugReporterFormatting",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandDebugReporterFormattingAutomationTest::RunTest(const FString& Parameters)
@@ -1623,7 +1653,7 @@ bool FMediaPipeQuestHandDebugReporterFormattingAutomationTest::RunTest(const FSt
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandDebugReporterCaptureGuideAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandDebugReporterCaptureGuide",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandDebugReporterCaptureGuide",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandDebugReporterCaptureGuideAutomationTest::RunTest(const FString& Parameters)
@@ -1676,7 +1706,7 @@ bool FMediaPipeQuestHandDebugReporterCaptureGuideAutomationTest::RunTest(const F
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandDebugReporterReplayFileAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandDebugReporterReplayFile",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandDebugReporterReplayFile",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandDebugReporterReplayFileAutomationTest::RunTest(const FString& Parameters)
@@ -1723,7 +1753,7 @@ namespace MediaPipeQuestWristDiagnosticFormatterTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristRollCompactFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestWristRollCompactFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.QuestWristRollCompactFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristRollCompactFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -1884,7 +1914,7 @@ bool FMediaPipeQuestWristRollCompactFormatterAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestHandDivergenceFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestHandDivergenceFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.QuestHandDivergenceFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestHandDivergenceFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -1945,7 +1975,7 @@ bool FMediaPipeQuestHandDivergenceFormatterAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristCalibrationHudFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestWristCalibrationHudFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.QuestWristCalibrationHudFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristCalibrationHudFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -1990,7 +2020,7 @@ bool FMediaPipeQuestWristCalibrationHudFormatterAutomationTest::RunTest(const FS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristSideCalibrationHudFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.QuestWristSideCalibrationHudFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.QuestWristSideCalibrationHudFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristSideCalibrationHudFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -2042,7 +2072,7 @@ bool FMediaPipeQuestWristSideCalibrationHudFormatterAutomationTest::RunTest(cons
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanArmSanityFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.MetaHumanArmSanityFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.MetaHumanArmSanityFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanArmSanityFormatterAutomationTest::RunTest(const FString& Parameters)
@@ -2178,7 +2208,7 @@ namespace MediaPipeRuntimeCVarsTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeRuntimeCVarsAutomationTest,
-	"TestingKit3.MediaPipe.Runtime.CVars",
+	"TestingKit5.MediaPipe.Runtime.CVars",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeRuntimeCVarsAutomationTest::RunTest(const FString& Parameters)
@@ -2677,7 +2707,7 @@ namespace MediaPipeShoulderRollbackDiagnosticsTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeShoulderRollbackDiagnosticsFormatterAutomationTest,
-	"TestingKit3.MediaPipe.Diagnostics.ShoulderRollbackTraceFormatter",
+	"TestingKit5.MediaPipe.Diagnostics.ShoulderRollbackTraceFormatter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeShoulderRollbackDiagnosticsFormatterAutomationTest::RunTest(const FString& Parameters)

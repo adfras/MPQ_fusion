@@ -4,7 +4,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeEmbodiedHmdRecenterPolicyOneShotAutomationTest,
-	"TestingKit3.MediaPipe.EmbodiedHmdRecenterPolicy.OneShot",
+	"TestingKit5.MediaPipe.EmbodiedHmdRecenterPolicy.OneShot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeEmbodiedHmdRecenterPolicyOneShotAutomationTest::RunTest(const FString& Parameters)

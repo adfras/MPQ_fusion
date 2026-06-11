@@ -14,7 +14,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeArmTwistSolverTests,
-	"TestingKit3.MediaPipe.ArmTwist.OculusStyleInterpolation",
+	"TestingKit5.MediaPipe.ArmTwist.OculusStyleInterpolation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeArmTwistSolverTests::RunTest(const FString& Parameters)

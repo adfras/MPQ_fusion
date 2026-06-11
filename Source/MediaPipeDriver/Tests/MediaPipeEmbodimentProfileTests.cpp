@@ -54,7 +54,7 @@ namespace MediaPipeAvatarEmbodimentProfileTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarEmbodimentMannySolveAutomationTest,
-	"TestingKit3.MediaPipe.AvatarEmbodiment.MannyCameraAnchoredSolve",
+	"TestingKit5.MediaPipe.AvatarEmbodiment.MannyCameraAnchoredSolve",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarEmbodimentMannySolveAutomationTest::RunTest(const FString& Parameters)
@@ -198,7 +198,7 @@ bool FMediaPipeOnlyEmbodiedWebcamProfileShoulderShrugAutomationTest::RunTest(con
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarEmbodimentMetaHumanSolveAutomationTest,
-	"TestingKit3.MediaPipe.AvatarEmbodiment.MetaHumanProfileSolve",
+	"TestingKit5.MediaPipe.AvatarEmbodiment.MetaHumanProfileSolve",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarEmbodimentMetaHumanSolveAutomationTest::RunTest(const FString& Parameters)
@@ -246,7 +246,7 @@ bool FMediaPipeAvatarEmbodimentMetaHumanSolveAutomationTest::RunTest(const FStri
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarEmbodimentQuestWristMapAutomationTest,
-	"TestingKit3.MediaPipe.AvatarEmbodiment.QuestHmdRelativeWristMap",
+	"TestingKit5.MediaPipe.AvatarEmbodiment.QuestHmdRelativeWristMap",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarEmbodimentQuestWristMapAutomationTest::RunTest(const FString& Parameters)
@@ -276,7 +276,7 @@ bool FMediaPipeAvatarEmbodimentQuestWristMapAutomationTest::RunTest(const FStrin
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest,
-	"TestingKit3.MediaPipe.AvatarEmbodiment.LocalViewPolicy",
+	"TestingKit5.MediaPipe.AvatarEmbodiment.LocalViewPolicy",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest::RunTest(const FString& Parameters)
@@ -315,7 +315,7 @@ bool FMediaPipeAvatarEmbodimentLocalViewPolicyAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest,
-	"TestingKit3.MediaPipe.AvatarEmbodiment.MetaHumanSelfViewSingleBodyPoseLeader",
+	"TestingKit5.MediaPipe.AvatarEmbodiment.MetaHumanSelfViewSingleBodyPoseLeader",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest::RunTest(const FString& Parameters)
@@ -553,7 +553,7 @@ namespace MediaPipeAvatarRigProfileTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarRigProfileInternalMannyAutomationTest,
-	"TestingKit3.MediaPipe.AvatarRigProfile.InternalManny",
+	"TestingKit5.MediaPipe.AvatarRigProfile.InternalManny",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeAvatarRigProfileInternalMannyAutomationTest::RunTest(const FString& Parameters)
@@ -578,7 +578,7 @@ namespace MediaPipeMetaHumanProfileTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanBuiltInProfilesAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.BuiltInProfiles",
+	"TestingKit5.MediaPipe.MetaHumanProfile.BuiltInProfiles",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanBuiltInProfilesAutomationTest::RunTest(const FString& Parameters)
@@ -646,7 +646,7 @@ bool FMediaPipeMetaHumanBuiltInProfilesAutomationTest::RunTest(const FString& Pa
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanProfileAssetLoadAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.AssetLoad",
+	"TestingKit5.MediaPipe.MetaHumanProfile.AssetLoad",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanProfileAssetLoadAutomationTest::RunTest(const FString& Parameters)
@@ -673,7 +673,7 @@ bool FMediaPipeMetaHumanProfileAssetLoadAutomationTest::RunTest(const FString& P
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanProfileValidationAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.Validation",
+	"TestingKit5.MediaPipe.MetaHumanProfile.Validation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanProfileValidationAutomationTest::RunTest(const FString& Parameters)
@@ -774,7 +774,7 @@ bool FMediaPipeMetaHumanProfileValidationAutomationTest::RunTest(const FString& 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanConfiguredProfileAssetAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.ConfiguredProfileAsset",
+	"TestingKit5.MediaPipe.MetaHumanProfile.ConfiguredProfileAsset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanConfiguredProfileAssetAutomationTest::RunTest(const FString& Parameters)
@@ -824,7 +824,7 @@ bool FMediaPipeMetaHumanConfiguredProfileAssetAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanProfileMatchingAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.Matching",
+	"TestingKit5.MediaPipe.MetaHumanProfile.Matching",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanProfileMatchingAutomationTest::RunTest(const FString& Parameters)
@@ -859,7 +859,7 @@ bool FMediaPipeMetaHumanProfileMatchingAutomationTest::RunTest(const FString& Pa
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanArmSourceResolutionAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.ArmSourceResolution",
+	"TestingKit5.MediaPipe.MetaHumanProfile.ArmSourceResolution",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanArmSourceResolutionAutomationTest::RunTest(const FString& Parameters)
@@ -926,7 +926,7 @@ bool FMediaPipeMetaHumanArmSourceResolutionAutomationTest::RunTest(const FString
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanFullArmChainCompatibilityAliasAutomationTest,
-	"TestingKit3.MediaPipe.MetaHumanProfile.FullArmChainCompatibilityAliases",
+	"TestingKit5.MediaPipe.MetaHumanProfile.FullArmChainCompatibilityAliases",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanFullArmChainCompatibilityAliasAutomationTest::RunTest(const FString& Parameters)

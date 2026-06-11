@@ -20,7 +20,7 @@ namespace MediaPipeArmGuardPolicyTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeArmGuardPolicyAutomationTest,
-	"TestingKit3.MediaPipe.ArmGuardPolicy.ShoulderRollback",
+	"TestingKit5.MediaPipe.ArmGuardPolicy.ShoulderRollback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeArmGuardPolicyAutomationTest::RunTest(const FString& Parameters)
@@ -51,7 +51,7 @@ namespace MediaPipeFullArmChainProviderTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeFullArmChainContractAutomationTest,
-	"TestingKit3.MediaPipe.FullArmChain.Contract",
+	"TestingKit5.MediaPipe.FullArmChain.Contract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeFullArmChainContractAutomationTest::RunTest(const FString& Parameters)
@@ -102,7 +102,7 @@ bool FMediaPipeFullArmChainContractAutomationTest::RunTest(const FString& Parame
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanFullArmChainRetargeterAutomationTest,
-	"TestingKit3.MediaPipe.FullArmChain.MetaHumanRetargeter",
+	"TestingKit5.MediaPipe.FullArmChain.MetaHumanRetargeter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanFullArmChainRetargeterAutomationTest::RunTest(const FString& Parameters)
@@ -181,7 +181,7 @@ bool FMediaPipeMetaHumanFullArmChainRetargeterAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanFullArmChainLogAutomationTest,
-	"TestingKit3.MediaPipe.FullArmChain.MetaHumanLog",
+	"TestingKit5.MediaPipe.FullArmChain.MetaHumanLog",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanFullArmChainLogAutomationTest::RunTest(const FString& Parameters)
@@ -219,7 +219,7 @@ bool FMediaPipeMetaHumanFullArmChainLogAutomationTest::RunTest(const FString& Pa
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeWallaceFullArmChainCompatibilityLogAutomationTest,
-	"TestingKit3.MediaPipe.FullArmChain.WallaceCompatibilityLog",
+	"TestingKit5.MediaPipe.FullArmChain.WallaceCompatibilityLog",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeWallaceFullArmChainCompatibilityLogAutomationTest::RunTest(const FString& Parameters)
@@ -276,7 +276,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestConstrainedArmSolverFallbackAutomationTest,
-	"TestingKit3.MediaPipe.QuestConstrainedArm.BodyFallback",
+	"TestingKit5.MediaPipe.QuestConstrainedArm.BodyFallback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestConstrainedArmSolverFallbackAutomationTest::RunTest(const FString& Parameters)
@@ -475,7 +475,7 @@ bool FMediaPipeQuestConstrainedArmSolverFallbackAutomationTest::RunTest(const FS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestConstrainedArmSolverTargetAutomationTest,
-	"TestingKit3.MediaPipe.QuestConstrainedArm.TargetSolve",
+	"TestingKit5.MediaPipe.QuestConstrainedArm.TargetSolve",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestConstrainedArmSolverTargetAutomationTest::RunTest(const FString& Parameters)
@@ -773,7 +773,7 @@ bool FMediaPipeQuestConstrainedArmSolverTargetAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestConstrainedArmSolverTrajectoryAutomationTest,
-	"TestingKit3.MediaPipe.QuestConstrainedArm.TrajectoryContinuity",
+	"TestingKit5.MediaPipe.QuestConstrainedArm.TrajectoryContinuity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestConstrainedArmSolverTrajectoryAutomationTest::RunTest(const FString& Parameters)
@@ -939,7 +939,7 @@ bool FMediaPipeQuestConstrainedArmSolverTrajectoryAutomationTest::RunTest(const 
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestConstrainedArmSolverTrackingLossAutomationTest,
-	"TestingKit3.MediaPipe.QuestConstrainedArm.TrackingLossRecovery",
+	"TestingKit5.MediaPipe.QuestConstrainedArm.TrackingLossRecovery",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestConstrainedArmSolverTrackingLossAutomationTest::RunTest(const FString& Parameters)
@@ -1050,7 +1050,7 @@ bool FMediaPipeQuestConstrainedArmSolverTrackingLossAutomationTest::RunTest(cons
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestConstrainedArmSolverFullMotionSweepAutomationTest,
-	"TestingKit3.MediaPipe.QuestConstrainedArm.FullMotionSweep",
+	"TestingKit5.MediaPipe.QuestConstrainedArm.FullMotionSweep",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestConstrainedArmSolverFullMotionSweepAutomationTest::RunTest(const FString& Parameters)
@@ -1200,7 +1200,7 @@ namespace MediaPipeQuestFingerSolverTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestFingerSolverMappingAutomationTest,
-	"TestingKit3.MediaPipe.QuestFingerSolver.Mapping",
+	"TestingKit5.MediaPipe.QuestFingerSolver.Mapping",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestFingerSolverMappingAutomationTest::RunTest(const FString& Parameters)
@@ -1239,7 +1239,7 @@ bool FMediaPipeQuestFingerSolverMappingAutomationTest::RunTest(const FString& Pa
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestFingerSolverRestOffsetAutomationTest,
-	"TestingKit3.MediaPipe.QuestFingerSolver.RestOffset",
+	"TestingKit5.MediaPipe.QuestFingerSolver.RestOffset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestFingerSolverRestOffsetAutomationTest::RunTest(const FString& Parameters)
@@ -1276,12 +1276,12 @@ bool FMediaPipeQuestFingerSolverRestOffsetAutomationTest::RunTest(const FString&
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestFingerSolverCurlAutomationTest,
-	"TestingKit3.MediaPipe.QuestFingerSolver.Curl",
+	"TestingKit5.MediaPipe.QuestFingerSolver.Curl",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestFingerSolverSegmentDirectionAutomationTest,
-	"TestingKit3.MediaPipe.QuestFingerSolver.SegmentDirectionRetarget",
+	"TestingKit5.MediaPipe.QuestFingerSolver.SegmentDirectionRetarget",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestFingerSolverSegmentDirectionAutomationTest::RunTest(const FString& Parameters)
@@ -1528,7 +1528,7 @@ namespace MediaPipeQuestWristApplyPolicyTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristApplyPolicyAutomationTest,
-	"TestingKit3.MediaPipe.QuestWrist.ApplyPolicy",
+	"TestingKit5.MediaPipe.QuestWrist.ApplyPolicy",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristApplyPolicyAutomationTest::RunTest(const FString& Parameters)
@@ -1918,7 +1918,7 @@ namespace MediaPipeQuestWristCalibrationStateTests
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristCalibrationStateResetAutomationTest,
-	"TestingKit3.MediaPipe.QuestWrist.CalibrationState.Reset",
+	"TestingKit5.MediaPipe.QuestWrist.CalibrationState.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristCalibrationStateResetAutomationTest::RunTest(const FString& Parameters)
@@ -1956,7 +1956,7 @@ bool FMediaPipeQuestWristCalibrationStateResetAutomationTest::RunTest(const FStr
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristCalibrationStateSoftRejectAutomationTest,
-	"TestingKit3.MediaPipe.QuestWrist.CalibrationState.SoftReject",
+	"TestingKit5.MediaPipe.QuestWrist.CalibrationState.SoftReject",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristCalibrationStateSoftRejectAutomationTest::RunTest(const FString& Parameters)
@@ -2045,7 +2045,7 @@ bool FMediaPipeQuestWristCalibrationStateSoftRejectAutomationTest::RunTest(const
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristRuntimeStateResetAutomationTest,
-	"TestingKit3.MediaPipe.QuestWrist.RuntimeState.Reset",
+	"TestingKit5.MediaPipe.QuestWrist.RuntimeState.Reset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristRuntimeStateResetAutomationTest::RunTest(const FString& Parameters)
@@ -2192,7 +2192,7 @@ bool FMediaPipeQuestWristRuntimeStateResetAutomationTest::RunTest(const FString&
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestWristPositionContinuityArmLengthPreserveAutomationTest,
-	"TestingKit3.MediaPipe.QuestWrist.PositionContinuity.PreservesAcceptedArmLengthCalibration",
+	"TestingKit5.MediaPipe.QuestWrist.PositionContinuity.PreservesAcceptedArmLengthCalibration",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeQuestWristPositionContinuityArmLengthPreserveAutomationTest::RunTest(const FString& Parameters)

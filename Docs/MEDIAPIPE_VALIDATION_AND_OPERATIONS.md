@@ -17,7 +17,7 @@ D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe D:\Epic\Unreal_Project
 D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject -ExecCmds="Automation RunTests MediaPipe; Quit" -TestExit="Automation Test Queue Empty" -unattended -nop4 -nosplash
 ```
 
-Expected caveat: many MediaPipe automation names still use `TestingKit3.MediaPipe.*`. Treat that as naming debt unless the run fails.
+All TestingKit-prefixed MediaPipe automation names use `TestingKit5.MediaPipe.*` (migrated 2026-06-11; older evidence logs cite the previous `TestingKit3.MediaPipe.*` names). The focused suite filter is `Automation RunTests TestingKit5.MediaPipe` and currently discovers 112 tests. A further ~32 tests use a bare `MediaPipe.*` prefix (e.g. `MediaPipe.TrackingSourceFrameBuilder`) and are included by the broad `RunTests MediaPipe` filter above.
 
 ## Avatar-Locked Sync Calibration
 

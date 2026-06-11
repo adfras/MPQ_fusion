@@ -279,7 +279,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanArmHelperCoverageTests,
-	"TestingKit3.MediaPipe.MetaHumanArmHelpers.WallaceCoverage",
+	"TestingKit5.MediaPipe.MetaHumanArmHelpers.WallaceCoverage",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanArmHelperCoverageTests::RunTest(const FString& Parameters)
@@ -384,7 +384,7 @@ bool FMediaPipeMetaHumanArmHelperCoverageTests::RunTest(const FString& Parameter
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeMetaHumanArmHelperOculusStyleScopeTests,
-	"TestingKit3.MediaPipe.MetaHumanArmHelpers.OculusStyleDefaultScope",
+	"TestingKit5.MediaPipe.MetaHumanArmHelpers.OculusStyleDefaultScope",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FMediaPipeMetaHumanArmHelperOculusStyleScopeTests::RunTest(const FString& Parameters)
