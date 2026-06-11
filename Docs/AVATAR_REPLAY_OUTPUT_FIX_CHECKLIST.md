@@ -116,7 +116,7 @@ Live PIE evidence (replay seek 147 s, 66 s capture covering legs/feet blocks):
 - Final: `kellan_live_pie_bone_measure_after_grounding_20260610_173948.json`; knee L 121.1-175.0, knee R 112.9-175.0 (bend preserved), pelvis Z 73.8-91.4, lowest-ball median 0.80 cm (grounded), foot lifts preserved (L max 16.2, R max 13.1).
 - Plots: `Saved/CodexAgent/Diagnostics/kellan_replay_quality_plots_20260610/` (knee angles, pelvis translation, foot-floor delta, knee-forward metrics, region ownership/confidence/depth-ratio/amplitude timelines).
 - Screenshots: `Saved/CodexAgent/Screenshots/baseline_fix_squat_rear34_*.png`, `after_grounding_squat_rear34_*.png`. Note: the room's VR perf profile disables shadows, so grounded feet show no contact shadow.
-- Tools: `Saved/CodexAgent/kellan_replay_bone_sampler.py` (live PIE bone sampler; do NOT move the player pawn during capture - the embodied pawn carries the live Kellan), `Tools/PlotKellanReplayMeasurements.py` (plots + --selftest).
+- Tools: `Tools/kellan_replay_bone_sampler.py` (live PIE bone sampler; do NOT move the player pawn during capture - the embodied pawn carries the live Kellan), `Tools/PlotKellanReplayMeasurements.py` (plots + --selftest).
 
 ## 2026-06-10 Limitation Fixes (applies to Manny and all MetaHumans)
 

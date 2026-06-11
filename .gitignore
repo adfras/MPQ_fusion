@@ -52,12 +52,16 @@ _MCPBench/
 AgentBridge/node_modules/
 **/node_modules/
 
-# Local binary/media drops
-*.dll
-*.png
-Test*.txt
+# Local binary/media drops (root-anchored so tracked evidence images or plugin
+# binaries elsewhere are not silently ignored)
+/*.dll
+/*.png
+/Test*.txt
+ThirdParty/mediapipe_wrapper/*.dll
 ThirdParty/mediapipe_wrapper/_mediapipe/
 ThirdParty/mediapipe_wrapper/tools/bazelisk.exe
+# Editor-tool temp files (observed as <name>.tmp.<pid>.<hash> droppings)
+*.tmp.*
 
 # Local review/export bundles
 ReviewDeliverables/
