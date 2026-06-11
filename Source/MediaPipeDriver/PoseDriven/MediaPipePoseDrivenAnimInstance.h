@@ -690,9 +690,7 @@ private:
 	void ApplyTranslationDeltaCS(FCSPose<FCompactPose>& CSPose, const FBoneReference& Bone, const FVector& DeltaComp) const;
 	bool ShouldUseAvatarLockedReplay() const;
 	bool ShouldUseBodyFusionPoseForEvaluation() const;
-	bool ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const;
 	bool ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const;
-	bool DriveBodyFusionStage1TorsoPelvisHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	bool DriveBodyFusionStage2ShoulderClavicleHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	bool DriveBodyFusionPoseCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DrivePelvisTranslationCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);

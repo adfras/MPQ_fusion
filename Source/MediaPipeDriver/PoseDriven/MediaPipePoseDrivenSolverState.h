@@ -21,8 +21,6 @@ struct FMediaPipeBodySolverState
 	float ReferenceHipHeightCm = 0.0f;
 	bool bHasSmoothedPelvisOffset = false;
 	FVector SmoothedPelvisOffsetComp = FVector::ZeroVector;
-	bool bHasSmoothedStage1ChestOffset = false;
-	FVector SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 	bool bHasSmoothedStage2ClavicleLiftL = false;
 	float SmoothedStage2ClavicleLiftCmL = 0.0f;
 	bool bHasStage2NeutralReferenceL = false;
@@ -101,8 +99,6 @@ struct FMediaPipeBodySolverState
 		ReferenceHipHeightCm = 0.0f;
 		bHasSmoothedPelvisOffset = false;
 		SmoothedPelvisOffsetComp = FVector::ZeroVector;
-		bHasSmoothedStage1ChestOffset = false;
-		SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 		bHasSmoothedStage2ClavicleLiftL = false;
 		SmoothedStage2ClavicleLiftCmL = 0.0f;
 		bHasStage2NeutralReferenceL = false;

@@ -793,8 +793,6 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		BodyState.ReferenceHipHeightCm = 0.0f;
 		BodyState.bHasSmoothedPelvisOffset = false;
 		BodyState.SmoothedPelvisOffsetComp = FVector::ZeroVector;
-		BodyState.bHasSmoothedStage1ChestOffset = false;
-		BodyState.SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 		BodyState.bHasSmoothedStage2ClavicleLiftL = false;
 		BodyState.SmoothedStage2ClavicleLiftCmL = 0.0f;
 		BodyState.bHasStage2NeutralReferenceL = false;
@@ -1938,11 +1936,6 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseAvatarLockedReplay() const
 	return FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive();
 }
 
-bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() const
-{
-	return false;
-}
-
 bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation() const
 {
 	if (!FMediaPipeBodyFusionRuntimePolicy::IsBodyFusionEnabledAnyThread())
@@ -1962,13 +1955,6 @@ bool FAnimNode_MediaPipePoseDriven::ShouldUseBodyFusionStage2ShoulderClavicleHin
 	return BodyFusionFrame.Calibration.IsUsable() &&
 		SourceFrame.bHasBodyPose &&
 		SourceFrame.BodyPoseStatus.IsFresh();
-}
-
-bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionStage1TorsoPelvisHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
-{
-	(void)CSPose;
-	(void)DeltaSeconds;
-	return false;
 }
 
 bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionStage2ShoulderClavicleHintCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
@@ -2266,25 +2252,9 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			bHasTargetPelvisOffset = !TargetPelvisOffsetComp.ContainsNaN();
 		}
 
-		if (bAvatarLockedReplay && BodyFusionFrame.Pose.Head.bValid && !RefHeadPosComp.IsNearlyZero())
-		{
-			const FVector TargetHeadComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Head.LocationWorld);
-			const FVector HeadOffsetComp = TargetHeadComp - RefHeadPosComp;
-			FVector CompUp = WorldToComponent.TransformVectorNoScale(FVector::UpVector).GetSafeNormal();
-			if (CompUp.IsNearlyZero())
-			{
-				CompUp = FVector::UpVector;
-			}
-			const float HeadVerticalOffsetCm = FVector::DotProduct(HeadOffsetComp, CompUp);
-			const float PelvisVerticalOffsetCm = FVector::DotProduct(TargetPelvisOffsetComp, CompUp);
-			if (FMath::IsFinite(HeadVerticalOffsetCm) &&
-				FMath::IsFinite(PelvisVerticalOffsetCm) &&
-				HeadVerticalOffsetCm < PelvisVerticalOffsetCm)
-			{
-				TargetPelvisOffsetComp += CompUp * (HeadVerticalOffsetCm - PelvisVerticalOffsetCm);
-				bHasTargetPelvisOffset = true;
-			}
-		}
+		// Note: avatar-locked replay can never reach this point - DriveBodyFusionPoseCS
+		// returns before any pose math when ShouldUseAvatarLockedReplay() is true, so no
+		// replay-only branches belong below here.
 
 		const float PelvisAlpha = HalfLifeToAlpha(PelvisTranslationHalfLifeSeconds, DeltaSeconds);
 		if (!BodyState.bHasSmoothedPelvisOffset)
@@ -3009,7 +2979,6 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	const bool bHasBodyFusionPoseInput =
 		ShouldUseBodyFusionPoseForEvaluation() ||
-		ShouldUseBodyFusionStage1TorsoPelvisHintForEvaluation() ||
 		ShouldUseBodyFusionStage2ShoulderClavicleHintForEvaluation();
 	if (!bHasReferencePose || (!bHasPoseFrame && !bHasQuestOrHmdRuntimeInput && !bHasBodyFusionPoseInput))
 	{
@@ -3026,8 +2995,6 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 			BodyState.ReferenceHipHeightCm = 0.0f;
 			BodyState.bHasSmoothedPelvisOffset = false;
 			BodyState.SmoothedPelvisOffsetComp = FVector::ZeroVector;
-			BodyState.bHasSmoothedStage1ChestOffset = false;
-			BodyState.SmoothedStage1ChestOffsetComp = FVector::ZeroVector;
 			BodyState.bHasSmoothedStage2ClavicleLiftL = false;
 			BodyState.SmoothedStage2ClavicleLiftCmL = 0.0f;
 			BodyState.bHasStage2NeutralReferenceL = false;
