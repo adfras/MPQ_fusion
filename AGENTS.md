@@ -11,6 +11,10 @@ You are controlling an Unreal Engine 5.8 editor project through local tools.
   - `/Game/MCPBench/Maps/L_MCP_Test_ChiR24`
 - Primary MediaPipe embodied avatar map:
   - `/Game/MCPBench/Maps/L_MCP_MediaPipeMannyRoom`
+- Recorded Quest+MediaPipe replay map (canonical replay verification workflow):
+  - `/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01`
+  - Canonical dataset: `Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source*` (hash-verified backup at `D:\Backups\TestingKit5_CanonicalReplayDataset`). Never delete or move without a verified copy.
+  - PIE measurement gate: `Tools/kellan_replay_bone_sampler.py` + `Tools/compare_replay_measurements.py` (see `Docs/REFACTOR_PLAN.md` GATE-PIE).
 - Editor build command:
   - `D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat TestingKit5Editor Win64 Development -Project="D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -WaitMutex`
 - Build rule: never use Live Coding or `LiveCoding.Compile` for Codex-driven builds. Before running the editor build command, close the Unreal editor completely and verify no `UnrealEditor.exe` or `LiveCodingConsole.exe` process remains. If UnrealBuildTool reports that Live Coding is active, stop, close the editor, terminate any leftover Live Coding process, and rerun the normal build command.
@@ -56,6 +60,7 @@ You are controlling an Unreal Engine 5.8 editor project through local tools.
 ## Local Bridge Routes
 
 - Use `GET http://127.0.0.1:8765/status` to inspect bridge state.
+- Port note: the default port 8765 may be owned by ANOTHER project's bridge instance (check `bridge.projectRoot` in the status JSON before using it). Start this project's own bridge with `CODEX_AGENT_PORT=8766` (`node src/server.js` in `AgentBridge/`) when 8765 belongs to a different project; restart the bridge after relaunching the editor so its MCP child reconnects.
 - Use `POST http://127.0.0.1:8765/tool` for Unreal actions.
 - Preferred JSON shape: `{"tool":"inspect_scene","args":{"filename":"before.png","includeActors":false}}`.
 - Prefer efficient wrapper tools before raw multi-call sequences:

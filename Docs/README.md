@@ -28,6 +28,9 @@ historical unless this index marks them active.
 
 - `REFACTOR_PLAN.md`: the phased structural refactor and cleanup plan (gates, evidence,
   execution log). Read this before moving, deleting, or restructuring anything.
+- `CVAR_REFERENCE.md`: GENERATED inventory of every `mp.*` console variable (default,
+  readers, writers, multi-writer conflict flags). Regenerate with
+  `python Tools/GenerateCVarReference.py` after adding/removing CVars or writers.
 
 ## Current MPQ Fusion State
 
