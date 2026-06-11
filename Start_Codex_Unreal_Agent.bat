@@ -3,7 +3,7 @@ setlocal
 set "PROJECT_ROOT=%~dp0"
 set "BRIDGE_DIR=%PROJECT_ROOT%AgentBridge"
 set "PROJECT_FILE=%PROJECT_ROOT%TestingKit5.uproject"
-set "UE_EDITOR=D:\Epic\UE_5.7\Engine\Binaries\Win64\UnrealEditor.exe"
+set "UE_EDITOR=D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 
 where npm.cmd >nul 2>nul
 if errorlevel 1 (
