@@ -16,7 +16,6 @@ public class MediaPipeDriver : ModuleRules
 			Path.Combine(ModuleDirectory, "Diagnostics"),
 			Path.Combine(ModuleDirectory, "Embodiment"),
 			Path.Combine(ModuleDirectory, "PoseDriven"),
-			Path.Combine(ModuleDirectory, "PoseDriven", "Inline"),
 			Path.Combine(ModuleDirectory, "Quest"),
 			Path.Combine(ModuleDirectory, "Runtime"),
 			Path.Combine(ModuleDirectory, "Tests"),

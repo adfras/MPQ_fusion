@@ -1,3 +1,50 @@
+#include "MediaPipePoseDrivenAnimInstance.h"
+
+#include "MediaPipeArmGuardPolicy.h"
+#include "MediaPipeArmTwistSolver.h"
+#include "MediaPipeBodyDiagnostics.h"
+#include "MediaPipeBodyFusionDebugFormatter.h"
+#include "MediaPipeBodyFusionPoseWriteContext.h"
+#include "MediaPipeBodyFusionRuntime.h"
+#include "MediaPipeTrackingSourceFrameBuilder.h"
+#include "MediaPipeBodySolverMath.h"
+#include "MediaPipeMetaHumanArmRetargeter.h"
+#include "MediaPipeMetaHumanPoseAdapter.h"
+#include "MediaPipePoseCoordinate.h"
+#include "MediaPipePoseDiagnosticReporter.h"
+#include "MediaPipePoseDiagnostics.h"
+#include "MediaPipePoseFrameContinuity.h"
+#include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeStage2ShoulderEvidence.h"
+#include "MediaPipeTrackingFusionDatasetReplay.h"
+#include "MediaPipeQuestHandDebugReporter.h"
+#include "MediaPipeQuestHandCompareDiagnostics.h"
+#include "MediaPipeQuestFingerSolver.h"
+#include "MediaPipeQuestConstrainedArmSolver.h"
+#include "MediaPipeQuestWristApplyPolicy.h"
+#include "MediaPipeQuestWristDebugReporter.h"
+#include "MediaPipeQuestWristCalibrationState.h"
+#include "MediaPipeQuestWristDiagnosticFormatter.h"
+#include "MediaPipeSkeletonPoseAdapter.h"
+#include "MediaPipeShoulderRollbackDiagnostics.h"
+#include "MediaPipePoseLog.h"
+#include "MediaPipeSolvedPose.h"
+
+#include "BonePose.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/Engine.h"
+#include "GameFramework/Actor.h"
+#include "HAL/CriticalSection.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/ScopeLock.h"
+
+#include <atomic>
+#include "HAL/IConsoleManager.h"
+#include "HeadMountedDisplayTypes.h"
+#include "Math/RotationMatrix.h"
+
+#include "MediaPipePoseDrivenAnimInstanceShared.h"
+
 bool FAnimNode_MediaPipePoseDriven::TryGetQuestHmdWorldPose(FVector& OutLocationWorld, FQuat& OutRotationWorld) const
 {
 	OutLocationWorld = CachedQuestHmdWorld;
