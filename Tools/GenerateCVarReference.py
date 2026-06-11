@@ -209,7 +209,10 @@ def main():
         check("mp.RecordMannyHeadOnPlay" in by_name and
               any("DefaultEngine.ini" in w for w in by_name["mp.RecordMannyHeadOnPlay"]["writers"]),
               "DefaultEngine.ini writes are attributed")
-        check("mp.UseMannyBodyRig" in by_name, "knows file-local mp.UseMannyBodyRig")
+        check("mp.TrackingFusionDatasetReplayFile" in by_name,
+              "knows file-local mp.TrackingFusionDatasetReplayFile")
+        check("mp.UseMannyBodyRig" not in by_name,
+              "removed mp.UseMannyBodyRig stays removed (REFACTOR_PLAN Phase 8c)")
         md = render(rows)
         check(len(md) > 50000, "rendered markdown is substantial (%d bytes)" % len(md))
         print("SELFTEST %s" % ("OK" if ok else "FAILED"))

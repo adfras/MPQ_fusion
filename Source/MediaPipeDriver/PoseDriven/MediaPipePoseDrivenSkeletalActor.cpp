@@ -13,7 +13,6 @@
 #include "MediaPipeTrackingFusionDataset.h"
 
 #include "Animation/AnimInstance.h"
-#include "ControlRigComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
@@ -40,12 +39,6 @@
 
 namespace
 {
-TAutoConsoleVariable<int32> CVarUseMannyBodyRig(
-	TEXT("mp.UseMannyBodyRig"),
-	0,
-	TEXT("When non-zero, explicitly evaluates CR_Mannequin_Body on the verification Manny mesh after the MediaPipe anim instance."),
-	ECVF_Default);
-
 TAutoConsoleVariable<int32> CVarRecordMannyHeadOnPlay(
 	TEXT("mp.RecordMannyHeadOnPlay"),
 	1,
@@ -4973,14 +4966,6 @@ AMediaPipePoseDrivenSkeletalActor::AMediaPipePoseDrivenSkeletalActor()
 	Mesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("Mesh"));
 	SetRootComponent(Mesh);
 
-	MannyBodyRig = CreateDefaultSubobject<UControlRigComponent>(TEXT("MannyBodyRig"));
-	MannyBodyRig->SetupAttachment(Mesh);
-	MannyBodyRig->bTickInEditor = true;
-	MannyBodyRig->PrimaryComponentTick.bStartWithTickEnabled = true;
-	MannyBodyRig->PrimaryComponentTick.bCanEverTick = true;
-	MannyBodyRig->SetComponentTickEnabled(true);
-	MannyBodyRig->SetVisibility(false, true);
-
 	DefaultEmbodiedFusionComponent = CreateDefaultSubobject<UEmbodiedFusionComponent>(TEXT("EmbodiedFusion"));
 
 	Mesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
@@ -5025,10 +5010,6 @@ void AMediaPipePoseDrivenSkeletalActor::PostRegisterAllComponents()
 	if (Mesh)
 	{
 		Mesh->PrimaryComponentTick.AddPrerequisite(this, PrimaryActorTick);
-	}
-	if (MannyBodyRig && Mesh)
-	{
-		MannyBodyRig->PrimaryComponentTick.AddPrerequisite(Mesh, Mesh->PrimaryComponentTick);
 	}
 }
 
@@ -5117,50 +5098,6 @@ void AMediaPipePoseDrivenSkeletalActor::SyncPresentationActorTransform() const
 		PresentationActor->SetActorLocationAndRotation(GetActorLocation(), GetActorRotation());
 		PresentationActor->SetActorScale3D(GetActorScale3D());
 	}
-}
-
-bool AMediaPipePoseDrivenSkeletalActor::EnsureMannyBodyRig()
-{
-	if (!MannyBodyRig || !Mesh || !Mesh->GetSkeletalMeshAsset())
-	{
-		return false;
-	}
-
-	const bool bEnableRig = CVarUseMannyBodyRig.GetValueOnGameThread() != 0;
-	MannyBodyRig->SetComponentTickEnabled(bEnableRig);
-	if (!bEnableRig)
-	{
-		return false;
-	}
-
-	if (!MannyBodyRig->ControlRigAssetReference.IsValid())
-	{
-		if (UClass* LoadedRigClass = LoadClass<UControlRig>(nullptr, TEXT("/Game/Characters/Mannequins/Rigs/CR_Mannequin_Body.CR_Mannequin_Body_C")))
-		{
-			MannyBodyRig->SetControlRigClass(LoadedRigClass);
-		}
-	}
-
-	if (!MannyBodyRig->ControlRigAssetReference.IsValid())
-	{
-		return false;
-	}
-
-	if (!MannyBodyRig->GetControlRig())
-	{
-		MannyBodyRig->SetObjectBinding(Mesh);
-		MannyBodyRig->SetBoneInitialTransformsFromSkeletalMesh(Mesh->GetSkeletalMeshAsset());
-	}
-
-	if (!bMannyBodyRigMapped && MannyBodyRig->GetControlRig())
-	{
-		MannyBodyRig->SetObjectBinding(Mesh);
-		MannyBodyRig->SetBoneInitialTransformsFromSkeletalMesh(Mesh->GetSkeletalMeshAsset());
-		MannyBodyRig->AddMappedCompleteSkeletalMesh(Mesh, EControlRigComponentMapDirection::Output);
-		bMannyBodyRigMapped = true;
-	}
-
-	return bMannyBodyRigMapped;
 }
 
 bool AMediaPipePoseDrivenSkeletalActor::EnsureSource()
@@ -5395,16 +5332,8 @@ void AMediaPipePoseDrivenSkeletalActor::Tick(float DeltaSeconds)
 		DrivenMesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 		DrivenMesh->SetAnimInstanceClass(UMediaPipePoseDrivenAnimInstance::StaticClass());
 		DrivenMesh->InitializeAnimScriptInstance(true);
-		if (DrivenMesh == Mesh)
-		{
-			bMannyBodyRigMapped = false;
-		}
 	}
 
-	if (DrivenMesh == Mesh)
-	{
-		EnsureMannyBodyRig();
-	}
 	EnsureSource();
 
 	UMediaPipePoseDrivenAnimInstance* MediaPipeAnim = Cast<UMediaPipePoseDrivenAnimInstance>(DrivenMesh->GetAnimInstance());

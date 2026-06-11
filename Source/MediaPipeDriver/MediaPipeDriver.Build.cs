@@ -33,7 +33,6 @@ public class MediaPipeDriver : ModuleRules
 			"RHI",
 			"AnimGraphRuntime",
 			"AnimationCore",
-			"ControlRig",
 			"HeadMountedDisplay",
 			"InputCore"
 		});

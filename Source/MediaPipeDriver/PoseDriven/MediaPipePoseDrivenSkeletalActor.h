@@ -6,7 +6,6 @@
 #include "MediaPipePoseDrivenSkeletalActor.generated.h"
 
 class AActor;
-class UControlRigComponent;
 class UEmbodiedFusionComponent;
 class UMediaPipePoseDrivenAnimInstance;
 class USkeletalMeshComponent;
@@ -37,9 +36,6 @@ public:
 	USkeletalMeshComponent* Mesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, Category="MediaPipe")
-	UControlRigComponent* MannyBodyRig = nullptr;
-
-	UPROPERTY(VisibleAnywhere, Category="MediaPipe")
 	UEmbodiedFusionComponent* DefaultEmbodiedFusionComponent = nullptr;
 
 	UPROPERTY(EditAnywhere, Category="MediaPipe")
@@ -58,7 +54,6 @@ public:
 	float YawOffsetDeg = 0.0f;
 
 private:
-	bool EnsureMannyBodyRig();
 	bool EnsureSource();
 	bool TryGetMediaPipeFrame(struct FMediaPipePoseFrame& OutFrame) const;
 	bool TryGetTrackerSettings(float& OutWorldScale, bool& OutMirrorLandmarks) const;
@@ -66,7 +61,6 @@ private:
 	bool TryGetPoseYawWorld(const struct FMediaPipePoseFrame& Frame, float& OutYawDeg);
 	void SetMannyPresentationVisible(bool bVisible);
 
-	bool bMannyBodyRigMapped = false;
 	bool bHasStablePoseYawForwardWorld = false;
 	FVector StablePoseYawForwardWorld = FVector::ZeroVector;
 	bool bHasLastPoseYawTimestamp = false;
