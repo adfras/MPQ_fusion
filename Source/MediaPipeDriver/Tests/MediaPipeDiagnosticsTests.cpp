@@ -447,6 +447,12 @@ bool FMediaPipeTrackingFusionDatasetCVarAutomationTest::RunTest(const FString& P
 		TEXT("mp.BodyFusion.CalibrationHoldSeconds"),
 		TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"),
 		TEXT("mp.MediaPipeFootGroundedWorldUp"),
+		TEXT("mp.MediaPipeLegScaffoldHmdWeight"),
+		TEXT("mp.MediaPipeLegScaffoldFlexionWeight"),
+		TEXT("mp.MediaPipeLegScaffoldFlexionMaxAdjustDeg"),
+		TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"),
+		TEXT("mp.MediaPipeFootGroundedPitchClamp"),
+		TEXT("mp.MediaPipeLegScaffoldLog"),
 		TEXT("mp.BodyFusion.RegionQualityLog"),
 		TEXT("mp.BodyFusion.RegionQualityCapture"),
 		TEXT("mp.QuestHandTracking"),
@@ -679,6 +685,31 @@ bool FMediaPipeTrackingFusionDatasetCVarAutomationTest::RunTest(const FString& P
 		if (MediaPipeDriveFootRotation)
 		{
 			TestEqual(TEXT("Replay output enables measured MetaHuman foot rotation"), MediaPipeDriveFootRotation->GetInt(), 1);
+		}
+		if (IConsoleVariable* LegScaffoldHmdWeight =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeLegScaffoldHmdWeight")))
+		{
+			TestEqual(TEXT("Replay output makes the Quest/HMD height the squat-depth authority"), LegScaffoldHmdWeight->GetFloat(), 1.0f);
+		}
+		if (IConsoleVariable* LegScaffoldFlexionWeight =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeLegScaffoldFlexionWeight")))
+		{
+			TestEqual(TEXT("Replay output enables grounded-leg metric flexion correction"), LegScaffoldFlexionWeight->GetFloat(), 0.8f);
+		}
+		if (IConsoleVariable* LegScaffoldBendRedistribution =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight")))
+		{
+			TestEqual(TEXT("Replay output enables grounded-leg bend redistribution"), LegScaffoldBendRedistribution->GetFloat(), 0.8f);
+		}
+		if (IConsoleVariable* FootGroundedPitchClamp =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeFootGroundedPitchClamp")))
+		{
+			TestEqual(TEXT("Replay output keeps grounded soles flat via the foot pitch clamp"), FootGroundedPitchClamp->GetInt(), 1);
+		}
+		if (IConsoleVariable* LegScaffoldLog =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeLegScaffoldLog")))
+		{
+			TestEqual(TEXT("Replay output enables lower-body scaffold diagnostics rows"), LegScaffoldLog->GetInt(), 1);
 		}
 	}
 
@@ -1079,11 +1110,30 @@ bool FMediaPipeTrackingFusionDatasetReplayAutomationTest::RunTest(const FString&
 	const FString SampleFilePath = FPaths::Combine(TempReplayDir, TEXT("samples_000.jsonl"));
 	const FString ManifestPath = FPaths::Combine(TempReplayDir, TEXT("capture.json"));
 
+	// Schema-v2 left hand: full 26-keypoint skeleton (positions walk +1 cm in X per keypoint so
+	// individual entries are distinguishable; the wrist keypoint, EHandKeypoint::Wrist == 1,
+	// matches wrist_world like a real capture); the right hand stays wrist-only like a v1 cache.
+	FString LeftHandKeypointsJson = TEXT("[");
+	FString LeftHandQuatsJson = TEXT("[");
+	for (int32 KeypointIndex = 0; KeypointIndex < 26; ++KeypointIndex)
+	{
+		LeftHandKeypointsJson += FString::Printf(
+			TEXT("%s[%d,-40,100]"), KeypointIndex == 0 ? TEXT("") : TEXT(","), 29 + KeypointIndex);
+		LeftHandQuatsJson += FString::Printf(
+			TEXT("%s[0,0,0,1]"), KeypointIndex == 0 ? TEXT("") : TEXT(","));
+	}
+	LeftHandKeypointsJson += TEXT("]");
+	LeftHandQuatsJson += TEXT("]");
+
 	const FString SampleLine =
-		TEXT("{\"t\":0.0,\"phase\":{\"phase_name\":\"replay_test\"},\"fusion\":{\"source\":{")
-		TEXT("\"hmd\":{\"has_pose\":true,\"loc\":[10,20,170],\"quat\":[0,0,0,1],\"tracking_up\":[0,0,1],\"confidence\":1},")
-		TEXT("\"left_hand\":{\"has_hand\":true,\"wrist_world\":[30,-40,100],\"confidence\":1},")
-		TEXT("\"right_hand\":{\"has_hand\":true,\"wrist_world\":[35,40,100],\"confidence\":1},")
+		FString(TEXT("{\"t\":0.0,\"phase\":{\"phase_name\":\"replay_test\"},\"fusion\":{\"source\":{"))
+		+ TEXT("\"hmd\":{\"has_pose\":true,\"loc\":[10,20,170],\"quat\":[0,0,0,1],\"tracking_up\":[0,0,1],\"confidence\":1},")
+		+ FString::Printf(
+			TEXT("\"left_hand\":{\"has_hand\":true,\"wrist_world\":[30,-40,100],\"confidence\":1,\"keypoints_tracked\":true,\"keypoints_world\":%s,\"keypoint_quats\":%s},"),
+			*LeftHandKeypointsJson,
+			*LeftHandQuatsJson)
+		+ TEXT("\"right_hand\":{\"has_hand\":true,\"wrist_world\":[35,40,100],\"confidence\":1},")
+		+
 		TEXT("\"left_arm_chain\":{\"has_chain\":true,\"shoulder_world\":[0,-20,140],\"elbow_world\":[15,-30,120],\"wrist_world\":[30,-40,100],\"confidence\":1},")
 		TEXT("\"right_arm_chain\":{\"has_chain\":true,\"shoulder_world\":[0,20,140],\"elbow_world\":[15,30,120],\"wrist_world\":[35,40,100],\"confidence\":1},")
 		TEXT("\"body_pose\":{\"has_body_pose\":true,\"landmarks\":{\"nose\":{\"valid\":true,\"reliability\":1,\"pos\":[10,20,170]},\"left_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,-10,90]},\"right_hip\":{\"valid\":true,\"reliability\":1,\"pos\":[0,10,90]}}}")
@@ -1123,6 +1173,13 @@ bool FMediaPipeTrackingFusionDatasetReplayAutomationTest::RunTest(const FString&
 	TestEqual(TEXT("Replay left hand wrist is parsed"),
 		Observations.Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)],
 		FVector(30.0f, -40.0f, 100.0f));
+	TestTrue(TEXT("Replay left hand carries full schema-v2 keypoints"),
+		Observations.Hands.bLeftHasFullKeypoints != 0);
+	TestEqual(TEXT("Replay left hand keypoint 5 is parsed"),
+		Observations.Hands.LeftPositionsWorld[5],
+		FVector(34.0f, -40.0f, 100.0f));
+	TestTrue(TEXT("Replay right hand stays wrist-only without keypoint arrays"),
+		Observations.Hands.bRightHasFullKeypoints == 0);
 	TestTrue(TEXT("Replay left arm chain is present"), Observations.ArmChain.Left.bHasChain);
 	TestEqual(TEXT("Replay left arm-chain wrist is parsed"), Observations.ArmChain.Left.WristWorld, FVector(30.0f, -40.0f, 100.0f));
 	const int32 NoseIndex = static_cast<int32>(EMediaPipePoseLandmark::Nose);

@@ -117,6 +117,8 @@ void FMediaPipeTrackingHandSourceSnapshot::Reset()
 	bHasRight = 0;
 	bLeftTracked = 0;
 	bRightTracked = 0;
+	bLeftHasFullKeypoints = 0;
+	bRightHasFullKeypoints = 0;
 	LeftTimestampSeconds = -1.0;
 	RightTimestampSeconds = -1.0;
 	for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)

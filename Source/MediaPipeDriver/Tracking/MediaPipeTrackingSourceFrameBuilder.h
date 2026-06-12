@@ -26,6 +26,11 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingHandSourceSnapshot
 	uint8 bHasRight = 0;
 	uint8 bLeftTracked = 0;
 	uint8 bRightTracked = 0;
+	// Set when the full 26-keypoint arrays are populated (live Quest hands or a schema-v2 replay
+	// cache). Wrist-only sources (v1 replay caches) leave these clear, so consumers know the
+	// keypoint arrays beyond the wrist are just zero-initialized placeholders.
+	uint8 bLeftHasFullKeypoints = 0;
+	uint8 bRightHasFullKeypoints = 0;
 	double LeftTimestampSeconds = -1.0;
 	double RightTimestampSeconds = -1.0;
 	TStaticArray<FVector, MediaPipeTrackingHandKeypointCount> LeftPositionsWorld;

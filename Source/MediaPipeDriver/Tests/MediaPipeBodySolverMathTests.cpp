@@ -371,4 +371,358 @@ bool FMediaPipeBodySolverMathFkRootGroundingSmoothAutomationTest::RunTest(const 
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathHmdHeightScaffoldAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.HmdHeightScaffold",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathHmdHeightScaffoldAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	FMediaPipeHmdHeightScaffoldState State;
+	FMediaPipeHmdHeightScaffoldInput Input;
+	Input.bHasHmdPose = true;
+	Input.HmdHeightZ = 167.0f;
+	Input.DeltaSeconds = 0.0f;
+	Input.BaselineWindowSeconds = 45.0f;
+	Input.TorsoUprightDot = 1.0f;
+	Input.LeanCompensationCoefficient = 0.35f;
+	Input.HipFromHmdRatio = 0.52f;
+	Input.MinCompressionAlpha = 0.25f;
+
+	// Standing init: baseline adopts the first sample, no compression, low ramp-in confidence.
+	const FMediaPipeHmdHeightScaffoldResult StandingResult = UpdateHmdHeightScaffold(State, Input);
+	TestTrue(TEXT("Standing scaffold is valid"), StandingResult.bValid);
+	TestTrue(TEXT("Standing baseline adopts the first sample"),
+		FMath::IsNearlyEqual(StandingResult.BaselineHeadZ, 167.0f, 0.01f));
+	TestTrue(TEXT("Standing compression is 1"),
+		FMath::IsNearlyEqual(StandingResult.CompressionAlpha01, 1.0f, 0.001f));
+	TestTrue(TEXT("Fresh scaffold confidence ramps in low"),
+		FMath::IsNearlyEqual(StandingResult.Confidence, 0.25f, 0.001f));
+
+	// Upright squat: 30 cm head drop against a 0.52*167 = 86.84 cm standing hip estimate.
+	Input.HmdHeightZ = 137.0f;
+	Input.DeltaSeconds = 0.1f;
+	const FMediaPipeHmdHeightScaffoldResult SquatResult = UpdateHmdHeightScaffold(State, Input);
+	TestTrue(TEXT("Squat keeps the standing baseline"),
+		FMath::IsNearlyEqual(SquatResult.BaselineHeadZ, 167.0f, 0.01f));
+	TestTrue(TEXT("Squat head drop is metric"),
+		FMath::IsNearlyEqual(SquatResult.HeadDropCm, 30.0f, 0.01f));
+	TestTrue(TEXT("Squat compression follows the metric drop"),
+		FMath::IsNearlyEqual(SquatResult.CompressionAlpha01, 1.0f - 30.0f / 86.84f, 0.01f));
+
+	// The same drop while leaning 30 degrees is partially attributed to the lean, not the squat.
+	Input.TorsoUprightDot = 0.866f;
+	const FMediaPipeHmdHeightScaffoldResult LeanResult = UpdateHmdHeightScaffold(State, Input);
+	TestTrue(TEXT("Lean compensation engages for tilted torsos"), LeanResult.LeanCompensationCm > 5.0f);
+	TestTrue(TEXT("Lean-compensated compression is shallower than the raw drop"),
+		LeanResult.CompressionAlpha01 > SquatResult.CompressionAlpha01 + 0.05f);
+	Input.TorsoUprightDot = 1.0f;
+
+	// Heights above the baseline (toe raise) clamp to alpha 1 instead of synthesizing lift.
+	Input.HmdHeightZ = 174.0f;
+	const FMediaPipeHmdHeightScaffoldResult ToeRaiseResult = UpdateHmdHeightScaffold(State, Input);
+	TestTrue(TEXT("Toe raise clamps to no compression"),
+		FMath::IsNearlyEqual(ToeRaiseResult.CompressionAlpha01, 1.0f, 0.001f));
+	TestTrue(TEXT("Toe raise inflates the rolling baseline while in window"),
+		FMath::IsNearlyEqual(ToeRaiseResult.BaselineHeadZ, 174.0f, 0.01f));
+
+	// Once the toe-raise slot leaves the rolling window, the baseline returns to standing height.
+	Input.HmdHeightZ = 167.0f;
+	Input.DeltaSeconds = 1.0f;
+	FMediaPipeHmdHeightScaffoldResult WindowResult;
+	for (int32 Step = 0; Step < 60; ++Step)
+	{
+		WindowResult = UpdateHmdHeightScaffold(State, Input);
+	}
+	TestTrue(TEXT("Transient baseline inflation expires with the rolling window"),
+		FMath::IsNearlyEqual(WindowResult.BaselineHeadZ, 167.0f, 0.01f));
+	TestTrue(TEXT("Filled window reaches full confidence"),
+		FMath::IsNearlyEqual(WindowResult.Confidence, 1.0f, 0.001f));
+
+	// Missing HMD poses make the scaffold invalid without disturbing the held window.
+	Input.bHasHmdPose = false;
+	const FMediaPipeHmdHeightScaffoldResult MissingResult = UpdateHmdHeightScaffold(State, Input);
+	TestFalse(TEXT("Missing HMD pose invalidates the scaffold"), MissingResult.bValid);
+	TestTrue(TEXT("Missing HMD pose reports zero confidence"),
+		FMath::IsNearlyEqual(MissingResult.Confidence, 0.0f, 0.001f));
+
+	State.Reset();
+	TestFalse(TEXT("Reset clears the baseline"), State.bHasBaseline);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathFusedPelvisCompressionAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.FusedPelvisCompression",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathFusedPelvisCompressionAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// Monocular only: the fused alpha is the mono alpha and the HMD share is zero.
+	FMediaPipeFusedPelvisCompressionInput Input;
+	Input.bHasMonoAlpha = true;
+	Input.MonoAlpha01 = 0.8f;
+	const FMediaPipeFusedPelvisCompressionResult MonoOnly = ComputeFusedPelvisCompression(Input);
+	TestTrue(TEXT("Mono-only fusion keeps the mono alpha"), FMath::IsNearlyEqual(MonoOnly.FusedAlpha01, 0.8f, 0.001f));
+	TestTrue(TEXT("Mono-only fusion has no HMD share"), FMath::IsNearlyEqual(MonoOnly.HmdShare01, 0.0f, 0.001f));
+
+	// Full-confidence HMD pulls the fused alpha toward the metric value by the configured weight.
+	Input.MonoAlpha01 = 0.9f;
+	Input.bHasHmdAlpha = true;
+	Input.HmdAlpha01 = 0.6f;
+	Input.HmdConfidence01 = 1.0f;
+	Input.HmdWeight01 = 0.85f;
+	const FMediaPipeFusedPelvisCompressionResult Weighted = ComputeFusedPelvisCompression(Input);
+	TestTrue(TEXT("HMD share is weight times confidence"), FMath::IsNearlyEqual(Weighted.HmdShare01, 0.85f, 0.001f));
+	TestTrue(TEXT("Fused alpha blends mono toward the metric HMD alpha"),
+		FMath::IsNearlyEqual(Weighted.FusedAlpha01, 0.9f - 0.3f * 0.85f, 0.001f));
+
+	// Reduced confidence shrinks the HMD contribution.
+	Input.HmdConfidence01 = 0.5f;
+	const FMediaPipeFusedPelvisCompressionResult LowConfidence = ComputeFusedPelvisCompression(Input);
+	TestTrue(TEXT("Low confidence shrinks the HMD share"), FMath::IsNearlyEqual(LowConfidence.HmdShare01, 0.425f, 0.001f));
+	TestTrue(TEXT("Low confidence keeps the fused alpha closer to mono"),
+		FMath::IsNearlyEqual(LowConfidence.FusedAlpha01, 0.9f - 0.3f * 0.425f, 0.001f));
+
+	// Zero weight disables the scaffold entirely.
+	Input.HmdConfidence01 = 1.0f;
+	Input.HmdWeight01 = 0.0f;
+	const FMediaPipeFusedPelvisCompressionResult Disabled = ComputeFusedPelvisCompression(Input);
+	TestTrue(TEXT("Zero weight keeps the mono alpha"), FMath::IsNearlyEqual(Disabled.FusedAlpha01, 0.9f, 0.001f));
+	TestTrue(TEXT("Zero weight has no HMD share"), FMath::IsNearlyEqual(Disabled.HmdShare01, 0.0f, 0.001f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathGroundedLegFlexionAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.GroundedLegFlexion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathGroundedLegFlexionAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	auto FlexionBetween = [](const FVector& A, const FVector& B)
+	{
+		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector::DotProduct(A.GetSafeNormal(), B.GetSafeNormal()), -1.0f, 1.0f)));
+	};
+
+	// Slightly bent leg in the X/Z sagittal plane: 20 degrees of measured flexion.
+	FMediaPipeGroundedLegFlexionInput Input;
+	Input.ThighDirWorld = FVector(FMath::Sin(FMath::DegreesToRadians(10.0f)), 0.0f, -FMath::Cos(FMath::DegreesToRadians(10.0f)));
+	Input.CalfDirWorld = FVector(-FMath::Sin(FMath::DegreesToRadians(10.0f)), 0.0f, -FMath::Cos(FMath::DegreesToRadians(10.0f)));
+	Input.ThighLenCm = 40.0f;
+	Input.CalfLenCm = 40.0f;
+	Input.ReferenceFlexionDeg = 5.0f;
+	Input.TargetPelvisDropCm = 25.0f;
+	Input.MaxAdjustDeg = 25.0f;
+	Input.AdjustWeight01 = 1.0f;
+	Input.StraightenDamping01 = 0.35f;
+
+	// Deepen: a 25 cm metric pelvis drop needs far more flexion than the measured 20 degrees;
+	// the correction applies its full clamp of +25 degrees inside the measured bend plane.
+	const FMediaPipeGroundedLegFlexionResult DeepenResult = AdjustGroundedLegFlexion(Input);
+	TestTrue(TEXT("Deepen correction applies"), DeepenResult.bApplied);
+	TestTrue(TEXT("Measured flexion is read from the segment directions"),
+		FMath::IsNearlyEqual(DeepenResult.MeasuredFlexionDeg, 20.0f, 0.1f));
+	TestTrue(TEXT("Metric target asks for a much deeper bend"), DeepenResult.TargetFlexionDeg > 85.0f);
+	TestTrue(TEXT("Deepen correction is clamped to the configured maximum"),
+		FMath::IsNearlyEqual(DeepenResult.AppliedDeltaDeg, 25.0f, 0.1f));
+	TestTrue(TEXT("Adjusted directions realize the corrected flexion"),
+		FMath::IsNearlyEqual(FlexionBetween(DeepenResult.ThighDirWorld, DeepenResult.CalfDirWorld), 45.0f, 0.2f));
+	TestTrue(TEXT("Adjusted directions stay in the measured bend plane"),
+		FMath::IsNearlyZero(DeepenResult.ThighDirWorld.Y, 0.001f) && FMath::IsNearlyZero(DeepenResult.CalfDirWorld.Y, 0.001f));
+
+	// Straighten: with no metric drop the target returns to the reference flexion, but recorded
+	// soft knees are only nudged (damped), never snapped straight.
+	FMediaPipeGroundedLegFlexionInput StraightenInput = Input;
+	StraightenInput.ThighDirWorld = FVector(FMath::Sin(FMath::DegreesToRadians(15.0f)), 0.0f, -FMath::Cos(FMath::DegreesToRadians(15.0f)));
+	StraightenInput.CalfDirWorld = FVector(-FMath::Sin(FMath::DegreesToRadians(15.0f)), 0.0f, -FMath::Cos(FMath::DegreesToRadians(15.0f)));
+	StraightenInput.TargetPelvisDropCm = 0.0f;
+	const FMediaPipeGroundedLegFlexionResult StraightenResult = AdjustGroundedLegFlexion(StraightenInput);
+	TestTrue(TEXT("Straightening correction applies"), StraightenResult.bApplied);
+	TestTrue(TEXT("Zero drop targets the reference flexion"),
+		FMath::IsNearlyEqual(StraightenResult.TargetFlexionDeg, 5.0f, 0.5f));
+	TestTrue(TEXT("Straightening is damped, not snapped"),
+		FMath::IsNearlyEqual(StraightenResult.AppliedDeltaDeg, (5.0f - 30.0f) * 0.35f, 0.5f));
+	TestTrue(TEXT("Soft knees keep most of their recorded bend"),
+		FlexionBetween(StraightenResult.ThighDirWorld, StraightenResult.CalfDirWorld) > 18.0f);
+
+	// Zero weight leaves the measured intent untouched.
+	FMediaPipeGroundedLegFlexionInput DisabledInput = Input;
+	DisabledInput.AdjustWeight01 = 0.0f;
+	const FMediaPipeGroundedLegFlexionResult DisabledResult = AdjustGroundedLegFlexion(DisabledInput);
+	TestFalse(TEXT("Zero weight does not adjust"), DisabledResult.bApplied);
+	TestTrue(TEXT("Zero weight keeps the measured directions"),
+		DisabledResult.ThighDirWorld.Equals(Input.ThighDirWorld, 0.001f));
+
+	// A perfectly straight measured leg has no bend plane of its own; the fallback normal must
+	// open the knee toward the body's forward hint.
+	FMediaPipeGroundedLegFlexionInput StraightLegInput = Input;
+	StraightLegInput.ThighDirWorld = -FVector::UpVector;
+	StraightLegInput.CalfDirWorld = -FVector::UpVector;
+	StraightLegInput.TargetPelvisDropCm = 20.0f;
+	StraightLegInput.BendFallbackNormalWorld =
+		FVector::CrossProduct(FVector::ForwardVector, StraightLegInput.ThighDirWorld).GetSafeNormal();
+	const FMediaPipeGroundedLegFlexionResult StraightLegResult = AdjustGroundedLegFlexion(StraightLegInput);
+	TestTrue(TEXT("Straight-leg correction applies via the fallback bend plane"), StraightLegResult.bApplied);
+	TestTrue(TEXT("Straight-leg correction bends the knee"),
+		FMath::IsNearlyEqual(FlexionBetween(StraightLegResult.ThighDirWorld, StraightLegResult.CalfDirWorld), 25.0f, 0.2f));
+	TestTrue(TEXT("Fallback bend opens the knee toward the forward hint"), StraightLegResult.ThighDirWorld.X > 0.1f);
+
+	// Impossible drops clamp to the avatar's own minimum reach instead of folding the leg.
+	FMediaPipeGroundedLegFlexionInput HugeDropInput = Input;
+	HugeDropInput.TargetPelvisDropCm = 200.0f;
+	const FMediaPipeGroundedLegFlexionResult HugeDropResult = AdjustGroundedLegFlexion(HugeDropInput);
+	TestTrue(TEXT("Huge drops still clamp the per-frame correction"),
+		FMath::IsNearlyEqual(HugeDropResult.AppliedDeltaDeg, 25.0f, 0.1f));
+	TestTrue(TEXT("Huge drop target stays within the avatar's reachable flexion"),
+		HugeDropResult.TargetFlexionDeg < 179.5f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathBendRedistributionAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.GroundedLegBendRedistribution",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathBendRedistributionAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	auto SagittalDir = [](float TiltFromVerticalDeg, bool bForward)
+	{
+		const float Rad = FMath::DegreesToRadians(TiltFromVerticalDeg);
+		return FVector((bForward ? 1.0f : -1.0f) * FMath::Sin(Rad), 0.0f, -FMath::Cos(Rad));
+	};
+
+	// Monocular squat artifact: femur only 28 deg forward, shin 44 deg back - the knee sinks.
+	FMediaPipeGroundedLegBendRedistributionInput Input;
+	Input.ThighDirWorld = SagittalDir(28.0f, true);
+	Input.CalfDirWorld = SagittalDir(44.0f, false);
+	Input.ShinTiltShare01 = 0.35f;
+	Input.Weight01 = 1.0f;
+	Input.MaxRotateDeg = 20.0f;
+
+	const FMediaPipeGroundedLegBendRedistributionResult SquatResult = RedistributeGroundedLegBend(Input);
+	TestTrue(TEXT("Over-tilted shin triggers redistribution"), SquatResult.bApplied);
+	TestTrue(TEXT("Flexion is measured from the segment pair"),
+		FMath::IsNearlyEqual(SquatResult.FlexionDeg, 72.0f, 0.1f));
+	TestTrue(TEXT("Shin tilt is measured in the bend plane"),
+		FMath::IsNearlyEqual(SquatResult.ShinTiltDeg, 44.0f, 0.1f));
+	TestTrue(TEXT("Redistribution rotates shin toward its natural share"),
+		FMath::IsNearlyEqual(SquatResult.AppliedRotateDeg, 25.2f - 44.0f, 0.2f));
+	TestTrue(TEXT("Corrected shin carries its share of the flexion"),
+		FMath::IsNearlyEqual(
+			FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+				FVector::DotProduct(SquatResult.CalfDirWorld, FVector(0.0f, 0.0f, -1.0f)), -1.0f, 1.0f))),
+			25.2f, 0.3f));
+	TestTrue(TEXT("Flexion magnitude is preserved by the rigid rotation"),
+		FMath::IsNearlyEqual(
+			FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+				FVector::DotProduct(SquatResult.ThighDirWorld, SquatResult.CalfDirWorld), -1.0f, 1.0f))),
+			72.0f, 0.3f));
+	TestTrue(TEXT("The knee rises when the femur takes its share"),
+		SquatResult.ThighDirWorld.Z > Input.ThighDirWorld.Z + 0.1f);
+	TestTrue(TEXT("Redistribution stays in the sagittal bend plane"),
+		FMath::IsNearlyZero(SquatResult.ThighDirWorld.Y, 0.001f) &&
+		FMath::IsNearlyZero(SquatResult.CalfDirWorld.Y, 0.001f));
+
+	// A natural split (shin within its share) is never disturbed.
+	FMediaPipeGroundedLegBendRedistributionInput NaturalInput = Input;
+	NaturalInput.ThighDirWorld = SagittalDir(50.0f, true);
+	NaturalInput.CalfDirWorld = SagittalDir(20.0f, false);
+	const FMediaPipeGroundedLegBendRedistributionResult NaturalResult = RedistributeGroundedLegBend(NaturalInput);
+	TestFalse(TEXT("Natural femur/shin split is untouched"), NaturalResult.bApplied);
+	TestTrue(TEXT("Untouched split keeps the measured directions"),
+		NaturalResult.CalfDirWorld.Equals(NaturalInput.CalfDirWorld, 0.001f));
+
+	// The per-frame clamp bounds the chain rotation (and the planted-foot drift it causes).
+	FMediaPipeGroundedLegBendRedistributionInput ClampedInput = Input;
+	ClampedInput.MaxRotateDeg = 5.0f;
+	const FMediaPipeGroundedLegBendRedistributionResult ClampedResult = RedistributeGroundedLegBend(ClampedInput);
+	TestTrue(TEXT("Redistribution honors its rotation clamp"),
+		FMath::IsNearlyEqual(ClampedResult.AppliedRotateDeg, -5.0f, 0.1f));
+
+	// Straight legs have no bend to redistribute.
+	FMediaPipeGroundedLegBendRedistributionInput StraightInput = Input;
+	StraightInput.ThighDirWorld = FVector(0.0f, 0.0f, -1.0f);
+	StraightInput.CalfDirWorld = FVector(0.0f, 0.0f, -1.0f);
+	TestFalse(TEXT("Straight legs are untouched"), RedistributeGroundedLegBend(StraightInput).bApplied);
+
+	// Zero weight disables the correction.
+	FMediaPipeGroundedLegBendRedistributionInput DisabledInput = Input;
+	DisabledInput.Weight01 = 0.0f;
+	TestFalse(TEXT("Zero weight is untouched"), RedistributeGroundedLegBend(DisabledInput).bApplied);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathGroundedFootPitchAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.GroundedFootPitch",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathGroundedFootPitchAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// Heel on the floor: the grounded foot sits exactly at the reference flat-contact slope.
+	// (Previously a planarized horizontal forward pitched the foot toe-up and the ankle sank to
+	// ball height.)
+	FMediaPipeGroundedFootPitchInput Input;
+	Input.FootForwardWorld = FVector::ForwardVector; // planarized heading
+	Input.ReferencePitchDeg = -26.2f;
+	Input.HeelLiftCm = 0.0f;
+	Input.HeelLiftDeadbandCm = 1.0f;
+	Input.RefFootPlanarLengthCm = 14.4f;
+	Input.MaxExtraDownPitchDeg = 30.0f;
+
+	const FMediaPipeGroundedFootPitchResult FlatResult = SolveGroundedFootPitch(Input);
+	TestTrue(TEXT("Heel-down foot sits at the reference flat-contact slope"),
+		FMath::IsNearlyEqual(FlatResult.AppliedPitchDeg, -26.2f, 0.1f));
+	TestTrue(TEXT("Flat foot forward points down by the reference slope"),
+		FMath::IsNearlyEqual(FlatResult.FootForwardWorld.Z, FMath::Sin(FMath::DegreesToRadians(-26.2f)), 0.01f));
+	TestTrue(TEXT("Heel-down foot has no extra downslope"),
+		FMath::IsNearlyEqual(FlatResult.ExtraDownPitchDeg, 0.0f, 0.01f));
+
+	// Heel jitter inside the deadband cannot rock a planted foot.
+	FMediaPipeGroundedFootPitchInput JitterInput = Input;
+	JitterInput.HeelLiftCm = 0.8f;
+	TestTrue(TEXT("Heel jitter inside the deadband keeps the foot flat"),
+		FMath::IsNearlyEqual(SolveGroundedFootPitch(JitterInput).ExtraDownPitchDeg, 0.0f, 0.01f));
+
+	// A genuine heel raise pitches the foot down geometrically: atan(lift / foot length).
+	FMediaPipeGroundedFootPitchInput HeelRaiseInput = Input;
+	HeelRaiseInput.HeelLiftCm = 8.0f; // 7 cm effective after the 1 cm deadband
+	const FMediaPipeGroundedFootPitchResult HeelRaiseResult = SolveGroundedFootPitch(HeelRaiseInput);
+	const float ExpectedExtraDeg = FMath::RadiansToDegrees(FMath::Atan2(7.0f, 14.4f));
+	TestTrue(TEXT("Heel raise produces geometric plantar flexion"),
+		FMath::IsNearlyEqual(HeelRaiseResult.ExtraDownPitchDeg, ExpectedExtraDeg, 0.2f));
+	TestTrue(TEXT("Heel raise pitch combines reference slope and lift"),
+		FMath::IsNearlyEqual(HeelRaiseResult.AppliedPitchDeg, -26.2f - ExpectedExtraDeg, 0.2f));
+
+	// Extreme heel lifts are bounded by the extra-down allowance.
+	FMediaPipeGroundedFootPitchInput ExtremeInput = Input;
+	ExtremeInput.HeelLiftCm = 40.0f;
+	TestTrue(TEXT("Extreme heel lifts clamp to the extra-down allowance"),
+		FMath::IsNearlyEqual(SolveGroundedFootPitch(ExtremeInput).AppliedPitchDeg, -56.2f, 0.1f));
+
+	// The solved heading is preserved; only the pitch is rebuilt.
+	FMediaPipeGroundedFootPitchInput HeadingInput = Input;
+	HeadingInput.FootForwardWorld = FVector::RightVector;
+	const FMediaPipeGroundedFootPitchResult HeadingResult = SolveGroundedFootPitch(HeadingInput);
+	TestTrue(TEXT("Foot heading is preserved by the pitch solve"),
+		FMath::IsNearlyZero(HeadingResult.FootForwardWorld.X, 0.001f) && HeadingResult.FootForwardWorld.Y > 0.5f);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

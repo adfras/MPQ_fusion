@@ -57,6 +57,59 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 		return;
 	}
 
+	// --- Quest/HMD metric height scaffold (lower body) ---
+	// Updated every evaluation so the rolling standing baseline stays warm. Monocular MediaPipe
+	// supplies squat/stand timing but not metric depth (the recorded landmark frame is
+	// hip-centered); the HMD height against its standing baseline supplies the metric magnitude.
+	// The fused result drives the pelvis offset below and the grounded-leg flexion correction in
+	// DriveLegCS, keeping both consistent.
+	const float ScaffoldHmdWeight = FMath::Clamp(CVarMediaPipeLegScaffoldHmdWeight.GetValueOnAnyThread(), 0.0f, 1.0f);
+	BodyState.bHasLowerBodyScaffoldSample = false;
+	BodyState.bScaffoldHmdPoseValid = bHasCachedQuestHmdPose;
+	BodyState.ScaffoldHmdHeightZ = CachedQuestHmdWorld.Z;
+	MediaPipeBodySolverMath::FMediaPipeHmdHeightScaffoldResult HmdScaffoldResult;
+	if (ScaffoldHmdWeight > KINDA_SMALL_NUMBER)
+	{
+		// Raw torso pitch from the landmark midlines (not the constrained torso basis, whose
+		// upright blend would hide the very lean this compensation needs to observe).
+		float TorsoUprightDot = 1.0f;
+		{
+			FVector LShoulderWorld = FVector::ZeroVector;
+			FVector RShoulderWorld = FVector::ZeroVector;
+			FVector LHipWorldForLean = FVector::ZeroVector;
+			FVector RHipWorldForLean = FVector::ZeroVector;
+			if (TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, LShoulderWorld) &&
+				TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, RShoulderWorld) &&
+				TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LHipWorldForLean) &&
+				TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RHipWorldForLean))
+			{
+				const FVector RawTorsoUp =
+					((LShoulderWorld + RShoulderWorld) * 0.5f - (LHipWorldForLean + RHipWorldForLean) * 0.5f).GetSafeNormal();
+				if (!RawTorsoUp.IsNearlyZero())
+				{
+					TorsoUprightDot = FMath::Clamp(FVector::DotProduct(RawTorsoUp, FVector::UpVector), 0.0f, 1.0f);
+				}
+			}
+		}
+
+		MediaPipeBodySolverMath::FMediaPipeHmdHeightScaffoldInput HmdScaffoldInput;
+		HmdScaffoldInput.bHasHmdPose = bHasCachedQuestHmdPose;
+		HmdScaffoldInput.HmdHeightZ = CachedQuestHmdWorld.Z;
+		HmdScaffoldInput.DeltaSeconds = DeltaSeconds;
+		HmdScaffoldInput.BaselineWindowSeconds =
+			FMath::Max(CVarMediaPipeLegScaffoldBaselineWindowSeconds.GetValueOnAnyThread(), 1.0f);
+		HmdScaffoldInput.TorsoUprightDot = TorsoUprightDot;
+		HmdScaffoldInput.LeanCompensationCoefficient =
+			FMath::Max(CVarMediaPipeLegScaffoldLeanCoefficient.GetValueOnAnyThread(), 0.0f);
+		HmdScaffoldInput.HipFromHmdRatio = CVarMediaPipeLegScaffoldHipFromHmdRatio.GetValueOnAnyThread();
+		HmdScaffoldResult = MediaPipeBodySolverMath::UpdateHmdHeightScaffold(BodyState.HmdHeightScaffold, HmdScaffoldInput);
+	}
+	BodyState.ScaffoldHmdBaselineZ = HmdScaffoldResult.BaselineHeadZ;
+	BodyState.ScaffoldHmdHeadDropCm = HmdScaffoldResult.HeadDropCm;
+	BodyState.ScaffoldHmdLeanCompCm = HmdScaffoldResult.LeanCompensationCm;
+	BodyState.ScaffoldHmdAlpha01 = HmdScaffoldResult.CompressionAlpha01;
+	BodyState.ScaffoldHmdConfidence = HmdScaffoldResult.Confidence;
+
 	const int32 LHipLm = (int32)EMediaPipePoseLandmark::LeftHip;
 	const int32 RHipLm = (int32)EMediaPipePoseLandmark::RightHip;
 	const int32 LKneeLm = (int32)EMediaPipePoseLandmark::LeftKnee;
@@ -229,8 +282,26 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 				if (BodyState.ReferenceRigHipHeightCm > KINDA_SMALL_NUMBER && StandingSourceHipHeightCm > KINDA_SMALL_NUMBER)
 				{
 					const float CompressionAlpha = FMath::Clamp(CurrentHipHeightCm / StandingSourceHipHeightCm, 0.0f, 1.0f);
-					const float TargetRigHipHeightCm = BodyState.ReferenceRigHipHeightCm * CompressionAlpha;
+
+					// Fuse monocular squat/stand intent with the Quest/HMD metric height scaffold.
+					MediaPipeBodySolverMath::FMediaPipeFusedPelvisCompressionInput FusionInput;
+					FusionInput.bHasMonoAlpha = true;
+					FusionInput.MonoAlpha01 = CompressionAlpha;
+					FusionInput.bHasHmdAlpha = HmdScaffoldResult.bValid;
+					FusionInput.HmdAlpha01 = HmdScaffoldResult.CompressionAlpha01;
+					FusionInput.HmdConfidence01 = HmdScaffoldResult.Confidence;
+					FusionInput.HmdWeight01 = ScaffoldHmdWeight;
+					const MediaPipeBodySolverMath::FMediaPipeFusedPelvisCompressionResult Fusion =
+						MediaPipeBodySolverMath::ComputeFusedPelvisCompression(FusionInput);
+
+					const float TargetRigHipHeightCm = BodyState.ReferenceRigHipHeightCm * Fusion.FusedAlpha01;
 					DeltaHeightCm = TargetRigHipHeightCm - BodyState.ReferenceRigHipHeightCm;
+
+					BodyState.ScaffoldMonoAlpha01 = CompressionAlpha;
+					BodyState.ScaffoldFusedAlpha01 = Fusion.FusedAlpha01;
+					BodyState.ScaffoldHmdShare01 = Fusion.HmdShare01;
+					BodyState.ScaffoldPelvisDropCm = BodyState.ReferenceRigHipHeightCm * (1.0f - Fusion.FusedAlpha01);
+					BodyState.bHasLowerBodyScaffoldSample = true;
 				}
 
 				FVector CompUp = TargetCompTransform.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();

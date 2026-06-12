@@ -44,8 +44,11 @@ void SetReplayActorConsoleFloat(const TCHAR* Name, const float Value)
 AMediaPipeTrackingFusionDatasetReplayActor::AMediaPipeTrackingFusionDatasetReplayActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
+	// Schema-v2 cache: same canonical recording, plus the full recorded Quest hand skeletons
+	// (26 keypoints + rotations per hand) so replay drives wrist rotation and fingers. The v1
+	// wrist-only cache stays on disk beside it and still loads for older flows.
 	ReplayManifestPath =
-		TEXT("Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_manifest.json");
+		TEXT("Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_v2_manifest.json");
 }
 
 void AMediaPipeTrackingFusionDatasetReplayActor::BeginPlay()

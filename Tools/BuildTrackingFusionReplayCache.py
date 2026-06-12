@@ -90,6 +90,32 @@ def manifest_sample_paths(manifest_path: Path, manifest: dict[str, Any]) -> list
     return paths
 
 
+def round_floats(value: Any, digits: int = 4) -> Any:
+    if isinstance(value, float):
+        return round(value, digits)
+    if isinstance(value, list):
+        return [round_floats(item, digits) for item in value]
+    return value
+
+
+def extract_hand_joints(fusion: dict[str, Any], limb_name: str) -> dict[str, Any] | None:
+    limb = (fusion.get("best_available") or {}).get(limb_name) or {}
+    joints = limb.get("hand_joints") or {}
+    if not joints.get("has_joints"):
+        return None
+    positions = joints.get("positions_world")
+    rotations = joints.get("rotations_world")
+    if not isinstance(positions, list) or not isinstance(rotations, list):
+        return None
+    if len(positions) != 26 or len(rotations) != 26:
+        return None
+    return {
+        "tracked": bool(joints.get("tracked")),
+        "positions": round_floats(positions),
+        "rotations": round_floats(rotations, 5),
+    }
+
+
 def compact_line(line: str) -> str | None:
     fusion_index = line.find('"fusion"')
     if fusion_index < 0:
@@ -100,6 +126,29 @@ def compact_line(line: str) -> str | None:
     time_text = extract_number_field(line, "t")
     phase_index = line.find('"phase"')
     phase_name = extract_string_field_after(line, "phase_name", phase_index) if phase_index >= 0 else ""
+
+    # Schema v2: carry the full Quest hand joints (26 keypoint positions + rotations per hand)
+    # from fusion.best_available into the per-hand source entries so dataset replay can drive
+    # wrist rotation and fingers. Older v1 caches carried wrist endpoints only.
+    try:
+        row = json.loads(line)
+        fusion = row.get("fusion") or {}
+        source = json.loads(source_fragment)
+        changed = False
+        for limb_name, hand_name in (("left_upper_limb", "left_hand"), ("right_upper_limb", "right_hand")):
+            joints = extract_hand_joints(fusion, limb_name)
+            hand = source.get(hand_name)
+            if joints is None or not isinstance(hand, dict):
+                continue
+            hand["keypoints_tracked"] = joints["tracked"]
+            hand["keypoints_world"] = joints["positions"]
+            hand["keypoint_quats"] = joints["rotations"]
+            changed = True
+        if changed:
+            source_fragment = json.dumps(source, separators=(",", ":"))
+    except (ValueError, KeyError):
+        pass  # fall back to the wrist-only source fragment
+
     return (
         f'{{"t":{time_text},"phase":{{"phase_name":{json.dumps(phase_name, separators=(",", ":"))}}},'
         f'"fusion":{{"source":{source_fragment}}}}}'
@@ -144,7 +193,7 @@ def build_replay_cache(manifest_path: Path, output_path: Path | None = None) -> 
 
     replay_manifest = {
         "schema": "tracking_fusion_dataset_replay_cache",
-        "schema_version": 1,
+        "schema_version": 2,
         "label": f"{manifest.get('label') or manifest_path.stem}_replay",
         "source_manifest": str(manifest_path),
         "source_sample_count": manifest.get("sample_count"),

@@ -1138,6 +1138,71 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, grounded/near-floor MediaPipe feet build their up axis from world up (the floor) instead of torso up, so squat or lean torso tilt does not roll planted feet. Airborne feet keep following the body. Replay-output evaluation enables this."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldHmdWeight(
+		TEXT("mp.MediaPipeLegScaffoldHmdWeight"),
+		0.0f,
+		TEXT("0..1 blend weight of the Quest/HMD metric height scaffold in the fused pelvis compression. Monocular MediaPipe supplies squat/stand timing but not metric depth; the HMD height against its rolling standing baseline supplies the metric magnitude. 0 keeps the monocular-only compression. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldFlexionWeight(
+		TEXT("mp.MediaPipeLegScaffoldFlexionWeight"),
+		0.0f,
+		TEXT("0..1 strength of the grounded-leg metric flexion correction. Solves, on the avatar's own thigh/calf lengths, the knee flexion that realizes the fused scaffold pelvis drop and rotates the MediaPipe segment directions inside their own bend plane by a bounded fraction of the difference. 0 keeps raw MediaPipe flexion. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldFlexionMaxAdjustDeg(
+		TEXT("mp.MediaPipeLegScaffoldFlexionMaxAdjustDeg"),
+		25.0f,
+		TEXT("Maximum degrees the grounded-leg flexion correction may add to or remove from the measured MediaPipe knee flexion. Bounds the metric correction so MediaPipe leg intent always remains the primary motion source."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldHipFromHmdRatio(
+		TEXT("mp.MediaPipeLegScaffoldHipFromHmdRatio"),
+		0.52f,
+		TEXT("Standing pelvis height as a fraction of the standing HMD height. Only normalizes the metric head drop into a dimensionless compression alpha; it never scales avatar bones."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldLeanCoefficient(
+		TEXT("mp.MediaPipeLegScaffoldLeanCoefficient"),
+		0.35f,
+		TEXT("Head-to-hip lever arm for HMD lean compensation, as a fraction of the standing HMD height. Discounts HMD height loss caused by leaning/bowing (observed via the MediaPipe torso up axis) so a forward lean is not mistaken for a squat. 0 disables lean compensation."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldBaselineWindowSeconds(
+		TEXT("mp.MediaPipeLegScaffoldBaselineWindowSeconds"),
+		45.0f,
+		TEXT("Rolling window, in seconds, over which the standing HMD height baseline is tracked as a per-slot maximum. Squats cannot drag the baseline down; transient inflation (toe raises) expires with the window."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldShinTiltShare(
+		TEXT("mp.MediaPipeLegScaffoldShinTiltShare"),
+		0.35f,
+		TEXT("Natural share (0..1) of the total knee flexion carried by the shin's in-plane tilt from vertical for grounded legs. Front-facing monocular capture cannot observe the femur's forward (depth) rotation and dumps most of the bend into the shin, which sinks the knee; the redistribution rotates the bend back toward this split."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldBendRedistributionWeight(
+		TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"),
+		0.0f,
+		TEXT("0..1 strength of the grounded-leg bend redistribution (femur/shin split correction). Rigidly rotates the thigh+calf pair inside their own bend plane so the shin keeps at most mp.MediaPipeLegScaffoldShinTiltShare of the total flexion; flexion magnitude, bend plane, and timing stay owned by the MediaPipe intent. 0 keeps the raw monocular split. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldBendRedistributionMaxDeg(
+		TEXT("mp.MediaPipeLegScaffoldBendRedistributionMaxDeg"),
+		20.0f,
+		TEXT("Maximum degrees the grounded-leg bend redistribution may rotate the leg chain inside its bend plane. Bounds the correction (and the planted-foot planar drift it can introduce)."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFootGroundedPitchClamp(
+		TEXT("mp.MediaPipeFootGroundedPitchClamp"),
+		0,
+		TEXT("When non-zero, grounded/near-floor feet rebuild their pitch from the monocular heel-toe axis clamped to [reference slope - extra down, reference slope]. The reference foot basis maps a planarized (horizontal) forward to a toe-up foot with the ankle sunk to ball height; this keeps grounded soles flat on the floor while heel raises keep their downward pitch. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootGroundedMaxExtraDownPitchDeg(
+		TEXT("mp.MediaPipeFootGroundedMaxExtraDownPitchDeg"),
+		30.0f,
+		TEXT("Extra downward foot pitch allowed past the reference flat-contact slope while grounded, so heel raises and toe stands keep working under the grounded foot pitch clamp."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldLog(
+		TEXT("mp.MediaPipeLegScaffoldLog"),
+		0,
+		TEXT("When non-zero, emit throttled mp.MediaPipeLegScaffold rows per driven actor with the source contributions of the lower-body solve: HMD scaffold (height, baseline, drop, lean compensation, alpha, confidence), monocular compression, fused pelvis compression, per-leg flexion intent vs metric target vs applied delta, foot contact state, and root grounding offset. Replay-output evaluation enables this."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegScaffoldLogInterval(
+		TEXT("mp.MediaPipeLegScaffoldLogInterval"),
+		2.0f,
+		TEXT("Seconds between mp.MediaPipeLegScaffold diagnostic rows per anim node instance."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeDriveArmTwistBones(
 		TEXT("mp.MediaPipeDriveArmTwistBones"),
 		0,

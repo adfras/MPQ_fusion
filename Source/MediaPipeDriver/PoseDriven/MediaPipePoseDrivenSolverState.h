@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MediaPipeBodySolverMath.h"
 #include "MediaPipePoseDiagnostics.h"
 
 static constexpr int32 MediaPipeQuestStateFingerBoneCount = 19;
@@ -37,6 +38,24 @@ struct FMediaPipeBodySolverState
 	int32 Stage2NeutralObservationFramesR = 0;
 	bool bHasSmoothedFkRootGroundOffset = false;
 	FVector SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+
+	// Lower-body scaffold: Quest/HMD metric height fused with the monocular compression. Updated
+	// once per evaluation in DrivePelvisTranslationCS and consumed by the grounded leg flexion
+	// correction in DriveLegCS plus the scaffold diagnostics row.
+	MediaPipeBodySolverMath::FMediaPipeHmdHeightScaffoldState HmdHeightScaffold;
+	bool bHasLowerBodyScaffoldSample = false;
+	bool bScaffoldHmdPoseValid = false;
+	float ScaffoldHmdHeightZ = 0.0f;
+	float ScaffoldHmdBaselineZ = 0.0f;
+	float ScaffoldHmdHeadDropCm = 0.0f;
+	float ScaffoldHmdLeanCompCm = 0.0f;
+	float ScaffoldHmdAlpha01 = 1.0f;
+	float ScaffoldHmdConfidence = 0.0f;
+	float ScaffoldMonoAlpha01 = 1.0f;
+	float ScaffoldFusedAlpha01 = 1.0f;
+	float ScaffoldHmdShare01 = 0.0f;
+	float ScaffoldPelvisDropCm = 0.0f;
+
 	bool bHasStableTorsoForwardWorld = false;
 	FVector StableTorsoForwardWorld = FVector::ZeroVector;
 	bool bHasStableTorsoUpWorld = false;
@@ -115,7 +134,25 @@ struct FMediaPipeBodySolverState
 		Stage2NeutralObservationFramesR = 0;
 		bHasSmoothedFkRootGroundOffset = false;
 		SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+		ResetLowerBodyScaffold();
 		ResetDerivedSignalReferences();
+	}
+
+	void ResetLowerBodyScaffold()
+	{
+		HmdHeightScaffold.Reset();
+		bHasLowerBodyScaffoldSample = false;
+		bScaffoldHmdPoseValid = false;
+		ScaffoldHmdHeightZ = 0.0f;
+		ScaffoldHmdBaselineZ = 0.0f;
+		ScaffoldHmdHeadDropCm = 0.0f;
+		ScaffoldHmdLeanCompCm = 0.0f;
+		ScaffoldHmdAlpha01 = 1.0f;
+		ScaffoldHmdConfidence = 0.0f;
+		ScaffoldMonoAlpha01 = 1.0f;
+		ScaffoldFusedAlpha01 = 1.0f;
+		ScaffoldHmdShare01 = 0.0f;
+		ScaffoldPelvisDropCm = 0.0f;
 	}
 
 	void ResetTorsoStability()
@@ -161,6 +198,10 @@ struct FMediaPipeLegSolverState
 	FVector LockedAnkleWorld = FVector::ZeroVector;
 	bool bHasObservedSourceFloor = false;
 	float ObservedSourceFloorZ = 0.0f;
+	// Lowest observed source HEEL height; the heel landmark sits high on the ankle, so heel
+	// raises must be measured against the heel's own floor, not the toe-dominated source floor.
+	bool bHasObservedHeelFloor = false;
+	float ObservedHeelFloorZ = 0.0f;
 	bool bCurrentSourceFootGrounded = false;
 	bool bCurrentSourceFootNearFloor = false;
 	bool bHasSmoothedThighRotCS = false;
@@ -169,6 +210,17 @@ struct FMediaPipeLegSolverState
 	FQuat SmoothedCalfRotCS = FQuat::Identity;
 	bool bHasSmoothedFootRotCS = false;
 	FQuat SmoothedFootRotCS = FQuat::Identity;
+
+	// Scaffold diagnostics (per evaluated frame; no pose authority).
+	bool bLastFlexionAdjustApplied = false;
+	float LastFlexionMeasuredDeg = 0.0f;
+	float LastFlexionTargetDeg = 0.0f;
+	float LastFlexionAppliedDeltaDeg = 0.0f;
+	float LastFootLiftCm = 0.0f;
+	float LastBendRedistributionDeg = 0.0f;
+	float LastShinTiltDeg = 0.0f;
+	float LastFootPitchAppliedDeg = 0.0f;
+	float LastFootExtraDownPitchDeg = 0.0f;
 
 	void ResetFootPlant()
 	{
@@ -185,8 +237,19 @@ struct FMediaPipeLegSolverState
 		LockedAnkleWorld = FVector::ZeroVector;
 		bHasObservedSourceFloor = false;
 		ObservedSourceFloorZ = 0.0f;
+		bHasObservedHeelFloor = false;
+		ObservedHeelFloorZ = 0.0f;
 		bCurrentSourceFootGrounded = false;
 		bCurrentSourceFootNearFloor = false;
+		bLastFlexionAdjustApplied = false;
+		LastFlexionMeasuredDeg = 0.0f;
+		LastFlexionTargetDeg = 0.0f;
+		LastFlexionAppliedDeltaDeg = 0.0f;
+		LastFootLiftCm = 0.0f;
+		LastBendRedistributionDeg = 0.0f;
+		LastShinTiltDeg = 0.0f;
+		LastFootPitchAppliedDeg = 0.0f;
+		LastFootExtraDownPitchDeg = 0.0f;
 	}
 
 	void ResetRotationSmoothing()

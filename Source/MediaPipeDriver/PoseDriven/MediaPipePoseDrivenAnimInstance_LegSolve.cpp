@@ -211,22 +211,18 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		KneeWorld = MediaPipeBodySolverMath::SuppressBackwardKneePole(KneePoleInput);
 	}
 
-	const FVector DesiredThighWorld = (KneeWorld - HipWorld).GetSafeNormal();
-	const FVector DesiredCalfWorld = (AnkleWorld - KneeWorld).GetSafeNormal();
+	// Monocular MediaPipe leg intent: these segment directions own knee bend timing, foot lift
+	// timing, left/right phase, lateral swing, and relative amplitude. Their flexion magnitude is
+	// corrected against the Quest/HMD metric scaffold below (grounded legs only) before they are
+	// converted to component space and applied on the avatar's own proportions.
+	FVector DesiredThighWorld = (KneeWorld - HipWorld).GetSafeNormal();
+	FVector DesiredCalfWorld = (AnkleWorld - KneeWorld).GetSafeNormal();
 	const FVector RawDesiredFootWorld = bCanDriveFoot
 		? (bHeelMeasured && !(ToeWorld - HeelWorld).IsNearlyZero()
 			? (ToeWorld - HeelWorld).GetSafeNormal()
 			: (ToeWorld - AnkleWorld).GetSafeNormal())
 		: FVector::ZeroVector;
 	const FVector DesiredFootWorld = bCanDriveFoot ? SolveFootForwardWorld(RawDesiredFootWorld) : FVector::ZeroVector;
-
-	const FVector DesiredThighComp = TargetCompTransform.InverseTransformVectorNoScale(DesiredThighWorld).GetSafeNormal();
-	const FVector DesiredCalfComp = TargetCompTransform.InverseTransformVectorNoScale(DesiredCalfWorld).GetSafeNormal();
-	const FVector DesiredFootComp = bCanDriveFoot ? TargetCompTransform.InverseTransformVectorNoScale(DesiredFootWorld).GetSafeNormal() : FVector::ZeroVector;
-	if (DesiredThighComp.IsNearlyZero() || DesiredCalfComp.IsNearlyZero())
-	{
-		return;
-	}
 
 	const FBoneReference& ThighBone = bIsLeft ? ThighL : ThighR;
 	const FBoneReference& CalfBone = bIsLeft ? CalfL : CalfR;
@@ -324,6 +320,92 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	bCurrentSourceFootGrounded = bAcquireGrounded || (bFootPlantLocked && bFootShouldStayPlanted);
 	bCurrentSourceFootNearFloor = bNearObservedFloorForRelease;
 
+	// --- Grounded-leg metric flexion correction (MediaPipe intent + Quest/HMD scaffold) ---
+	// When this foot is at or near its observed source floor, correct the monocular flexion
+	// magnitude toward the knee bend that realizes the fused scaffold pelvis drop on this
+	// avatar's own thigh/calf lengths (law of cosines with reachable limits). The bend plane,
+	// timing, phase, and lateral swing stay owned by the MediaPipe intent; lifted feet are
+	// never touched so steps and kicks keep their recorded motion.
+	const float RefThighLen = bIsLeft ? RefThighLenCompL : RefThighLenCompR;
+	const float RefCalfLen = bIsLeft ? RefCalfLenCompL : RefCalfLenCompR;
+	const float ScaffoldFlexionWeight =
+		FMath::Clamp(CVarMediaPipeLegScaffoldFlexionWeight.GetValueOnAnyThread(), 0.0f, 1.0f);
+	FMediaPipeLegSolverState& SideLegState = bIsLeft ? LeftLegState : RightLegState;
+	SideLegState.LastFootLiftCm = HeightAboveObservedFloorCm;
+	SideLegState.LastFlexionMeasuredDeg = FMath::RadiansToDegrees(FMath::Acos(
+		FMath::Clamp(FVector::DotProduct(DesiredThighWorld, DesiredCalfWorld), -1.0f, 1.0f)));
+	SideLegState.LastFlexionTargetDeg = SideLegState.LastFlexionMeasuredDeg;
+	SideLegState.LastFlexionAppliedDeltaDeg = 0.0f;
+	SideLegState.bLastFlexionAdjustApplied = false;
+	if (ScaffoldFlexionWeight > KINDA_SMALL_NUMBER &&
+		BodyState.bHasLowerBodyScaffoldSample &&
+		BodyState.ScaffoldHmdShare01 > KINDA_SMALL_NUMBER &&
+		(bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor))
+	{
+		MediaPipeBodySolverMath::FMediaPipeGroundedLegFlexionInput FlexionInput;
+		FlexionInput.ThighDirWorld = DesiredThighWorld;
+		FlexionInput.CalfDirWorld = DesiredCalfWorld;
+		FlexionInput.ThighLenCm = RefThighLen;
+		FlexionInput.CalfLenCm = RefCalfLen;
+		FlexionInput.ReferenceFlexionDeg = FMath::RadiansToDegrees(FMath::Acos(
+			FMath::Clamp(FVector::DotProduct(RefThighDir, RefCalfDir), -1.0f, 1.0f)));
+		FlexionInput.TargetPelvisDropCm = BodyState.ScaffoldPelvisDropCm;
+		FlexionInput.MaxAdjustDeg =
+			FMath::Max(CVarMediaPipeLegScaffoldFlexionMaxAdjustDeg.GetValueOnAnyThread(), 0.0f);
+		FlexionInput.AdjustWeight01 = ScaffoldFlexionWeight * BodyState.ScaffoldHmdShare01;
+		FlexionInput.BendFallbackNormalWorld =
+			FVector::CrossProduct(LegForwardWorld, DesiredThighWorld).GetSafeNormal();
+		const MediaPipeBodySolverMath::FMediaPipeGroundedLegFlexionResult FlexionResult =
+			MediaPipeBodySolverMath::AdjustGroundedLegFlexion(FlexionInput);
+		SideLegState.LastFlexionMeasuredDeg = FlexionResult.MeasuredFlexionDeg;
+		SideLegState.LastFlexionTargetDeg = FlexionResult.TargetFlexionDeg;
+		if (FlexionResult.bApplied)
+		{
+			DesiredThighWorld = FlexionResult.ThighDirWorld;
+			DesiredCalfWorld = FlexionResult.CalfDirWorld;
+			SideLegState.LastFlexionAppliedDeltaDeg = FlexionResult.AppliedDeltaDeg;
+			SideLegState.bLastFlexionAdjustApplied = true;
+		}
+	}
+
+	// --- Grounded-leg bend redistribution (femur/shin split) ---
+	// Monocular front-facing capture cannot see the femur's forward (depth) rotation, so the
+	// recorded bend lands mostly in the shin and the knee sinks. Rigidly rotate the corrected
+	// thigh+calf pair inside their own bend plane so the shin keeps at most its natural share of
+	// the total flexion. Flexion magnitude, bend plane, timing, and lifted feet stay untouched.
+	const float BendRedistributionWeight =
+		FMath::Clamp(CVarMediaPipeLegScaffoldBendRedistributionWeight.GetValueOnAnyThread(), 0.0f, 1.0f);
+	SideLegState.LastBendRedistributionDeg = 0.0f;
+	SideLegState.LastShinTiltDeg = 0.0f;
+	if (BendRedistributionWeight > KINDA_SMALL_NUMBER &&
+		(bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor))
+	{
+		MediaPipeBodySolverMath::FMediaPipeGroundedLegBendRedistributionInput RedistributionInput;
+		RedistributionInput.ThighDirWorld = DesiredThighWorld;
+		RedistributionInput.CalfDirWorld = DesiredCalfWorld;
+		RedistributionInput.ShinTiltShare01 =
+			FMath::Clamp(CVarMediaPipeLegScaffoldShinTiltShare.GetValueOnAnyThread(), 0.0f, 1.0f);
+		RedistributionInput.Weight01 = BendRedistributionWeight;
+		RedistributionInput.MaxRotateDeg =
+			FMath::Max(CVarMediaPipeLegScaffoldBendRedistributionMaxDeg.GetValueOnAnyThread(), 0.0f);
+		const MediaPipeBodySolverMath::FMediaPipeGroundedLegBendRedistributionResult RedistributionResult =
+			MediaPipeBodySolverMath::RedistributeGroundedLegBend(RedistributionInput);
+		SideLegState.LastShinTiltDeg = RedistributionResult.ShinTiltDeg;
+		if (RedistributionResult.bApplied)
+		{
+			DesiredThighWorld = RedistributionResult.ThighDirWorld;
+			DesiredCalfWorld = RedistributionResult.CalfDirWorld;
+			SideLegState.LastBendRedistributionDeg = RedistributionResult.AppliedRotateDeg;
+		}
+	}
+
+	const FVector DesiredThighComp = TargetCompTransform.InverseTransformVectorNoScale(DesiredThighWorld).GetSafeNormal();
+	const FVector DesiredCalfComp = TargetCompTransform.InverseTransformVectorNoScale(DesiredCalfWorld).GetSafeNormal();
+	if (DesiredThighComp.IsNearlyZero() || DesiredCalfComp.IsNearlyZero())
+	{
+		return;
+	}
+
 	// Grounded feet should be referenced to the floor, not the (possibly squat-tilted) torso.
 	const bool bFootUpFromWorld =
 		CVarMediaPipeFootGroundedWorldUp.GetValueOnAnyThread() != 0 &&
@@ -390,6 +472,54 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 		}
 	}
+
+	// --- Grounded foot pitch (flat soles) ---
+	// The reference foot basis is built from the naturally down-sloped ankle->ball axis, so a
+	// planarized (horizontal) forward pitches the planted foot toe-up and the ankle sinks to ball
+	// height. Rebuild the grounded foot's pitch as the avatar's reference flat-contact slope plus
+	// a heel-lift-driven extra downslope: heel-down feet sit exactly flat, heel raises and toe
+	// stands keep their plantar flexion, and lifted feet keep the raw monocular pitch. The heel
+	// lift is measured against the heel landmark's own observed floor because that landmark sits
+	// high on the ankle and its raw axis pitch is useless for ground contact.
+	SideLegState.LastFootPitchAppliedDeg = 0.0f;
+	SideLegState.LastFootExtraDownPitchDeg = 0.0f;
+	if (bCanDriveFoot &&
+		CVarMediaPipeFootGroundedPitchClamp.GetValueOnAnyThread() != 0 &&
+		(bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor))
+	{
+		if (bHeelMeasured)
+		{
+			if (!SideLegState.bHasObservedHeelFloor)
+			{
+				SideLegState.ObservedHeelFloorZ = HeelWorld.Z;
+				SideLegState.bHasObservedHeelFloor = true;
+			}
+			else if (!bFootPlantLocked)
+			{
+				SideLegState.ObservedHeelFloorZ = FMath::Min(SideLegState.ObservedHeelFloorZ, HeelWorld.Z);
+			}
+		}
+		const float HeelLiftCm = (bHeelMeasured && SideLegState.bHasObservedHeelFloor)
+			? FMath::Max(HeelWorld.Z - SideLegState.ObservedHeelFloorZ, 0.0f)
+			: 0.0f;
+
+		MediaPipeBodySolverMath::FMediaPipeGroundedFootPitchInput FootPitchInput;
+		FootPitchInput.FootForwardWorld = FootForwardForRotationWorld;
+		FootPitchInput.ReferencePitchDeg = FMath::RadiansToDegrees(FMath::Asin(
+			FMath::Clamp(RefFootDir.Z, -1.0f, 1.0f)));
+		FootPitchInput.HeelLiftCm = HeelLiftCm;
+		FootPitchInput.RefFootPlanarLengthCm = FMath::Max(
+			FVector2D(RefBallPosComp.X - RefAnklePosComp.X, RefBallPosComp.Y - RefAnklePosComp.Y).Size(),
+			1.0f);
+		FootPitchInput.MaxExtraDownPitchDeg =
+			FMath::Max(CVarMediaPipeFootGroundedMaxExtraDownPitchDeg.GetValueOnAnyThread(), 0.0f);
+		const MediaPipeBodySolverMath::FMediaPipeGroundedFootPitchResult FootPitchResult =
+			MediaPipeBodySolverMath::SolveGroundedFootPitch(FootPitchInput);
+		FootForwardForRotationWorld = FootPitchResult.FootForwardWorld;
+		SideLegState.LastFootPitchAppliedDeg = FootPitchResult.AppliedPitchDeg;
+		SideLegState.LastFootExtraDownPitchDeg = FootPitchResult.ExtraDownPitchDeg;
+	}
+
 	const FVector FootForwardForRotationComp = bCanDriveFoot
 		? TargetCompTransform.InverseTransformVectorNoScale(FootForwardForRotationWorld).GetSafeNormal()
 		: FVector::ZeroVector;
@@ -530,7 +660,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 
 		UE_LOG(LogMediaPipePose, Warning,
-			TEXT("mp.MediaPipeLegSolve.Debug actor=%s side=%s path=%s bDriveLegs=%d bHasRefLegL=%d bHasRefLegR=%d avatarLockedReplay=%d bodyFusionPoseUsable=%d bUseBodyFusionLowerBody=%d bUsingBodyFusionLowerBody=%d tryGetMediaPipeLowerBodySide=%d hip=%s knee=%s ankle=%s heel=%s toe=%s desiredThigh=%s desiredCalf=%s apply(thigh=%d calf=%d foot=%d) useLegIK=%d useFootPlant=%d driveFootRotation=%d"),
+			TEXT("mp.MediaPipeLegSolve.Debug actor=%s side=%s path=%s bDriveLegs=%d bHasRefLegL=%d bHasRefLegR=%d avatarLockedReplay=%d bodyFusionPoseUsable=%d bUseBodyFusionLowerBody=%d bUsingBodyFusionLowerBody=%d tryGetMediaPipeLowerBodySide=%d hip=%s knee=%s ankle=%s heel=%s toe=%s desiredThigh=%s desiredCalf=%s apply(thigh=%d calf=%d foot=%d) useLegIK=%d useFootPlant=%d driveFootRotation=%d scaffold(sample=%d hmdShare=%.2f pelvisDropCm=%.1f flexMeas=%.1f flexTarget=%.1f flexApplied=%.1f grounded=%d nearFloor=%d liftCm=%.1f)"),
 			*TargetActorName.ToString(),
 			bIsLeft ? TEXT("L") : TEXT("R"),
 			SolvePath,
@@ -554,10 +684,17 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			bApplyFootRotationCalled ? 1 : 0,
 			bDoLegIK ? 1 : 0,
 			bAllowFootPlantLock ? 1 : 0,
-			bDriveFootRotationForSide ? 1 : 0);
+			bDriveFootRotationForSide ? 1 : 0,
+			BodyState.bHasLowerBodyScaffoldSample ? 1 : 0,
+			BodyState.ScaffoldHmdShare01,
+			BodyState.ScaffoldPelvisDropCm,
+			SideLegState.LastFlexionMeasuredDeg,
+			SideLegState.LastFlexionTargetDeg,
+			SideLegState.LastFlexionAppliedDeltaDeg,
+			bCurrentSourceFootGrounded ? 1 : 0,
+			bCurrentSourceFootNearFloor ? 1 : 0,
+			SideLegState.LastFootLiftCm);
 	};
-	const float RefThighLen = bIsLeft ? RefThighLenCompL : RefThighLenCompR;
-	const float RefCalfLen = bIsLeft ? RefCalfLenCompL : RefCalfLenCompR;
 	if (bDoLegIK && RefThighLen > KINDA_SMALL_NUMBER && RefCalfLen > KINDA_SMALL_NUMBER)
 	{
 		if (!ThighBone.IsValidToEvaluate() || !CalfBone.IsValidToEvaluate())
@@ -776,4 +913,60 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		ApplyFootBasis(RotAlpha);
 	}
 	EmitLegSolveDebugIfRequested(TEXT("DirectSegment"));
+}
+
+void FAnimNode_MediaPipePoseDriven::EmitLegScaffoldDiagnostics(float DeltaSeconds)
+{
+	if (!bDriveLegs || CVarMediaPipeLegScaffoldLog.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	const float IntervalSeconds = FMath::Max(CVarMediaPipeLegScaffoldLogInterval.GetValueOnAnyThread(), 0.25f);
+	if (LastLegScaffoldLogTimeSeconds >= 0.0 && (NowSeconds - LastLegScaffoldLogTimeSeconds) < IntervalSeconds)
+	{
+		return;
+	}
+	LastLegScaffoldLogTimeSeconds = NowSeconds;
+
+	auto SideText = [](const FMediaPipeLegSolverState& Side)
+	{
+		return FString::Printf(
+			TEXT("flexMeas=%.1f flexTarget=%.1f flexApplied=%.1f adjusted=%d shinTilt=%.1f redist=%.1f footPitch=%.1f heelPitch=%.1f grounded=%d nearFloor=%d liftCm=%.1f plantLock=%d"),
+			Side.LastFlexionMeasuredDeg,
+			Side.LastFlexionTargetDeg,
+			Side.LastFlexionAppliedDeltaDeg,
+			Side.bLastFlexionAdjustApplied ? 1 : 0,
+			Side.LastShinTiltDeg,
+			Side.LastBendRedistributionDeg,
+			Side.LastFootPitchAppliedDeg,
+			Side.LastFootExtraDownPitchDeg,
+			Side.bCurrentSourceFootGrounded ? 1 : 0,
+			Side.bCurrentSourceFootNearFloor ? 1 : 0,
+			Side.LastFootLiftCm,
+			Side.bFootPlantLocked ? 1 : 0);
+	};
+
+	// Source contributions of the lower-body solve: MediaPipe leg intent (mono alpha + per-leg
+	// flexion intent), Quest/HMD metric scaffold (baseline/drop/lean/alpha/confidence), fused
+	// pelvis compression, foot contact, and the resulting pelvis/root corrections.
+	UE_LOG(LogMediaPipePose, Log,
+		TEXT("mp.MediaPipeLegScaffold actor=%s hmd(valid=%d z=%.1f base=%.1f dropCm=%.1f leanCm=%.1f alpha=%.3f conf=%.2f) mono(alpha=%.3f) fused(alpha=%.3f hmdShare=%.2f pelvisDropCm=%.1f) pelvisOffsetZ=%.1f fkRootZ=%.1f L(%s) R(%s)"),
+		*TargetActorName.ToString(),
+		BodyState.bScaffoldHmdPoseValid ? 1 : 0,
+		BodyState.ScaffoldHmdHeightZ,
+		BodyState.ScaffoldHmdBaselineZ,
+		BodyState.ScaffoldHmdHeadDropCm,
+		BodyState.ScaffoldHmdLeanCompCm,
+		BodyState.ScaffoldHmdAlpha01,
+		BodyState.ScaffoldHmdConfidence,
+		BodyState.ScaffoldMonoAlpha01,
+		BodyState.ScaffoldFusedAlpha01,
+		BodyState.ScaffoldHmdShare01,
+		BodyState.ScaffoldPelvisDropCm,
+		BodyState.SmoothedPelvisOffsetComp.Z,
+		BodyState.SmoothedFkRootGroundOffsetComp.Z,
+		*SideText(LeftLegState),
+		*SideText(RightLegState));
 }

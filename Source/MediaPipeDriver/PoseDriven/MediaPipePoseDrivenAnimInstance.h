@@ -642,6 +642,9 @@ private:
 	// Throttle for the armed replay input-gate diagnostic row (mp.MediaPipeReplayInputGate).
 	double LastReplayInputGateLogTimeSeconds = -1.0;
 
+	// Throttle for the lower-body scaffold source-contribution row (mp.MediaPipeLegScaffold).
+	double LastLegScaffoldLogTimeSeconds = -1.0;
+
 	// Per-leg solver state.
 	FMediaPipeLegSolverState LeftLegState;
 	FMediaPipeLegSolverState RightLegState;
@@ -702,6 +705,7 @@ private:
 	void DriveQuestFingerBonesCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FQuestHandTrackingSnapshot& Snapshot, float DeltaSeconds);
 	void DriveArmTwistBonesCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveLegCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
+	void EmitLegScaffoldDiagnostics(float DeltaSeconds);
 };
 
 USTRUCT()

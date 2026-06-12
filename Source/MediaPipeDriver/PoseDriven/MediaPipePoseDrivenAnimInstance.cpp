@@ -18,6 +18,7 @@
 #include "MediaPipeStage2ShoulderEvidence.h"
 #include "MediaPipeTrackingFusionDatasetReplay.h"
 #include "MediaPipeQuestHandDebugReporter.h"
+#include "MediaPipeQuestHandCaptureReplayTooling.h"
 #include "MediaPipeQuestHandCompareDiagnostics.h"
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestConstrainedArmSolver.h"
@@ -342,6 +343,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		BodyState.Stage2NeutralObservationFramesR = 0;
 		BodyState.bHasSmoothedFkRootGroundOffset = false;
 		BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+		BodyState.ResetLowerBodyScaffold();
 		LeftArmState.bHasSmoothedArmIK = false;
 		RightArmState.bHasSmoothedArmIK = false;
 		LeftLegState.bHasSmoothedLegPlane = false;
@@ -426,6 +428,49 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		CachedQuestHmdWorld = ReplayObservations.HmdPose.LocationWorld;
 		CachedQuestHmdRotWorld = ReplayObservations.HmdPose.RotationWorld;
 		CachedQuestTrackingUpWorld = ReplayObservations.HmdPose.TrackingUpWorld;
+
+		// Recorded Quest hand skeletons (schema-v2 replay caches) drive wrist rotation and
+		// fingers during dataset replay. The arm position solve is unaffected: with BodyFusion
+		// pose writes active, the Quest-wrist arm fallbacks stay disabled, so the recorded arm
+		// chain keeps owning shoulder/elbow/wrist placement. An armed static hand-pose replay
+		// (mp.QuestHandReplayFile + mp.QuestHandReplay 1) still overrides for solver testing.
+		const FMediaPipeTrackingHandSourceSnapshot& ReplayHands = ReplayObservations.Hands;
+		if (ReplayHands.bLeftHasFullKeypoints || ReplayHands.bRightHasFullKeypoints)
+		{
+			QuestHands.HandTrackerCount = 1;
+			QuestHands.ValidHandTrackerCount = 1;
+			if (ReplayHands.bLeftHasFullKeypoints)
+			{
+				QuestHands.bHasLeft = 1;
+				QuestHands.bLeftTracked = 1;
+				QuestHands.LeftTimestampSeconds = ReplayNowSeconds;
+				for (int32 KeypointIndex = 0; KeypointIndex < MediaPipeTrackingHandKeypointCount; ++KeypointIndex)
+				{
+					QuestHands.LeftPositionsWorld[KeypointIndex] = ReplayHands.LeftPositionsWorld[KeypointIndex];
+					QuestHands.LeftRotationsWorld[KeypointIndex] = ReplayHands.LeftRotationsWorld[KeypointIndex];
+				}
+			}
+			if (ReplayHands.bRightHasFullKeypoints)
+			{
+				QuestHands.bHasRight = 1;
+				QuestHands.bRightTracked = 1;
+				QuestHands.RightTimestampSeconds = ReplayNowSeconds;
+				for (int32 KeypointIndex = 0; KeypointIndex < MediaPipeTrackingHandKeypointCount; ++KeypointIndex)
+				{
+					QuestHands.RightPositionsWorld[KeypointIndex] = ReplayHands.RightPositionsWorld[KeypointIndex];
+					QuestHands.RightRotationsWorld[KeypointIndex] = ReplayHands.RightRotationsWorld[KeypointIndex];
+				}
+			}
+		}
+		FString QuestHandReplayPathForReplay;
+		if (FMediaPipeQuestHandCaptureReplayTooling::TryApplyReplaySnapshot(
+			CVarQuestHandReplay.GetValueOnGameThread() != 0,
+			QuestHands,
+			&QuestHandReplayPathForReplay))
+		{
+			QuestHands.LeftTimestampSeconds = ReplayNowSeconds;
+			QuestHands.RightTimestampSeconds = ReplayNowSeconds;
+		}
 
 		const bool bHasReplayBodyPose = BuildReplayPoseFrameFromBodyPose(
 			ReplayObservations.BodyPose,
@@ -2185,6 +2230,7 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 			BodyState.Stage2NeutralObservationFramesR = 0;
 			BodyState.bHasSmoothedFkRootGroundOffset = false;
 			BodyState.SmoothedFkRootGroundOffsetComp = FVector::ZeroVector;
+			BodyState.ResetLowerBodyScaffold();
 			LeftArmState.bHasSmoothedArmIK = false;
 			RightArmState.bHasSmoothedArmIK = false;
 			LeftLegState.bHasSmoothedLegPlane = false;
@@ -2239,6 +2285,10 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	if ((!bBodyFusionPoseWritten || bReplayBodyPoseDirectOverride) && bHasPoseFrame)
 	{
 		UpdateFkRootGroundingCS(CSPose, DeltaSeconds);
+	}
+	if (bHasPoseFrame)
+	{
+		EmitLegScaffoldDiagnostics(DeltaSeconds);
 	}
 	if (!bBodyFusionFullPoseInput)
 	{

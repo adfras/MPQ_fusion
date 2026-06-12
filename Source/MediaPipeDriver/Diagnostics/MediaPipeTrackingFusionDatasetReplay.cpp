@@ -836,10 +836,10 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::LoadAndStartFromPath(
 
 void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThread()
 {
-	// REPLAY POLICY CONTRACT (REFACTOR_PLAN invariant 2): this table must stay value-for-value
-	// identical to the verified 2026-06-10 replay policy. It is applied through the priority
-	// stack so no lower-priority writer (live profiles, capture scopes) can stomp it while the
-	// replay layer is active.
+	// REPLAY POLICY CONTRACT: this table is the verified replay policy (2026-06-10 baseline plus
+	// the 2026-06-12 lower-body scaffold entries, a deliberate behavior change). It is applied
+	// through the priority stack so no lower-priority writer (live profiles, capture scopes) can
+	// stomp it while the replay layer is active.
 	FMediaPipeCVarPolicyLayer Layer;
 	Layer.PolicyId = FName(TEXT("ReplayEvaluation"));
 	Layer.Priority = EMediaPipeCVarPolicyPriority::ReplayEvaluation;
@@ -863,6 +863,26 @@ void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThre
 		// to the floor.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"), 0.6f),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootGroundedWorldUp"), 1),
+		// Lower-body scaffold: the recorded Quest HMD height DETERMINES metric squat depth (the
+		// monocular landmark frame is hip-centered and cannot observe it; weight 1.0 means
+		// monocular compression only covers HMD dropouts and the confidence ramp-in).
+		// Grounded-leg flexion is corrected toward that metric target on each avatar's own
+		// thigh/calf lengths, and the grounded bend is redistributed so the femur, not the shin,
+		// carries its natural share (monocular capture cannot see femur depth rotation and sinks
+		// the knee). MediaPipe keeps owning leg timing, phase, momentum, lateral swing, and
+		// lifted-foot motion.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldHmdWeight"), 1.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldFlexionWeight"), 0.8f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldFlexionMaxAdjustDeg"), 40.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"), 0.8f),
+		// Keep grounded soles flat: the sloped reference foot basis pitches planarized feet
+		// toe-up (ankle sinks to ball height) without this clamp.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootGroundedPitchClamp"), 1),
+		// Recorded Quest hand skeletons (schema-v2 replay caches) drive wrist rotation and
+		// fingers during replay; the arm position solve keeps following the recorded arm chain.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.QuestHandTracking"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.QuestHandDriveFingerBones"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegScaffoldLog"), 1),
 		// Region-quality diagnostics: ownership/confidence/evidence rows in the log plus JSONL
 		// timelines for offline plots. Diagnostics only; no pose authority changes.
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.RegionQualityLog"), 1),
@@ -1160,6 +1180,44 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::ParseSampleObject(
 		bHasAnySource = true;
 	}
 
+	// Schema v2 caches additionally carry the full 26-keypoint hand skeleton per side
+	// (positions + [x,y,z,w] quats) so dataset replay can drive wrist rotation and fingers.
+	auto TryReadHandKeypoints = [](
+		const TSharedPtr<FJsonObject>& HandObject,
+		TStaticArray<FVector, MediaPipeTrackingHandKeypointCount>& OutPositions,
+		TStaticArray<FQuat, MediaPipeTrackingHandKeypointCount>& OutRotations) -> bool
+	{
+		const TArray<TSharedPtr<FJsonValue>>* PositionValues = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* RotationValues = nullptr;
+		if (!HandObject->TryGetArrayField(TEXT("keypoints_world"), PositionValues) ||
+			!HandObject->TryGetArrayField(TEXT("keypoint_quats"), RotationValues) ||
+			!PositionValues || !RotationValues ||
+			PositionValues->Num() != MediaPipeTrackingHandKeypointCount ||
+			RotationValues->Num() != MediaPipeTrackingHandKeypointCount)
+		{
+			return false;
+		}
+
+		for (int32 Index = 0; Index < MediaPipeTrackingHandKeypointCount; ++Index)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Position = nullptr;
+			const TArray<TSharedPtr<FJsonValue>>* Rotation = nullptr;
+			if (!(*PositionValues)[Index].IsValid() || !(*PositionValues)[Index]->TryGetArray(Position) ||
+				!Position || Position->Num() < 3 ||
+				!(*RotationValues)[Index].IsValid() || !(*RotationValues)[Index]->TryGetArray(Rotation) ||
+				!Rotation || Rotation->Num() < 4)
+			{
+				return false;
+			}
+			OutPositions[Index] = FVector(
+				(*Position)[0]->AsNumber(), (*Position)[1]->AsNumber(), (*Position)[2]->AsNumber());
+			OutRotations[Index] = FQuat(
+				(*Rotation)[0]->AsNumber(), (*Rotation)[1]->AsNumber(),
+				(*Rotation)[2]->AsNumber(), (*Rotation)[3]->AsNumber()).GetNormalized();
+		}
+		return true;
+	};
+
 	TSharedPtr<FJsonObject> LeftHandObject;
 	if (TryGetObjectField(SourceObject, TEXT("left_hand"), LeftHandObject) &&
 		TryReadBool(LeftHandObject, TEXT("has_hand")))
@@ -1173,6 +1231,15 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::ParseSampleObject(
 			OutSample.Observations.Hands.bLeftTracked = 1;
 			OutSample.Observations.Hands.LeftTimestampSeconds = OutSample.TimeSeconds;
 			OutSample.Observations.Hands.LeftPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = WristWorld;
+			if (TryReadHandKeypoints(
+				LeftHandObject,
+				OutSample.Observations.Hands.LeftPositionsWorld,
+				OutSample.Observations.Hands.LeftRotationsWorld))
+			{
+				bool bKeypointsTracked = true;
+				LeftHandObject->TryGetBoolField(TEXT("keypoints_tracked"), bKeypointsTracked);
+				OutSample.Observations.Hands.bLeftHasFullKeypoints = bKeypointsTracked ? 1 : 0;
+			}
 			bHasAnySource = true;
 		}
 	}
@@ -1190,6 +1257,15 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::ParseSampleObject(
 			OutSample.Observations.Hands.bRightTracked = 1;
 			OutSample.Observations.Hands.RightTimestampSeconds = OutSample.TimeSeconds;
 			OutSample.Observations.Hands.RightPositionsWorld[static_cast<int32>(EHandKeypoint::Wrist)] = WristWorld;
+			if (TryReadHandKeypoints(
+				RightHandObject,
+				OutSample.Observations.Hands.RightPositionsWorld,
+				OutSample.Observations.Hands.RightRotationsWorld))
+			{
+				bool bKeypointsTracked = true;
+				RightHandObject->TryGetBoolField(TEXT("keypoints_tracked"), bKeypointsTracked);
+				OutSample.Observations.Hands.bRightHasFullKeypoints = bKeypointsTracked ? 1 : 0;
+			}
 			bHasAnySource = true;
 		}
 	}

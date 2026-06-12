@@ -18,7 +18,11 @@ historical unless this index marks them active.
   policy/source interpretation.
 - `AVATAR_REPLAY_OUTPUT_FIX_CHECKLIST.md`: replay-output avatar following fixes on
   `/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01`, including the 2026-06-10
-  replay quality pass (policy guard, FK root grounding, region-quality diagnostics, hair fix).
+  replay quality pass (policy guard, FK root grounding, region-quality diagnostics, hair fix)
+  and the 2026-06-12 lower-body scaffold passes (HMD metric squat depth, grounded flexion
+  correction, bend redistribution, flat feet, wrist/finger replay from the schema-v2 cache).
+- `LOWER_BODY_SCAFFOLD_EXECUTION_REPORT_2026-06-12.md`: session report for the 2026-06-12
+  lower-body scaffold + wrist/finger replay work (root causes, changes, verification).
 - `MEDIAPIPE_VR_MIRROR_BASELINE.md`: VR mirror baseline setup.
 - `MEDIAPIPE_WEBCAM_INCLUSION.md`: webcam source inclusion notes.
 - `WALLACE_QUEST_VR_CURRENT_DEFAULTS_HANDOFF.md` / `WALLACE_QUEST_VR_EMBODIMENT_GUARDRAILS.md`:
@@ -40,7 +44,11 @@ historical unless this index marks them active.
   (canonical dataset: `Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source*`;
   hash-verified backup at `D:\Backups\TestingKit5_CanonicalReplayDataset`).
 - BodyFusion owns avatar authority and final pose output; during dataset replay the lower body
-  is diagnostics-only for ALL avatars and the recorded landmarks drive the direct segment solve.
+  is diagnostics-only for ALL avatars and the recorded landmarks drive the direct segment solve,
+  corrected by the Quest/HMD lower-body scaffold (metric squat depth, grounded flexion,
+  femur/shin redistribution, flat-foot pitch; `mp.MediaPipeLegScaffold*` CVars, replay-enabled).
+- Dataset replay also drives wrist rotation and fingers from the recorded Quest hand skeletons
+  (schema-v2 replay cache `..._replay_source_v2.jsonl`; the v1 wrist-only cache stays beside it).
 - Quest/HMD provide source observations for HMD/head plus wrist, hand, and finger endpoints.
 - MediaPipe provides body-pose observations, including shoulders and shrugs that Quest cannot
   directly track.
