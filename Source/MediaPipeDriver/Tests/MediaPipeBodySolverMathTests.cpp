@@ -725,4 +725,195 @@ bool FMediaPipeBodySolverMathGroundedFootPitchAutomationTest::RunTest(const FStr
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathHmdHeadYawNeutralAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.HmdHeadYawNeutral",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathHmdHeadYawNeutralAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// First sample seeds the neutral: no head yaw yet.
+	FMediaPipeHmdHeadYawNeutralState State;
+	TestTrue(TEXT("First sample seeds the neutral with zero delta"),
+		FMath::IsNearlyEqual(UpdateHmdHeadNeutralYaw(State, 30.0f, 0.0f, 8.0f), 0.0f, 0.01f));
+
+	// A quick glance reads as head yaw (the slow neutral barely moves in one short frame).
+	const float GlanceDelta = UpdateHmdHeadNeutralYaw(State, 70.0f, 0.016f, 8.0f);
+	TestTrue(TEXT("A quick glance reads as head yaw"), GlanceDelta > 39.0f && GlanceDelta <= 40.0f);
+
+	// A sustained turn recenters: after many seconds at the new yaw the delta decays away.
+	for (int32 Step = 0; Step < 600; ++Step)
+	{
+		UpdateHmdHeadNeutralYaw(State, 70.0f, 0.1f, 8.0f);
+	}
+	TestTrue(TEXT("A sustained turn recenters the neutral"),
+		FMath::Abs(UpdateHmdHeadNeutralYaw(State, 70.0f, 0.1f, 8.0f)) < 1.0f);
+
+	// Wrap safety: neutral near +180, yaw just past the seam reads as a small delta.
+	FMediaPipeHmdHeadYawNeutralState WrapState;
+	UpdateHmdHeadNeutralYaw(WrapState, 175.0f, 0.0f, 8.0f);
+	const float WrapDelta = UpdateHmdHeadNeutralYaw(WrapState, -175.0f, 0.016f, 8.0f);
+	TestTrue(TEXT("Yaw wrap reads as a small positive delta"), WrapDelta > 9.0f && WrapDelta <= 10.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathHipYawEstimatorAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.HipYawEstimator",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathHipYawEstimatorAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	FMediaPipeHipYawEstimatorState State;
+	FMediaPipeHipYawEstimatorInput Input;
+	Input.HipWidthCm = 30.0f;
+	Input.HipDepthDeltaCm = 0.0f;
+	Input.DeltaSeconds = 0.016f;
+	Input.SmoothingHalfLifeSeconds = 0.0f; // unsmoothed for exact assertions
+
+	// Frontal stance seeds the neutral width and reads zero yaw.
+	TestTrue(TEXT("Frontal stance reads zero hip yaw"),
+		FMath::IsNearlyEqual(UpdateHipYawEstimator(State, Input), 0.0f, 0.01f));
+
+	// A 40-degree hip turn forshortens the hip line to cos(40) of the neutral width; with the
+	// 8-degree deadband the estimator reads ~32 degrees, signed by the depth delta.
+	Input.HipWidthCm = 30.0f * FMath::Cos(FMath::DegreesToRadians(40.0f));
+	Input.HipDepthDeltaCm = 8.0f;
+	float YawDeg = 0.0f;
+	for (int32 Step = 0; Step < 10; ++Step)
+	{
+		YawDeg = UpdateHipYawEstimator(State, Input);
+	}
+	TestTrue(TEXT("Foreshortening reads the held hip turn"),
+		FMath::IsNearlyEqual(YawDeg, 32.0f, 1.5f));
+
+	// The sign cannot flicker: a brief opposite depth spike is ignored...
+	Input.HipDepthDeltaCm = -8.0f;
+	for (int32 Step = 0; Step < 4; ++Step)
+	{
+		YawDeg = UpdateHipYawEstimator(State, Input);
+	}
+	TestTrue(TEXT("Brief opposite depth spikes do not flip the sign"), YawDeg > 0.0f);
+
+	// ...but a sustained opposite depth flips it after the hysteresis frames.
+	for (int32 Step = 0; Step < 10; ++Step)
+	{
+		YawDeg = UpdateHipYawEstimator(State, Input);
+	}
+	TestTrue(TEXT("Sustained opposite depth flips the sign"), YawDeg < 0.0f);
+
+	// Returning to the frontal width returns the yaw inside the deadband to zero.
+	Input.HipWidthCm = 30.0f;
+	Input.HipDepthDeltaCm = 0.0f;
+	YawDeg = UpdateHipYawEstimator(State, Input);
+	TestTrue(TEXT("Frontal stance returns to zero yaw"), FMath::IsNearlyEqual(YawDeg, 0.0f, 0.01f));
+
+	// A held twist does NOT decay: the width-ratio magnitude persists as long as the pose does.
+	Input.HipWidthCm = 30.0f * FMath::Cos(FMath::DegreesToRadians(40.0f));
+	Input.HipDepthDeltaCm = 8.0f;
+	for (int32 Step = 0; Step < 600; ++Step)
+	{
+		YawDeg = UpdateHipYawEstimator(State, Input);
+	}
+	TestTrue(TEXT("A held hip twist persists"), YawDeg > 28.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathTwistAboutAxisAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.TwistAboutAxis",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathTwistAboutAxisAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// A pure yaw delta reads back exactly.
+	const FQuat Yaw30(FVector::UpVector, FMath::DegreesToRadians(30.0f));
+	TestTrue(TEXT("Pure up twist reads its angle"),
+		FMath::IsNearlyEqual(ExtractTwistAboutAxisDeg(Yaw30, FVector::UpVector), 30.0f, 0.1f));
+	TestTrue(TEXT("Twist sign follows the rotation direction"),
+		FMath::IsNearlyEqual(ExtractTwistAboutAxisDeg(Yaw30.Inverse(), FVector::UpVector), -30.0f, 0.1f));
+
+	// A pure pitch (swing perpendicular to the axis) carries no up twist.
+	const FQuat Pitch40(FVector::RightVector, FMath::DegreesToRadians(40.0f));
+	TestTrue(TEXT("Perpendicular swing has no up twist"),
+		FMath::IsNearlyEqual(ExtractTwistAboutAxisDeg(Pitch40, FVector::UpVector), 0.0f, 0.1f));
+
+	// Convention independence: the same yaw composed with an arbitrary fixed local frame still
+	// reads as the yaw when measured as a delta (current * initial^-1).
+	const FQuat ArbitraryFrame = FQuat(FRotator(37.0f, -64.0f, 12.0f));
+	const FQuat Initial = ArbitraryFrame;
+	const FQuat Current = Yaw30 * ArbitraryFrame;
+	TestTrue(TEXT("Delta twist is independent of the joint's local frame"),
+		FMath::IsNearlyEqual(ExtractTwistAboutAxisDeg(Current * Initial.Inverse(), FVector::UpVector), 30.0f, 0.1f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeBodySolverMathBodyYawHeadingAutomationTest,
+	"TestingKit5.MediaPipe.BodySolverMath.BodyYawHeading",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeBodySolverMathBodyYawHeadingAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeBodySolverMath;
+
+	// Axis selection prefers a horizontal axis; a pitched frame moves the pick off the tilted one.
+	TestEqual(TEXT("Identity frame picks the X axis"), SelectMostHorizontalAxis(FQuat::Identity), 0);
+	const FQuat PitchedFrame(FVector::RightVector, FMath::DegreesToRadians(60.0f));
+	TestEqual(TEXT("A 60-degree pitched frame picks the still-horizontal Y axis"),
+		SelectMostHorizontalAxis(PitchedFrame), 1);
+
+	// Heading readback: a yawed frame reports the yaw as its X-axis heading.
+	float HeadingDeg = 0.0f;
+	const FQuat Yaw30(FVector::UpVector, FMath::DegreesToRadians(30.0f));
+	TestTrue(TEXT("Heading of a yawed frame is readable"), TryGetAxisHeadingDeg(Yaw30, 0, HeadingDeg));
+	TestTrue(TEXT("Heading equals the yaw"), FMath::IsNearlyEqual(HeadingDeg, 30.0f, 0.1f));
+
+	// Pitch immunity: bending (pitch about the latched lateral axis) does not move that axis's
+	// heading, so a yaw measured as heading drift survives a deep bend. This is why heading
+	// beats full-delta swing-twist for body yaw.
+	const FQuat LatchFrame = FQuat(FVector::UpVector, FMath::DegreesToRadians(20.0f));
+	const int32 LatchedAxis = SelectMostHorizontalAxis(LatchFrame);
+	float NeutralHeadingDeg = 0.0f;
+	TestTrue(TEXT("Neutral heading latches"), TryGetAxisHeadingDeg(LatchFrame, LatchedAxis, NeutralHeadingDeg));
+	const FQuat BentAndTwisted =
+		FQuat(FVector::UpVector, FMath::DegreesToRadians(25.0f)) *
+		FQuat(LatchFrame.GetAxisY(), FMath::DegreesToRadians(40.0f)) *
+		LatchFrame;
+	float BentHeadingDeg = 0.0f;
+	TestTrue(TEXT("Heading stays readable through a 40-degree bend"),
+		TryGetAxisHeadingDeg(BentAndTwisted, LatchedAxis, BentHeadingDeg));
+	TestTrue(TEXT("Heading drift through a bend reads the 25-degree yaw"),
+		FMath::IsNearlyEqual(FRotator::NormalizeAxis(BentHeadingDeg - NeutralHeadingDeg), 25.0f, 3.0f));
+
+	// A near-vertical axis refuses to report a heading instead of going noisy.
+	const FQuat AxisVertical(FVector::RightVector, FMath::DegreesToRadians(85.0f));
+	TestFalse(TEXT("A near-vertical axis reports no heading"),
+		TryGetAxisHeadingDeg(AxisVertical, 0, HeadingDeg));
+
+	// ApproachAngleDeg: rate-limited, converging, and wrap-aware.
+	const float Step = ApproachAngleDeg(0.0f, 90.0f, 0.1f, 0.2f, 120.0f);
+	TestTrue(TEXT("A large target step is rate limited"), Step <= 12.0f + KINDA_SMALL_NUMBER);
+	float Walked = 0.0f;
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Walked = ApproachAngleDeg(Walked, 45.0f, 1.0f / 60.0f, 0.2f, 120.0f);
+	}
+	TestTrue(TEXT("The walk converges to the target"), FMath::IsNearlyEqual(Walked, 45.0f, 1.0f));
+	const float Wrapped = ApproachAngleDeg(-170.0f, 170.0f, 0.1f, 0.2f, 120.0f);
+	TestTrue(TEXT("Wrap-around approaches the short way"),
+		FMath::Abs(FMath::FindDeltaAngleDegrees(Wrapped, 170.0f)) < 20.0f);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

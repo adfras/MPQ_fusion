@@ -23,6 +23,9 @@ historical unless this index marks them active.
   correction, bend redistribution, flat feet, wrist/finger replay from the schema-v2 cache).
 - `LOWER_BODY_SCAFFOLD_EXECUTION_REPORT_2026-06-12.md`: session report for the 2026-06-12
   lower-body scaffold + wrist/finger replay work (root causes, changes, verification).
+- `LIVE_VR_TRIAL_EXECUTION_REPORT_2026-06-12.md`: session report for the 2026-06-12 live
+  worn-headset trial (donning gate, body-tracking hip yaw/sway, in-VR tracking panel,
+  finger-overlap investigation and verdict, operational gotchas).
 - `MEDIAPIPE_VR_MIRROR_BASELINE.md`: VR mirror baseline setup.
 - `MEDIAPIPE_WEBCAM_INCLUSION.md`: webcam source inclusion notes.
 - `WALLACE_QUEST_VR_CURRENT_DEFAULTS_HANDOFF.md` / `WALLACE_QUEST_VR_EMBODIMENT_GUARDRAILS.md`:

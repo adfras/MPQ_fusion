@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "MediaPipeBodySolverMath.h"
 #include "MediaPipePoseDiagnostics.h"
+#include "MediaPipeQuestFingerSolver.h"
 
 static constexpr int32 MediaPipeQuestStateFingerBoneCount = 19;
 static constexpr int32 MediaPipeQuestStateMetacarpalOffset = 15;
@@ -43,6 +44,59 @@ struct FMediaPipeBodySolverState
 	// once per evaluation in DrivePelvisTranslationCS and consumed by the grounded leg flexion
 	// correction in DriveLegCS plus the scaffold diagnostics row.
 	MediaPipeBodySolverMath::FMediaPipeHmdHeightScaffoldState HmdHeightScaffold;
+	MediaPipeBodySolverMath::FMediaPipeHmdHeadYawNeutralState HmdHeadYawNeutral;
+	MediaPipeBodySolverMath::FMediaPipeHmdHeadYawNeutralState HipTwistNeutral;
+	MediaPipeBodySolverMath::FMediaPipeHipYawEstimatorState HipYawEstimator;
+	bool bHasHmdLeanNeutral = false;
+	FVector2D HmdLeanNeutralXY = FVector2D::ZeroVector;
+	// Body yaw reference: the head-yaw neutral at session start. The slow neutral component of
+	// the HMD yaw is the wearer's body facing; its drift from this initial value turns the
+	// pelvis while the fast remainder stays head glance.
+	bool bHasInitialBodyYawNeutral = false;
+	float InitialBodyYawNeutralDeg = 0.0f;
+	// Quest body-tracking hips yaw. The yaw is the horizontal heading drift of one of the hips
+	// joint's local axes (chosen as the most horizontal at latch time), which is immune to the
+	// pitch/roll of bends. The neutral heading latches only after the heading has been stable,
+	// so headset-donning noise never becomes the zero point, and it latches RELATIVE to the
+	// currently applied body yaw so re-acquisitions never step the pelvis.
+	bool bBodyTrackingYawLatched = false;
+	int32 BodyTrackingHipsAxisIndex = 0;
+	float BodyTrackingHipsNeutralHeadingDeg = 0.0f;
+	bool bHasBodyTrackingCandidate = false;
+	float BodyTrackingHipsCandidateHeadingDeg = 0.0f;
+	float BodyTrackingHipsStableSeconds = 0.0f;
+	double LastBodyTrackingHipsSampleSeconds = 0.0;
+	float LastBodyTrackingYawDeg = 0.0f;
+	// Slow drift recenter: when the measured yaw stays small for a sustained stretch the wearer
+	// is facing forward, so the neutral heading may creep toward the current heading to absorb
+	// IOBT tracking-space drift. Held twists (large yaw) never qualify.
+	float BodyYawRecenterStillSeconds = 0.0f;
+	// Lateral hip sway from the body-tracking hips joint POSITION against its own neutral
+	// (latched after the donning gate opens). World-planar, applied as a pelvis translation.
+	bool bHasBodyTrackingHipsNeutralPos = false;
+	FVector BodyTrackingHipsNeutralPosWorld = FVector::ZeroVector;
+	double LastBodyTrackingHipsPosSampleSeconds = 0.0;
+	FVector2D BodyTrackingSwayWorldXY = FVector2D::ZeroVector;
+	bool bBodyTrackingSwayActive = false;
+	// Unified body yaw: every source feeds this rate-limited state, so source switches and
+	// tracking dropouts walk the pelvis instead of snapping it.
+	bool bHasSmoothedBodyYaw = false;
+	float SmoothedBodyYawDeg = 0.0f;
+	uint8 PrevBodyYawSource = 0;
+	// Live-trial donning gate. Pressing VR Preview happens bent over a desk holding the headset,
+	// so nothing observed before the headset is worn and still may become a neutral reference.
+	// The gate arms when an HMD pose first appears, passes once the worn headset has been
+	// upright and still for a moment, and at that instant every live neutral re-zeros to the
+	// wearer's settled standing pose. One-way per session: later bends or dropouts never re-gate.
+	bool bLiveNeutralGateArmed = false;
+	bool bLiveNeutralsReady = false;
+	float LiveNeutralSettleSeconds = 0.0f;
+	bool bHasLiveNeutralHmdSample = false;
+	FVector LastLiveNeutralHmdPos = FVector::ZeroVector;
+	float LastLiveNeutralHmdYawDeg = 0.0f;
+	// Diagnostics: last applied body yaw and its source (0=none 1=hmdNeutral 2=bodyTracking).
+	float LastBodyYawDeg = 0.0f;
+	uint8 LastBodyYawSource = 0;
 	bool bHasLowerBodyScaffoldSample = false;
 	bool bScaffoldHmdPoseValid = false;
 	float ScaffoldHmdHeightZ = 0.0f;
@@ -141,6 +195,38 @@ struct FMediaPipeBodySolverState
 	void ResetLowerBodyScaffold()
 	{
 		HmdHeightScaffold.Reset();
+		HmdHeadYawNeutral.Reset();
+		HipTwistNeutral.Reset();
+		HipYawEstimator.Reset();
+		bHasHmdLeanNeutral = false;
+		HmdLeanNeutralXY = FVector2D::ZeroVector;
+		bHasInitialBodyYawNeutral = false;
+		InitialBodyYawNeutralDeg = 0.0f;
+		bBodyTrackingYawLatched = false;
+		BodyTrackingHipsAxisIndex = 0;
+		BodyTrackingHipsNeutralHeadingDeg = 0.0f;
+		bHasBodyTrackingCandidate = false;
+		BodyTrackingHipsCandidateHeadingDeg = 0.0f;
+		BodyTrackingHipsStableSeconds = 0.0f;
+		LastBodyTrackingHipsSampleSeconds = 0.0;
+		LastBodyTrackingYawDeg = 0.0f;
+		BodyYawRecenterStillSeconds = 0.0f;
+		bHasBodyTrackingHipsNeutralPos = false;
+		BodyTrackingHipsNeutralPosWorld = FVector::ZeroVector;
+		LastBodyTrackingHipsPosSampleSeconds = 0.0;
+		BodyTrackingSwayWorldXY = FVector2D::ZeroVector;
+		bBodyTrackingSwayActive = false;
+		bHasSmoothedBodyYaw = false;
+		SmoothedBodyYawDeg = 0.0f;
+		PrevBodyYawSource = 0;
+		bLiveNeutralGateArmed = false;
+		bLiveNeutralsReady = false;
+		LiveNeutralSettleSeconds = 0.0f;
+		bHasLiveNeutralHmdSample = false;
+		LastLiveNeutralHmdPos = FVector::ZeroVector;
+		LastLiveNeutralHmdYawDeg = 0.0f;
+		LastBodyYawDeg = 0.0f;
+		LastBodyYawSource = 0;
 		bHasLowerBodyScaffoldSample = false;
 		bScaffoldHmdPoseValid = false;
 		ScaffoldHmdHeightZ = 0.0f;
@@ -455,9 +541,11 @@ struct FMediaPipeQuestHandSolverState
 	float SmoothedQuestUpperArmTwistDeg = 0.0f;
 	bool bHasQuestFingerAlignmentComp = false;
 	FQuat QuestFingerAlignmentComp = FQuat::Identity;
+	MediaPipeQuestFingerSolver::FMediaPipeQuestHandPoseGateState PoseGate;
 
 	void Reset()
 	{
+		PoseGate.Reset();
 		for (int32 Index = 0; Index < MediaPipeQuestStateFingerBoneCount; ++Index)
 		{
 			bHasSmoothedQuestFingerRotCS[Index] = false;
@@ -489,6 +577,8 @@ struct FMediaPipeDiagnosticsState
 	double LastQuestWristSolveLogTimeSecondsR = -1.0;
 	double LastQuestFingerSolveLogTimeSecondsL = -1.0;
 	double LastQuestFingerSolveLogTimeSecondsR = -1.0;
+	double LastQuestFingerJoFallbackLogTimeSecondsL = -1.0;
+	double LastQuestFingerJoFallbackLogTimeSecondsR = -1.0;
 	double LastTorsoDiagnosticLogTimeSeconds = -1.0;
 	double LastHeadDiagnosticLogTimeSeconds = -1.0;
 	double LastClavicleDiagnosticLogTimeSecondsL = -1.0;
@@ -519,6 +609,8 @@ struct FMediaPipeDiagnosticsState
 		LastQuestWristSolveLogTimeSecondsR = -1.0;
 		LastQuestFingerSolveLogTimeSecondsL = -1.0;
 		LastQuestFingerSolveLogTimeSecondsR = -1.0;
+		LastQuestFingerJoFallbackLogTimeSecondsL = -1.0;
+		LastQuestFingerJoFallbackLogTimeSecondsR = -1.0;
 		LastTorsoDiagnosticLogTimeSeconds = -1.0;
 		LastHeadDiagnosticLogTimeSeconds = -1.0;
 		LastClavicleDiagnosticLogTimeSecondsL = -1.0;

@@ -893,6 +893,36 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("Experimental. When non-zero, non-thumb Quest curl-only fingers bend in the palm plane instead of curling toward the wrist/root. Default off because the current rig basis can bend fingers around the wrong axis."));
 
+	TAutoConsoleVariable<int32> CVarQuestFingerPairSeparation(
+		TEXT("mp.QuestFingerPairSeparation"),
+		0,
+		TEXT("When non-zero, the segment-direction finger retarget enforces a minimum signed separation between adjacent non-thumb fingers (index/middle, middle/ring, ring/pinky) at every segment level, pushing a too-close or crossed pair apart symmetrically about its separation axis. Convention-free (no joint-axis or curl-plane estimate) and curl-preserving, so interpenetration becomes geometrically impossible for any wearer's hand on any avatar. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarQuestFingerPairSeparationRefScale(
+		TEXT("mp.QuestFingerPairSeparationRefScale"),
+		0.7f,
+		TEXT("Fraction of the avatar's own reference adjacent-finger separation enforced as the live minimum by mp.QuestFingerPairSeparation. 1.0 pins fingers at their reference spacing; lower values allow deliberate adduction down to that fraction."));
+
+	TAutoConsoleVariable<float> CVarQuestFingerPairSeparationMinDeg(
+		TEXT("mp.QuestFingerPairSeparationMinDeg"),
+		4.0f,
+		TEXT("Absolute floor (degrees) for the minimum adjacent-finger separation enforced by mp.QuestFingerPairSeparation, protecting rigs whose reference fingers are nearly parallel."));
+
+	TAutoConsoleVariable<int32> CVarQuestFingerPoseGate(
+		TEXT("mp.QuestFingerPoseGate"),
+		0,
+		TEXT("When non-zero, hold the last good hand pose instead of consuming Quest finger joints that are untracked or that changed faster than fingers can physically move (tracking collapse to garbage fists when fingers self-occlude, measured live 2026-06-12). A genuinely instant pose change is accepted after it stays stable for the recovery window. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarQuestFingerPoseGateMaxCurlRatePerSec(
+		TEXT("mp.QuestFingerPoseGateMaxCurlRatePerSec"),
+		5.0f,
+		TEXT("Hand-mean curl rate (curl-units/second) above which a frame is treated as a tracking collapse by mp.QuestFingerPoseGate. Real fast fists measure ~4; the observed garbage snaps ~9+."));
+
+	TAutoConsoleVariable<float> CVarQuestFingerPoseGateRecoverSeconds(
+		TEXT("mp.QuestFingerPoseGateRecoverSeconds"),
+		0.25f,
+		TEXT("How long a rejected hand pose must stay stable before mp.QuestFingerPoseGate accepts it. This is the maximum latency added to a genuinely instant pose change."));
+
 	TAutoConsoleVariable<int32> CVarQuestFingerUseChainCurl(
 		TEXT("mp.QuestFingerUseChainCurl"),
 		1,
@@ -1192,6 +1222,66 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeFootGroundedMaxExtraDownPitchDeg"),
 		30.0f,
 		TEXT("Extra downward foot pitch allowed past the reference flat-contact slope while grounded, so heel raises and toe stands keep working under the grounded foot pitch clamp."));
+
+	TAutoConsoleVariable<int32> CVarQuestVrTrackingPanel(
+		TEXT("mp.QuestVrTrackingPanel"),
+		0,
+		TEXT("When non-zero, the embodied pawn keeps a world-space tracking panel floating to the right of the headset view showing the live camera preview with the tracked-bone skeleton overlay. mp.StartLiveLowerBodyTrial enables this."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeDriveHmdHead(
+		TEXT("mp.MediaPipeDriveHmdHead"),
+		0,
+		TEXT("When non-zero, drive the avatar head bone from the live Quest HMD rotation: pitch/roll directly, yaw against a self-calibrating neutral so sustained body turns recenter while glances read as head yaw. Skipped during dataset replay and fused-pose evaluation. mp.StartLiveLowerBodyTrial enables this."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeHmdHeadMirror(
+		TEXT("mp.MediaPipeHmdHeadMirror"),
+		0,
+		TEXT("When non-zero, negate the HMD-driven head yaw/roll. The embodied (driven) avatar carries TRUE rotations - the self-view mirror copy already mirrors via its mirror scale, and the pelvis body-yaw drive composes with the true head yaw to track the wearer's absolute orientation - so this stays off unless a specific setup reads inverted. Pitch is never mirrored."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHmdHeadYawNeutralHalfLife(
+		TEXT("mp.MediaPipeHmdHeadYawNeutralHalfLife"),
+		8.0f,
+		TEXT("Half-life in seconds for the HMD head-yaw neutral. Shorter recenters faster after body turns; longer holds glances as head yaw for longer."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeDriveHmdLean(
+		TEXT("mp.MediaPipeDriveHmdLean"),
+		0,
+		TEXT("When non-zero, lean the avatar pelvis/torso from the live HMD's planar displacement against a self-calibrating neutral: leaning back/forward/sideways moves the head metrically and the body follows, so the first-person camera no longer drifts off the avatar's chest. Skipped during dataset replay, fused-pose evaluation, and when spine drive owns the pelvis. mp.StartLiveLowerBodyTrial enables this."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeDriveHipTwist(
+		TEXT("mp.MediaPipeDriveHipTwist"),
+		0,
+		TEXT("When non-zero, twist the avatar pelvis yaw from the MediaPipe hip-line direction against a self-calibrating neutral, bounded by mp.MediaPipeHipTwistMaxDeg. Skipped during dataset replay, fused-pose evaluation, and when spine drive owns the pelvis. mp.StartLiveLowerBodyTrial enables this."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLivePoseMirror(
+		TEXT("mp.MediaPipeLivePoseMirror"),
+		0,
+		TEXT("When non-zero, negate the camera-observed hip-twist residual. The embodied (driven) avatar should carry TRUE rotations - the self-view mirror copy already mirrors via its mirror scale - so this stays off unless the twist direction reads inverted in a specific camera setup."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLivePoseNeutralHalfLife(
+		TEXT("mp.MediaPipeLivePoseNeutralHalfLife"),
+		10.0f,
+		TEXT("Half-life in seconds for the live lean/twist neutrals (HMD planar position and hip-line yaw). Shorter recenters faster after the wearer walks or turns; longer holds leans and twists for longer."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHmdLeanMaxDeg(
+		TEXT("mp.MediaPipeHmdLeanMaxDeg"),
+		35.0f,
+		TEXT("Maximum torso lean in degrees the HMD-displacement lean drive may apply in any direction."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHipTwistMaxDeg(
+		TEXT("mp.MediaPipeHipTwistMaxDeg"),
+		50.0f,
+		TEXT("Maximum pelvis yaw twist in degrees the hip-line twist drive may apply in either direction."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHmdLeanEyeBackCm(
+		TEXT("mp.MediaPipeHmdLeanEyeBackCm"),
+		12.0f,
+		TEXT("How far behind the HMD position (along its view direction) the closed-loop lean places the avatar's head bone. The camera sits at the eyes, in front of the head bone; without this pull-back a deep bend rotates the face/chest through the camera."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegReliabilityStabilize(
+		TEXT("mp.MediaPipeLegReliabilityStabilize"),
+		0,
+		TEXT("When non-zero, ease the leg segment directions toward the avatar's reference stance as the camera's leg-landmark reliability degrades (subject near frame edge, occlusion, phone movement), instead of following held or drifting landmarks. mp.StartLiveLowerBodyTrial enables this."));
 
 	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldLog(
 		TEXT("mp.MediaPipeLegScaffoldLog"),

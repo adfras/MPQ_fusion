@@ -295,6 +295,48 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 
 	UpdateLoggedCurlMetrics();
 
+	// Plausibility gate: Quest hand tracking collapses to garbage full-fist joints when the
+	// fingers self-occlude (measured live 2026-06-12: open hand snapped to mean curl 1.00 in a
+	// single 98 ms frame, and untracked frames carried stale fists while still being driven).
+	// Hold the last good smoothed pose through untracked or physically impossible frames; a
+	// rejected pose is accepted once stable for the recovery window.
+	if (CVarQuestFingerPoseGate.GetValueOnAnyThread() != 0)
+	{
+		const float HandMeanCurl01 =
+			(LoggedFingerCurl01[0] + LoggedFingerCurl01[1] + LoggedFingerCurl01[2] + LoggedFingerCurl01[3]) * 0.25f;
+		MediaPipeQuestFingerSolver::FMediaPipeQuestHandPoseGateSettings GateSettings;
+		GateSettings.MaxCurlRatePerSec = CVarQuestFingerPoseGateMaxCurlRatePerSec.GetValueOnAnyThread();
+		GateSettings.RecoverSeconds = CVarQuestFingerPoseGateRecoverSeconds.GetValueOnAnyThread();
+		FMediaPipeQuestHandSolverState& GateHandState = bIsLeft ? LeftQuestHandState : RightQuestHandState;
+		if (MediaPipeQuestFingerSolver::UpdateQuestHandPoseGate(
+				GateHandState.PoseGate, HandMeanCurl01, bSideTracked, DeltaSeconds, GateSettings))
+		{
+			int32 HeldBoneCount = 0;
+			for (int32 BoneIndex = 0; BoneIndex < QuestFingerBoneCount; ++BoneIndex)
+			{
+				if (bHasSmoothedFingerRotCS[BoneIndex] && FingerBones[BoneIndex].IsValidToEvaluate())
+				{
+					ApplyRotationCS(CSPose, FingerBones[BoneIndex], SmoothedFingerRotCS[BoneIndex]);
+					++HeldBoneCount;
+				}
+			}
+			for (int32 MetacarpalIndex = 0; MetacarpalIndex < QuestFingerMetacarpalBoneCount; ++MetacarpalIndex)
+			{
+				const int32 StateIndex = MediaPipeQuestStateMetacarpalOffset + MetacarpalIndex;
+				if (StateIndex >= 0 && StateIndex < MediaPipeQuestStateFingerBoneCount &&
+					bHasSmoothedFingerRotCS[StateIndex] &&
+					FingerMetacarpalBones[MetacarpalIndex].IsValidToEvaluate())
+				{
+					ApplyRotationCS(CSPose, FingerMetacarpalBones[MetacarpalIndex], SmoothedFingerRotCS[StateIndex]);
+					++HeldBoneCount;
+				}
+			}
+			AppliedFingerBoneCount = HeldBoneCount;
+			LogQuestFingerSolve(TEXT("heldUntrusted"), HeldBoneCount, false);
+			return;
+		}
+	}
+
 	auto TryMapQuestSegmentWorldToComponent = [&](const FVector& QuestSegmentWorld, FVector& OutSegmentComp, const bool bApplyMediaPipeHandAlignment) -> bool
 	{
 		OutSegmentComp = FVector::ZeroVector;
@@ -345,18 +387,33 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 
 	const bool bUsePalmLocalHinge = CVarQuestFingerJointRetarget.GetValueOnAnyThread() != 0;
 	const bool bUseCurlOnly = CVarQuestFingerCurlOnly.GetValueOnAnyThread() != 0;
+	// Fall-through diagnostics for the joint-orientation path: when it is requested but ends in
+	// the segment-direction fallback, name the veto instead of failing silently (the 2026-06-12
+	// A/B looked like a no-op because every veto was invisible).
+	bool bJoBasisOk = false;
+	float JoBasisSin = -1.0f;
+	bool bJoHandBoneOk = false;
+	int32 JoAppliedFingerBones = -1;
+	int32 JoRejectStateOrBone = 0;
+	int32 JoRejectChildRot = 0;
+	int32 JoRejectParentRot = 0;
+	int32 JoRejectLocalIdentity = 0;
+	int32 JoRejectRefDelta = 0;
 	if (bUsePalmLocalHinge || bUseCurlOnly)
 	{
 		FVector QuestForwardWorld = FVector::ZeroVector;
 		FVector QuestUpWorld = FVector::ZeroVector;
 		float QuestBasisSin = 0.0f;
-		if (TryBuildQuestHandBasisWorld(Snapshot, bIsLeft, QuestForwardWorld, QuestUpWorld, QuestBasisSin, false) &&
-			QuestBasisSin >= 0.08f)
+		const bool bBuiltQuestBasis = TryBuildQuestHandBasisWorld(Snapshot, bIsLeft, QuestForwardWorld, QuestUpWorld, QuestBasisSin, false);
+		JoBasisSin = QuestBasisSin;
+		bJoBasisOk = bBuiltQuestBasis && QuestBasisSin >= 0.08f;
+		if (bJoBasisOk)
 		{
 			const FBoneReference& HandBone = bIsLeft ? HandL : HandR;
 			const FQuat& RefHandComp = bIsLeft ? RefHandCompL : RefHandCompR;
 			const FQuat& RefHandBasisComp = bIsLeft ? RefHandBasisCompL : RefHandBasisCompR;
-			if (HandBone.IsValidToEvaluate())
+			bJoHandBoneOk = HandBone.IsValidToEvaluate();
+			if (bJoHandBoneOk)
 			{
 				const FQuat CurrentHandRotCS = CSPose.GetComponentSpaceTransform(HandBone.CachedCompactPoseIndex).GetRotation().GetNormalized();
 				const FQuat HandDeltaCS = (CurrentHandRotCS * RefHandComp.Inverse()).GetNormalized();
@@ -495,24 +552,28 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 						StateIndex >= MediaPipeQuestStateFingerBoneCount ||
 						!Bone.IsValidToEvaluate())
 					{
+						++JoRejectStateOrBone;
 						return false;
 					}
 
 					FQuat SourceLiveComp = FQuat::Identity;
 					if (!TryMapQuestJointRotationToComponent(SourceKeypoint, SourceLiveComp))
 					{
+						++JoRejectChildRot;
 						return false;
 					}
 
 					FQuat SourceParentLiveComp = FQuat::Identity;
 					if (!TryMapQuestJointRotationToComponent(SourceParentKeypoint, SourceParentLiveComp))
 					{
+						++JoRejectParentRot;
 						return false;
 					}
 
 					const FQuat SourceLiveLocal = MakeQuestJointLocalRotation(SourceParentLiveComp, SourceLiveComp);
 					if (SourceLiveLocal.IsIdentity())
 					{
+						++JoRejectLocalIdentity;
 						return false;
 					}
 
@@ -532,6 +593,7 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 						QuestFingerRetargetSourceRefCS[StateIndex].AngularDistance(SourceLiveLocal));
 					if (SourceDeltaFromRefDeg > 145.0f)
 					{
+						++JoRejectRefDelta;
 						return false;
 					}
 
@@ -676,6 +738,7 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 						}
 					}
 
+					JoAppliedFingerBones = JointOrientationAppliedFingerBones;
 					if (JointOrientationAppliedFingerBones >= 12)
 					{
 						for (int32 FingerIndex = 1; FingerIndex < QuestFingerCount; ++FingerIndex)
@@ -890,62 +953,43 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 		++AppliedMetacarpalBoneCount;
 	}
 
-	for (int32 FingerIndex = 0; FingerIndex < QuestFingerCount; ++FingerIndex)
+	auto ComputeSegmentDirForBone = [&](
+		const int32 FingerIndex,
+		const int32 SegmentIndex,
+		int32& OutBoneIndex,
+		FVector& OutSegmentDir,
+		FQuat& OutParentDeltaCS) -> bool
 	{
-		for (int32 SegmentIndex = 0; SegmentIndex < QuestFingerSegmentsPerFinger; ++SegmentIndex)
+		OutBoneIndex = QuestFingerBoneIndex(FingerIndex, SegmentIndex);
+		const int32 BoneIndex = OutBoneIndex;
+		if (BoneIndex < 0 || !bHasRefFinger[BoneIndex] || !FingerBones[BoneIndex].IsValidToEvaluate())
 		{
-			const int32 BoneIndex = QuestFingerBoneIndex(FingerIndex, SegmentIndex);
-			if (!bHasRefFinger[BoneIndex] || !FingerBones[BoneIndex].IsValidToEvaluate())
-			{
-				continue;
-			}
+			return false;
+		}
 
-			const int32 StartKey = static_cast<int32>(QuestFingerStartKeypoint(FingerIndex, SegmentIndex));
-			const int32 EndKey = static_cast<int32>(QuestFingerEndKeypoint(FingerIndex, SegmentIndex));
-			if (StartKey < 0 || StartKey >= QuestHandKeypointCount || EndKey < 0 || EndKey >= QuestHandKeypointCount)
-			{
-				continue;
-			}
+		const int32 StartKey = static_cast<int32>(QuestFingerStartKeypoint(FingerIndex, SegmentIndex));
+		const int32 EndKey = static_cast<int32>(QuestFingerEndKeypoint(FingerIndex, SegmentIndex));
+		if (StartKey < 0 || StartKey >= QuestHandKeypointCount || EndKey < 0 || EndKey >= QuestHandKeypointCount)
+		{
+			return false;
+		}
 
-			FVector SegmentComp = FVector::ZeroVector;
-			if (!TryMapQuestSegmentWorldToComponent((Positions[EndKey] - Positions[StartKey]).GetSafeNormal(), SegmentComp, false))
-			{
-				continue;
-			}
-			if (SegmentComp.IsNearlyZero() || RefFingerDirComp[BoneIndex].IsNearlyZero())
-			{
-				continue;
-			}
+		FVector SegmentComp = FVector::ZeroVector;
+		if (!TryMapQuestSegmentWorldToComponent((Positions[EndKey] - Positions[StartKey]).GetSafeNormal(), SegmentComp, false))
+		{
+			return false;
+		}
+		if (SegmentComp.IsNearlyZero() || RefFingerDirComp[BoneIndex].IsNearlyZero())
+		{
+			return false;
+		}
 
-			FQuat ParentReferenceComp = SegmentRefHandComp;
-			FQuat ParentLiveComp = SegmentCurrentHandRotCS;
-			bool bHasValidParent = true;
-			if (FingerIndex == 0)
-			{
-				if (SegmentIndex > 0)
-				{
-					const int32 ParentBoneIndex = QuestFingerBoneIndex(FingerIndex, SegmentIndex - 1);
-					if (!bHasRefFinger[ParentBoneIndex] || !FingerBones[ParentBoneIndex].IsValidToEvaluate())
-					{
-						bHasValidParent = false;
-					}
-					else
-					{
-						ParentReferenceComp = RefFingerComp[ParentBoneIndex];
-						ParentLiveComp = CSPose.GetComponentSpaceTransform(FingerBones[ParentBoneIndex].CachedCompactPoseIndex).GetRotation().GetNormalized();
-					}
-				}
-			}
-			else if (SegmentIndex == 0)
-			{
-				const int32 MetacarpalIndex = QuestFingerMetacarpalBoneIndex(FingerIndex);
-				if (bHasRefFingerMetacarpal[MetacarpalIndex] && FingerMetacarpalBones[MetacarpalIndex].IsValidToEvaluate())
-				{
-					ParentReferenceComp = RefFingerMetacarpalComp[MetacarpalIndex];
-					ParentLiveComp = CSPose.GetComponentSpaceTransform(FingerMetacarpalBones[MetacarpalIndex].CachedCompactPoseIndex).GetRotation().GetNormalized();
-				}
-			}
-			else
+		FQuat ParentReferenceComp = SegmentRefHandComp;
+		FQuat ParentLiveComp = SegmentCurrentHandRotCS;
+		bool bHasValidParent = true;
+		if (FingerIndex == 0)
+		{
+			if (SegmentIndex > 0)
 			{
 				const int32 ParentBoneIndex = QuestFingerBoneIndex(FingerIndex, SegmentIndex - 1);
 				if (!bHasRefFinger[ParentBoneIndex] || !FingerBones[ParentBoneIndex].IsValidToEvaluate())
@@ -958,38 +1002,175 @@ void FAnimNode_MediaPipePoseDriven::DriveQuestFingerBonesCS(FCSPose<FCompactPose
 					ParentLiveComp = CSPose.GetComponentSpaceTransform(FingerBones[ParentBoneIndex].CachedCompactPoseIndex).GetRotation().GetNormalized();
 				}
 			}
-
-			FQuat ParentDeltaCS = FQuat::Identity;
-			if (!bHasValidParent || !TryGetLiveParentDeltaCS(ParentReferenceComp, ParentLiveComp, ParentDeltaCS))
+		}
+		else if (SegmentIndex == 0)
+		{
+			const int32 MetacarpalIndex = QuestFingerMetacarpalBoneIndex(FingerIndex);
+			if (bHasRefFingerMetacarpal[MetacarpalIndex] && FingerMetacarpalBones[MetacarpalIndex].IsValidToEvaluate())
 			{
-				continue;
+				ParentReferenceComp = RefFingerMetacarpalComp[MetacarpalIndex];
+				ParentLiveComp = CSPose.GetComponentSpaceTransform(FingerMetacarpalBones[MetacarpalIndex].CachedCompactPoseIndex).GetRotation().GetNormalized();
 			}
-
-			FVector RetargetSegmentComp = SegmentComp;
-			if (SegmentIndex == QuestFingerSegmentsPerFinger - 1)
+		}
+		else
+		{
+			const int32 ParentBoneIndex = QuestFingerBoneIndex(FingerIndex, SegmentIndex - 1);
+			if (!bHasRefFinger[ParentBoneIndex] || !FingerBones[ParentBoneIndex].IsValidToEvaluate())
 			{
-				const float DistalDirectionWeight = FingerIndex == 0
-					? FMath::Clamp(ThumbSegmentScale[SegmentIndex], 0.0f, 1.0f)
-					: FMath::Clamp(FingerSegmentScale[SegmentIndex], 0.0f, 1.0f);
-				const FVector ParentDrivenRefSegmentComp = ParentDeltaCS.RotateVector(RefFingerDirComp[BoneIndex]).GetSafeNormal();
-				if (!ParentDrivenRefSegmentComp.IsNearlyZero())
+				bHasValidParent = false;
+			}
+			else
+			{
+				ParentReferenceComp = RefFingerComp[ParentBoneIndex];
+				ParentLiveComp = CSPose.GetComponentSpaceTransform(FingerBones[ParentBoneIndex].CachedCompactPoseIndex).GetRotation().GetNormalized();
+			}
+		}
+
+		OutParentDeltaCS = FQuat::Identity;
+		if (!bHasValidParent || !TryGetLiveParentDeltaCS(ParentReferenceComp, ParentLiveComp, OutParentDeltaCS))
+		{
+			return false;
+		}
+
+		OutSegmentDir = SegmentComp;
+		if (SegmentIndex == QuestFingerSegmentsPerFinger - 1)
+		{
+			const float DistalDirectionWeight = FingerIndex == 0
+				? FMath::Clamp(ThumbSegmentScale[SegmentIndex], 0.0f, 1.0f)
+				: FMath::Clamp(FingerSegmentScale[SegmentIndex], 0.0f, 1.0f);
+			const FVector ParentDrivenRefSegmentComp = OutParentDeltaCS.RotateVector(RefFingerDirComp[BoneIndex]).GetSafeNormal();
+			if (!ParentDrivenRefSegmentComp.IsNearlyZero())
+			{
+				OutSegmentDir = FMath::Lerp(ParentDrivenRefSegmentComp, SegmentComp, DistalDirectionWeight).GetSafeNormal();
+			}
+		}
+		return true;
+	};
+
+	auto ApplySegmentDirToBone = [&](
+		const int32 FingerIndex,
+		const int32 BoneIndex,
+		const FQuat& ParentDeltaCS,
+		const FVector& SegmentDir)
+	{
+		const FQuat TargetRotCS = RetargetQuestSegmentDirectionToBone(
+			ParentDeltaCS,
+			RefFingerComp[BoneIndex],
+			RefFingerDirComp[BoneIndex],
+			SegmentDir);
+		UpdateSmoothedRotation(bHasSmoothedFingerRotCS[BoneIndex], SmoothedFingerRotCS[BoneIndex], TargetRotCS, Alpha);
+		ApplyRotationCS(CSPose, FingerBones[BoneIndex], SmoothedFingerRotCS[BoneIndex]);
+		++AppliedFingerBoneCount;
+		if (FingerIndex == 0)
+		{
+			++AppliedThumbBoneCount;
+		}
+	};
+
+	// Thumb: finger-major chain walk (its parents are its own previous segments).
+	for (int32 SegmentIndex = 0; SegmentIndex < QuestFingerSegmentsPerFinger; ++SegmentIndex)
+	{
+		int32 ThumbBoneIndex = INDEX_NONE;
+		FVector ThumbDir = FVector::ZeroVector;
+		FQuat ThumbParentDeltaCS = FQuat::Identity;
+		if (ComputeSegmentDirForBone(0, SegmentIndex, ThumbBoneIndex, ThumbDir, ThumbParentDeltaCS))
+		{
+			ApplySegmentDirToBone(0, ThumbBoneIndex, ThumbParentDeltaCS, ThumbDir);
+		}
+	}
+
+	// Non-thumb fingers run SEGMENT-MAJOR so adjacent pairs can be separated at each level
+	// before their rotations are written - children then follow their corrected parents. The
+	// separation is convention-free geometry: when a pair's signed angle (about the avatar's
+	// reference pair axis carried by the live hand) falls below a fraction of the avatar's own
+	// reference spacing, both directions rotate apart symmetrically. Crossed pairs read
+	// negative and uncross; curl is preserved because the rotation is about the pair axis.
+	// Plane-projection approaches (splay clamps) corrupted curl whenever the rig's reference
+	// curl directions were only approximate - this replaces them.
+	const bool bPairSeparation = CVarQuestFingerPairSeparation.GetValueOnAnyThread() != 0;
+	const float PairRefScale = FMath::Clamp(CVarQuestFingerPairSeparationRefScale.GetValueOnAnyThread(), 0.0f, 1.0f);
+	const float PairMinFloorDeg = FMath::Max(CVarQuestFingerPairSeparationMinDeg.GetValueOnAnyThread(), 0.0f);
+	const FQuat HandDeltaForPairsCS = (SegmentCurrentHandRotCS * SegmentRefHandComp.Inverse()).GetNormalized();
+	for (int32 SegmentIndex = 0; SegmentIndex < QuestFingerSegmentsPerFinger; ++SegmentIndex)
+	{
+		int32 LevelBoneIndex[QuestFingerCount];
+		FVector LevelDir[QuestFingerCount];
+		FQuat LevelParentDeltaCS[QuestFingerCount];
+		bool bLevelValid[QuestFingerCount] = {};
+		for (int32 FingerIndex = 1; FingerIndex < QuestFingerCount; ++FingerIndex)
+		{
+			LevelBoneIndex[FingerIndex] = INDEX_NONE;
+			LevelDir[FingerIndex] = FVector::ZeroVector;
+			LevelParentDeltaCS[FingerIndex] = FQuat::Identity;
+			bLevelValid[FingerIndex] = ComputeSegmentDirForBone(
+				FingerIndex, SegmentIndex,
+				LevelBoneIndex[FingerIndex], LevelDir[FingerIndex], LevelParentDeltaCS[FingerIndex]);
+		}
+
+		if (bPairSeparation)
+		{
+			// Two sweeps so a push from one pair propagates through its neighbour.
+			for (int32 Sweep = 0; Sweep < 2; ++Sweep)
+			{
+				for (int32 FingerIndex = 1; FingerIndex < QuestFingerCount - 1; ++FingerIndex)
 				{
-					RetargetSegmentComp = FMath::Lerp(ParentDrivenRefSegmentComp, SegmentComp, DistalDirectionWeight).GetSafeNormal();
+					const int32 NextFinger = FingerIndex + 1;
+					if (!bLevelValid[FingerIndex] || !bLevelValid[NextFinger])
+					{
+						continue;
+					}
+					const FVector RefDirA = RefFingerDirComp[LevelBoneIndex[FingerIndex]].GetSafeNormal();
+					const FVector RefDirB = RefFingerDirComp[LevelBoneIndex[NextFinger]].GetSafeNormal();
+					const FVector RefPairAxis = FVector::CrossProduct(RefDirA, RefDirB).GetSafeNormal();
+					if (RefPairAxis.IsNearlyZero())
+					{
+						continue;
+					}
+					const float RefSeparationDeg = FMath::RadiansToDegrees(
+						FMath::Acos(FMath::Clamp(FVector::DotProduct(RefDirA, RefDirB), -1.0f, 1.0f)));
+					const float MinSeparationDeg = FMath::Max(PairMinFloorDeg, RefSeparationDeg * PairRefScale);
+					const FVector PairAxisLive = HandDeltaForPairsCS.RotateVector(RefPairAxis).GetSafeNormal();
+					EnforceQuestFingerPairSeparation(
+						LevelDir[FingerIndex], LevelDir[NextFinger], PairAxisLive, MinSeparationDeg);
 				}
 			}
+		}
 
-			const FQuat TargetRotCS = RetargetQuestSegmentDirectionToBone(
-				ParentDeltaCS,
-				RefFingerComp[BoneIndex],
-				RefFingerDirComp[BoneIndex],
-				RetargetSegmentComp);
-			UpdateSmoothedRotation(bHasSmoothedFingerRotCS[BoneIndex], SmoothedFingerRotCS[BoneIndex], TargetRotCS, Alpha);
-			ApplyRotationCS(CSPose, FingerBones[BoneIndex], SmoothedFingerRotCS[BoneIndex]);
-			++AppliedFingerBoneCount;
-			if (FingerIndex == 0)
+		for (int32 FingerIndex = 1; FingerIndex < QuestFingerCount; ++FingerIndex)
+		{
+			if (bLevelValid[FingerIndex])
 			{
-				++AppliedThumbBoneCount;
+				ApplySegmentDirToBone(
+					FingerIndex, LevelBoneIndex[FingerIndex],
+					LevelParentDeltaCS[FingerIndex], LevelDir[FingerIndex]);
 			}
+		}
+	}
+
+	// When the joint-orientation mode was requested but fell back here, log WHICH veto fired:
+	// the 2026-06-12 A/B looked like a no-op precisely because these rejections were silent.
+	if (bUsePalmLocalHinge &&
+		(CVarQuestFingerDebug.GetValueOnAnyThread() != 0 || CVarQuestHandDebug.GetValueOnAnyThread() != 0))
+	{
+		double& LastJoFallbackLogTimeSeconds = bIsLeft
+			? DiagnosticsState.LastQuestFingerJoFallbackLogTimeSecondsL
+			: DiagnosticsState.LastQuestFingerJoFallbackLogTimeSecondsR;
+		const double NowSeconds = FPlatformTime::Seconds();
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(NowSeconds, 1.0, LastJoFallbackLogTimeSeconds))
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.QuestFingerSolve: actor=%s side=%s jointOrientation FELL BACK to segmentDirection: basisOk=%d basisSin=%.3f handBoneOk=%d appliedJoBones=%d (need 12) rejects(stateOrBone=%d childRot=%d parentRot=%d localIdentity=%d refDelta=%d)"),
+				*TargetActorName.ToString(),
+				bIsLeft ? TEXT("L") : TEXT("R"),
+				bJoBasisOk ? 1 : 0,
+				JoBasisSin,
+				bJoHandBoneOk ? 1 : 0,
+				JoAppliedFingerBones,
+				JoRejectStateOrBone,
+				JoRejectChildRot,
+				JoRejectParentRot,
+				JoRejectLocalIdentity,
+				JoRejectRefDelta);
 		}
 	}
 

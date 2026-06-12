@@ -37,6 +37,8 @@
 #include "GameFramework/Actor.h"
 #include "HAL/CriticalSection.h"
 #include "HAL/PlatformTime.h"
+#include "IHeadMountedDisplay.h"
+#include "IXRTrackingSystem.h"
 #include "Misc/ScopeLock.h"
 
 #include <atomic>
@@ -290,6 +292,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	bHasQuestOrHmdRuntimeInput = false;
 	TargetMetaHumanProfile.Reset();
 	bHasCachedQuestHmdPose = false;
+	bCachedQuestHmdWorn = false;
 	CachedQuestHmdWorld = FVector::ZeroVector;
 	CachedQuestHmdRotWorld = FQuat::Identity;
 	CachedQuestTrackingUpWorld = FVector::UpVector;
@@ -425,6 +428,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 
 		EmbodiedFusionComponent->SetReplaySourceObservations_GameThread(ReplayObservations);
 		bHasCachedQuestHmdPose = ReplayObservations.HmdPose.bHasPose;
+		bCachedQuestHmdWorn = bHasCachedQuestHmdPose;
 		CachedQuestHmdWorld = ReplayObservations.HmdPose.LocationWorld;
 		CachedQuestHmdRotWorld = ReplayObservations.HmdPose.RotationWorld;
 		CachedQuestTrackingUpWorld = ReplayObservations.HmdPose.TrackingUpWorld;
@@ -549,6 +553,11 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	QuestHands = QuestRuntimeOutput.QuestHands;
 	FullArmChain = QuestRuntimeOutput.FullArmChain;
 	bHasCachedQuestHmdPose = QuestRuntimeOutput.HmdPose.bHasPose;
+	// Proximity-sensor worn state for the donning gate (game thread). Unknown counts as worn:
+	// runtimes without the sensor fall through to the gate's stillness heuristics.
+	bCachedQuestHmdWorn = bHasCachedQuestHmdPose &&
+		(!GEngine || !GEngine->XRSystem.IsValid() || !GEngine->XRSystem->GetHMDDevice() ||
+			GEngine->XRSystem->GetHMDDevice()->GetHMDWornState() != EHMDWornState::NotWorn);
 	CachedQuestHmdWorld = QuestRuntimeOutput.HmdPose.LocationWorld;
 	CachedQuestHmdRotWorld = QuestRuntimeOutput.HmdPose.RotationWorld;
 	CachedQuestTrackingUpWorld = QuestRuntimeOutput.HmdPose.TrackingUpWorld;
@@ -2276,6 +2285,15 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	{
 		DrivePelvisTranslationCS(CSPose, DeltaSeconds);
 		DriveSpineCS(CSPose, DeltaSeconds);
+	}
+	UpdateLiveNeutralGate(DeltaSeconds);
+	if (bHasQuestOrHmdRuntimeInput || bHasPoseFrame)
+	{
+		DriveLivePelvisLeanTwistCS(CSPose, DeltaSeconds);
+	}
+	if (bHasQuestOrHmdRuntimeInput)
+	{
+		DriveHmdHeadCS(CSPose, DeltaSeconds);
 	}
 	if (bHasPoseFrame)
 	{

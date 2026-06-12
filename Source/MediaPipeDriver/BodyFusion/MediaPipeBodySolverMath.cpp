@@ -631,4 +631,182 @@ namespace MediaPipeBodySolverMath
 		Result.FootForwardWorld = (Heading * FMath::Cos(PitchRad) + WorldUp * FMath::Sin(PitchRad)).GetSafeNormal();
 		return Result;
 	}
+
+	float UpdateHmdHeadNeutralYaw(
+		FMediaPipeHmdHeadYawNeutralState& State,
+		const float HmdYawDeg,
+		const float DeltaSeconds,
+		const float HalfLifeSeconds)
+	{
+		if (!State.bHasNeutral)
+		{
+			State.NeutralYawDeg = FRotator::NormalizeAxis(HmdYawDeg);
+			State.bHasNeutral = true;
+			return 0.0f;
+		}
+
+		if (HalfLifeSeconds > KINDA_SMALL_NUMBER && DeltaSeconds > 0.0f)
+		{
+			const float Alpha = 1.0f - FMath::Pow(0.5f, DeltaSeconds / HalfLifeSeconds);
+			State.NeutralYawDeg = FRotator::NormalizeAxis(
+				State.NeutralYawDeg + FMath::FindDeltaAngleDegrees(State.NeutralYawDeg, HmdYawDeg) * Alpha);
+		}
+
+		return FMath::FindDeltaAngleDegrees(State.NeutralYawDeg, HmdYawDeg);
+	}
+
+	float UpdateHipYawEstimator(
+		FMediaPipeHipYawEstimatorState& State,
+		const FMediaPipeHipYawEstimatorInput& Input)
+	{
+		if (Input.HipWidthCm < 2.0f)
+		{
+			return State.bHasSmoothedYaw ? State.SmoothedYawDeg : 0.0f;
+		}
+
+		// Rolling-max neutral width with slow decay: frontal stance keeps refreshing it; a
+		// momentary over-wide sample fades out instead of permanently shrinking every later
+		// yaw estimate.
+		if (!State.bHasNeutralWidth)
+		{
+			State.NeutralWidthCm = Input.HipWidthCm;
+			State.bHasNeutralWidth = true;
+		}
+		else
+		{
+			State.NeutralWidthCm = FMath::Max(
+				State.NeutralWidthCm * (1.0f - FMath::Clamp(Input.NeutralWidthDecayPerSecond, 0.0f, 1.0f) * FMath::Max(Input.DeltaSeconds, 0.0f)),
+				Input.HipWidthCm);
+		}
+
+		const float WidthRatio = FMath::Clamp(Input.HipWidthCm / FMath::Max(State.NeutralWidthCm, 2.0f), 0.05f, 1.0f);
+		float MagnitudeDeg = FMath::RadiansToDegrees(FMath::Acos(WidthRatio));
+		MagnitudeDeg = FMath::Min(FMath::Max(MagnitudeDeg - FMath::Max(Input.DeadbandDeg, 0.0f), 0.0f), Input.MaxYawDeg);
+
+		// Sign from the hip depth delta, with frame hysteresis: a flip must be strong and
+		// sustained before the estimator believes it.
+		const float DesiredSign =
+			FMath::Abs(Input.HipDepthDeltaCm) >= Input.SignDepthThresholdCm
+				? FMath::Sign(Input.HipDepthDeltaCm)
+				: State.CurrentSign;
+		if (State.CurrentSign == 0.0f)
+		{
+			State.CurrentSign = DesiredSign;
+			State.SignFlipFrames = 0;
+		}
+		else if (DesiredSign != 0.0f && DesiredSign != State.CurrentSign)
+		{
+			if (++State.SignFlipFrames >= FMath::Max(Input.SignFlipFramesRequired, 1))
+			{
+				State.CurrentSign = DesiredSign;
+				State.SignFlipFrames = 0;
+			}
+		}
+		else
+		{
+			State.SignFlipFrames = 0;
+		}
+
+		const float TargetYawDeg = State.CurrentSign * MagnitudeDeg;
+		if (!State.bHasSmoothedYaw)
+		{
+			State.SmoothedYawDeg = TargetYawDeg;
+			State.bHasSmoothedYaw = true;
+		}
+		else if (Input.SmoothingHalfLifeSeconds > KINDA_SMALL_NUMBER && Input.DeltaSeconds > 0.0f)
+		{
+			const float Alpha = 1.0f - FMath::Pow(0.5f, Input.DeltaSeconds / Input.SmoothingHalfLifeSeconds);
+			State.SmoothedYawDeg = FMath::Lerp(State.SmoothedYawDeg, TargetYawDeg, Alpha);
+		}
+		else
+		{
+			State.SmoothedYawDeg = TargetYawDeg;
+		}
+
+		return State.SmoothedYawDeg;
+	}
+
+	float ExtractTwistAboutAxisDeg(const FQuat& Delta, const FVector& Axis)
+	{
+		const FVector AxisNormalized = Axis.GetSafeNormal();
+		if (AxisNormalized.IsNearlyZero())
+		{
+			return 0.0f;
+		}
+
+		const FQuat Normalized = Delta.GetNormalized();
+		const float Projection =
+			Normalized.X * AxisNormalized.X +
+			Normalized.Y * AxisNormalized.Y +
+			Normalized.Z * AxisNormalized.Z;
+		const float TwistRad = 2.0f * FMath::Atan2(Projection, Normalized.W);
+		return FRotator::NormalizeAxis(FMath::RadiansToDegrees(TwistRad));
+	}
+
+	namespace
+	{
+		constexpr float MinHeadingProjection = 0.35f;
+
+		FVector GetQuatAxisByIndex(const FQuat& Rot, int32 AxisIndex)
+		{
+			switch (AxisIndex)
+			{
+			case 0: return Rot.GetAxisX();
+			case 1: return Rot.GetAxisY();
+			default: return Rot.GetAxisZ();
+			}
+		}
+	}
+
+	int32 SelectMostHorizontalAxis(const FQuat& WorldRot)
+	{
+		const FQuat Normalized = WorldRot.GetNormalized();
+		int32 BestIndex = INDEX_NONE;
+		float BestProjection = MinHeadingProjection;
+		for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
+		{
+			const FVector Axis = GetQuatAxisByIndex(Normalized, AxisIndex);
+			const float Projection = FVector2D(Axis.X, Axis.Y).Size();
+			if (Projection > BestProjection)
+			{
+				BestProjection = Projection;
+				BestIndex = AxisIndex;
+			}
+		}
+		return BestIndex;
+	}
+
+	bool TryGetAxisHeadingDeg(const FQuat& WorldRot, int32 AxisIndex, float& OutHeadingDeg)
+	{
+		if (AxisIndex < 0 || AxisIndex > 2)
+		{
+			return false;
+		}
+		const FVector Axis = GetQuatAxisByIndex(WorldRot.GetNormalized(), AxisIndex);
+		const FVector2D Planar(Axis.X, Axis.Y);
+		if (Planar.Size() < MinHeadingProjection)
+		{
+			return false;
+		}
+		OutHeadingDeg = FMath::RadiansToDegrees(FMath::Atan2(Planar.Y, Planar.X));
+		return true;
+	}
+
+	float ApproachAngleDeg(
+		float CurrentDeg,
+		float TargetDeg,
+		float DeltaSeconds,
+		float HalfLifeSeconds,
+		float MaxRateDegPerSec)
+	{
+		if (DeltaSeconds <= 0.0f)
+		{
+			return FRotator::NormalizeAxis(CurrentDeg);
+		}
+		const float DeltaDeg = FMath::FindDeltaAngleDegrees(CurrentDeg, TargetDeg);
+		const float Alpha = 1.0f - FMath::Pow(0.5f, DeltaSeconds / FMath::Max(HalfLifeSeconds, 0.01f));
+		const float MaxStepDeg = FMath::Max(MaxRateDegPerSec, 0.0f) * DeltaSeconds;
+		const float StepDeg = FMath::Clamp(DeltaDeg * Alpha, -MaxStepDeg, MaxStepDeg);
+		return FRotator::NormalizeAxis(CurrentDeg + StepDeg);
+	}
 }

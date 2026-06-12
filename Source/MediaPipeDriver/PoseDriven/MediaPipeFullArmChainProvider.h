@@ -62,6 +62,10 @@ struct FMediaPipeFullArmChainSnapshot
 	EMediaPipeFullArmChainSource Source = EMediaPipeFullArmChainSource::None;
 	FMediaPipeFullArmChainSideSnapshot Left;
 	FMediaPipeFullArmChainSideSnapshot Right;
+	// The runtime's own hips joint (XR_FB_body_tracking): on Quest 3 the headset's inside-out
+	// body tracking observes the torso directly, making this far stronger for pelvis yaw than
+	// any monocular camera estimate. Located in the same joint query as the arms.
+	FMediaPipeFullArmChainJointSnapshot Hips;
 	uint8 bActive = 0;
 	float Confidence = 0.0f;
 	double TimestampSeconds = -1.0;
@@ -72,6 +76,7 @@ struct FMediaPipeFullArmChainSnapshot
 		Source = EMediaPipeFullArmChainSource::None;
 		Left.Reset();
 		Right.Reset();
+		Hips.Reset();
 		bActive = 0;
 		Confidence = 0.0f;
 		TimestampSeconds = -1.0;

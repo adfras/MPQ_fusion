@@ -217,6 +217,36 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	// converted to component space and applied on the avatar's own proportions.
 	FVector DesiredThighWorld = (KneeWorld - HipWorld).GetSafeNormal();
 	FVector DesiredCalfWorld = (AnkleWorld - KneeWorld).GetSafeNormal();
+
+	// Live stabilization: when the camera's leg-landmark reliability degrades (subject near the
+	// frame edge, occlusion, phone movement), ease the segment directions toward the avatar's
+	// reference stance instead of following held or drifting landmarks (which pull the legs
+	// together and skew the stance).
+	if (!bUsingBodyFusionLowerBody &&
+		CVarMediaPipeLegReliabilityStabilize.GetValueOnAnyThread() != 0)
+	{
+		const int32 ReliabilityHipLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftHip : (int32)EMediaPipePoseLandmark::RightHip;
+		const int32 ReliabilityKneeLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftKnee : (int32)EMediaPipePoseLandmark::RightKnee;
+		const int32 ReliabilityAnkleLm = bIsLeft ? (int32)EMediaPipePoseLandmark::LeftAnkle : (int32)EMediaPipePoseLandmark::RightAnkle;
+		const float ChainReliability = FMath::Min3(
+			GetLandmarkReliability(ReliabilityHipLm),
+			GetLandmarkReliability(ReliabilityKneeLm),
+			GetLandmarkReliability(ReliabilityAnkleLm));
+		constexpr float FullTrustReliability = 0.5f;
+		const float Trust = FMath::Clamp(ChainReliability / FullTrustReliability, 0.0f, 1.0f);
+		if (Trust < 1.0f)
+		{
+			const FVector RefThighWorldDir = TargetCompTransform.TransformVectorNoScale(
+				bIsLeft ? RefThighDirCompL : RefThighDirCompR).GetSafeNormal();
+			const FVector RefCalfWorldDir = TargetCompTransform.TransformVectorNoScale(
+				bIsLeft ? RefCalfDirCompL : RefCalfDirCompR).GetSafeNormal();
+			if (!RefThighWorldDir.IsNearlyZero() && !RefCalfWorldDir.IsNearlyZero())
+			{
+				DesiredThighWorld = LerpNormalized(RefThighWorldDir, DesiredThighWorld, Trust);
+				DesiredCalfWorld = LerpNormalized(RefCalfWorldDir, DesiredCalfWorld, Trust);
+			}
+		}
+	}
 	const FVector RawDesiredFootWorld = bCanDriveFoot
 		? (bHeelMeasured && !(ToeWorld - HeelWorld).IsNearlyZero()
 			? (ToeWorld - HeelWorld).GetSafeNormal()
@@ -952,8 +982,16 @@ void FAnimNode_MediaPipePoseDriven::EmitLegScaffoldDiagnostics(float DeltaSecond
 	// flexion intent), Quest/HMD metric scaffold (baseline/drop/lean/alpha/confidence), fused
 	// pelvis compression, foot contact, and the resulting pelvis/root corrections.
 	UE_LOG(LogMediaPipePose, Log,
-		TEXT("mp.MediaPipeLegScaffold actor=%s hmd(valid=%d z=%.1f base=%.1f dropCm=%.1f leanCm=%.1f alpha=%.3f conf=%.2f) mono(alpha=%.3f) fused(alpha=%.3f hmdShare=%.2f pelvisDropCm=%.1f) pelvisOffsetZ=%.1f fkRootZ=%.1f L(%s) R(%s)"),
+		TEXT("mp.MediaPipeLegScaffold actor=%s neutralGate(armed=%d ready=%d settle=%.1f) bodyYaw(deg=%.1f src=%s) sway(x=%.1f y=%.1f active=%d) hmd(valid=%d z=%.1f base=%.1f dropCm=%.1f leanCm=%.1f alpha=%.3f conf=%.2f) mono(alpha=%.3f) fused(alpha=%.3f hmdShare=%.2f pelvisDropCm=%.1f) pelvisOffsetZ=%.1f fkRootZ=%.1f L(%s) R(%s)"),
 		*TargetActorName.ToString(),
+		BodyState.bLiveNeutralGateArmed ? 1 : 0,
+		BodyState.bLiveNeutralsReady ? 1 : 0,
+		BodyState.LiveNeutralSettleSeconds,
+		BodyState.LastBodyYawDeg,
+		BodyState.LastBodyYawSource == 2 ? TEXT("bodyTracking") : (BodyState.LastBodyYawSource == 1 ? TEXT("hmdNeutral") : TEXT("none")),
+		BodyState.BodyTrackingSwayWorldXY.X,
+		BodyState.BodyTrackingSwayWorldXY.Y,
+		BodyState.bBodyTrackingSwayActive ? 1 : 0,
 		BodyState.bScaffoldHmdPoseValid ? 1 : 0,
 		BodyState.ScaffoldHmdHeightZ,
 		BodyState.ScaffoldHmdBaselineZ,

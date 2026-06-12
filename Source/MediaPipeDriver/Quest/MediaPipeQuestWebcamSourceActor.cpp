@@ -49,6 +49,11 @@ namespace
 		1,
 		TEXT("Show the direct live webcam feed as a PIE viewport overlay while MediaPipe Manny tracking is active."));
 
+	TAutoConsoleVariable<int32> CVarAutoQuestWebcamPreviewBodySkeleton(
+		TEXT("mp.AutoQuestWebcamPreviewBodySkeleton"),
+		1,
+		TEXT("Draw the full tracked body skeleton (torso box, arms, legs, feet) on the live webcam preview, colored by per-landmark reliability (green=tracked, amber=weak, red=stale). Segments with unmeasured endpoints are not drawn, so missing limbs are visibly absent."));
+
 	TAutoConsoleVariable<int32> CVarAutoQuestWebcamPreviewWidth(
 		TEXT("mp.AutoQuestWebcamPreviewWidth"),
 		640,
@@ -537,6 +542,55 @@ namespace
 		DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::MouthRight, MouthColor, 3);
 		DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftShoulder, ShoulderColor, 5);
 		DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightShoulder, ShoulderColor, 5);
+
+		// Full tracked body skeleton, colored by reliability. Segments with unmeasured endpoints
+		// simply do not draw, so a worn headset (or the desktop preview) can see exactly which
+		// bones the camera is tracking at any moment.
+		if (CVarAutoQuestWebcamPreviewBodySkeleton.GetValueOnGameThread() != 0)
+		{
+			const FColor TorsoColor(255, 200, 64, 255);
+			const FColor ArmColor(80, 200, 255, 255);
+			const FColor LegColor(110, 255, 110, 255);
+			const FColor FootColor(255, 130, 255, 255);
+
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftShoulder, EMediaPipePoseLandmark::RightShoulder, TorsoColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftShoulder, EMediaPipePoseLandmark::LeftHip, TorsoColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightShoulder, EMediaPipePoseLandmark::RightHip, TorsoColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftHip, EMediaPipePoseLandmark::RightHip, TorsoColor);
+
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftShoulder, EMediaPipePoseLandmark::LeftElbow, ArmColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftElbow, EMediaPipePoseLandmark::LeftWrist, ArmColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightShoulder, EMediaPipePoseLandmark::RightElbow, ArmColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightElbow, EMediaPipePoseLandmark::RightWrist, ArmColor);
+
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftHip, EMediaPipePoseLandmark::LeftKnee, LegColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftKnee, EMediaPipePoseLandmark::LeftAnkle, LegColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightHip, EMediaPipePoseLandmark::RightKnee, LegColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightKnee, EMediaPipePoseLandmark::RightAnkle, LegColor);
+
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftAnkle, EMediaPipePoseLandmark::LeftHeel, FootColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftHeel, EMediaPipePoseLandmark::LeftFootIndex, FootColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftAnkle, EMediaPipePoseLandmark::LeftFootIndex, FootColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightAnkle, EMediaPipePoseLandmark::RightHeel, FootColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightHeel, EMediaPipePoseLandmark::RightFootIndex, FootColor);
+			DrawPreviewConnection(Bgra, Size, Frame, EMediaPipePoseLandmark::RightAnkle, EMediaPipePoseLandmark::RightFootIndex, FootColor);
+
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftElbow, ArmColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightElbow, ArmColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftWrist, ArmColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightWrist, ArmColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftHip, TorsoColor, 5);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightHip, TorsoColor, 5);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftKnee, LegColor, 5);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightKnee, LegColor, 5);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftAnkle, LegColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightAnkle, LegColor, 4);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftHeel, FootColor, 3);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightHeel, FootColor, 3);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftFootIndex, FootColor, 3);
+			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightFootIndex, FootColor, 3);
+		}
+
 		DrawDenseFaceHeadOverlay(Bgra, Size, Frame);
 	}
 

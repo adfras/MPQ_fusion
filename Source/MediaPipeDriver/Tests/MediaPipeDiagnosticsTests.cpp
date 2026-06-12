@@ -724,6 +724,107 @@ bool FMediaPipeTrackingFusionDatasetCVarAutomationTest::RunTest(const FString& P
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeLiveLowerBodyTrialCommandAutomationTest,
+	"TestingKit5.MediaPipe.Diagnostics.LiveLowerBodyTrialCommands",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeLiveLowerBodyTrialCommandAutomationTest::RunTest(const FString& Parameters)
+{
+	const TCHAR* TouchedNames[] = {
+		TEXT("mp.MediaPipeDriveHmdHead"),
+		TEXT("mp.MediaPipeDriveHmdLean"),
+		TEXT("mp.MediaPipeHmdLeanMaxDeg"),
+		TEXT("mp.MediaPipeDriveHipTwist"),
+		TEXT("mp.MediaPipeLegReliabilityStabilize"),
+		TEXT("mp.MediaPipeDrivePelvisTranslation"),
+		TEXT("mp.MediaPipeDriveLegs"),
+		TEXT("mp.MediaPipeUseLegIK"),
+		TEXT("mp.MediaPipeUseLegIKFootPlant"),
+		TEXT("mp.MediaPipeUseFkRootGrounding"),
+		TEXT("mp.MediaPipeDriveFootRotation"),
+		TEXT("mp.MediaPipeLegUseBasisRoll"),
+		TEXT("mp.MediaPipeFootForwardHysteresis"),
+		TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"),
+		TEXT("mp.MediaPipeFootGroundedWorldUp"),
+		TEXT("mp.MediaPipeFootGroundedPitchClamp"),
+		TEXT("mp.MediaPipeLegScaffoldHmdWeight"),
+		TEXT("mp.MediaPipeLegScaffoldFlexionWeight"),
+		TEXT("mp.MediaPipeLegScaffoldFlexionMaxAdjustDeg"),
+		TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"),
+		TEXT("mp.MediaPipeLegScaffoldLog"),
+		TEXT("mp.QuestVrTrackingPanel"),
+		TEXT("mp.AutoQuestWebcamPreviewBodySkeleton"),
+		TEXT("mp.MediaPipeAdaptivePoseBeta"),
+		TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"),
+	};
+
+	TArray<TPair<IConsoleVariable*, FString>> Snapshots;
+	for (const TCHAR* Name : TouchedNames)
+	{
+		if (IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+		{
+			Snapshots.Emplace(Variable, Variable->GetString());
+		}
+	}
+
+	auto IntValue = [](const TCHAR* Name) -> int32
+	{
+		IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+		return Variable ? Variable->GetInt() : MIN_int32;
+	};
+	auto FloatValue = [](const TCHAR* Name) -> float
+	{
+		IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+		return Variable ? Variable->GetFloat() : -1.0f;
+	};
+
+	FOutputDeviceNull OutputDevice;
+	TestTrue(TEXT("Start command executes"),
+		IConsoleManager::Get().ProcessUserConsoleInput(TEXT("mp.StartLiveLowerBodyTrial"), OutputDevice, nullptr));
+	TestEqual(TEXT("Trial enables legs"), IntValue(TEXT("mp.MediaPipeDriveLegs")), 1);
+	TestEqual(TEXT("Trial enables pelvis translation"), IntValue(TEXT("mp.MediaPipeDrivePelvisTranslation")), 1);
+	TestEqual(TEXT("Trial keeps direct segment legs (no IK)"), IntValue(TEXT("mp.MediaPipeUseLegIK")), 0);
+	TestEqual(TEXT("Trial makes the HMD the squat-depth authority"), FloatValue(TEXT("mp.MediaPipeLegScaffoldHmdWeight")), 1.0f);
+	TestEqual(TEXT("Trial enables grounded flexion correction"), FloatValue(TEXT("mp.MediaPipeLegScaffoldFlexionWeight")), 0.8f);
+	TestEqual(TEXT("Trial enables bend redistribution"), FloatValue(TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight")), 0.8f);
+	TestEqual(TEXT("Trial keeps grounded soles flat"), IntValue(TEXT("mp.MediaPipeFootGroundedPitchClamp")), 1);
+	TestEqual(TEXT("Trial shows the VR tracking panel"), IntValue(TEXT("mp.QuestVrTrackingPanel")), 1);
+	TestEqual(TEXT("Trial draws the preview body skeleton"), IntValue(TEXT("mp.AutoQuestWebcamPreviewBodySkeleton")), 1);
+	TestEqual(TEXT("Trial drives the head from the live HMD"), IntValue(TEXT("mp.MediaPipeDriveHmdHead")), 1);
+	TestEqual(TEXT("Trial leans the body from HMD displacement"), IntValue(TEXT("mp.MediaPipeDriveHmdLean")), 1);
+	TestEqual(TEXT("Trial widens the lean clamp for deep bends"), FloatValue(TEXT("mp.MediaPipeHmdLeanMaxDeg")), 55.0f);
+	TestEqual(TEXT("Trial twists the pelvis from the hip line"), IntValue(TEXT("mp.MediaPipeDriveHipTwist")), 1);
+	TestEqual(TEXT("Trial stabilizes legs on low reliability"), IntValue(TEXT("mp.MediaPipeLegReliabilityStabilize")), 1);
+	TestEqual(TEXT("Trial raises the One-Euro velocity beta for fast-move responsiveness"),
+		FloatValue(TEXT("mp.MediaPipeAdaptivePoseBeta")), 0.45f);
+	TestEqual(TEXT("Trial widens the pose prediction horizon"),
+		FloatValue(TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs")), 80.0f);
+	TestEqual(TEXT("Trial leaves the finger mitigations off (worn-headset regressions)"),
+		IntValue(TEXT("mp.QuestFingerPairSeparation")), 0);
+	TestEqual(TEXT("Trial leaves the hand pose gate off (rejected real fist closes)"),
+		IntValue(TEXT("mp.QuestFingerPoseGate")), 0);
+
+	TestTrue(TEXT("Stop command executes"),
+		IConsoleManager::Get().ProcessUserConsoleInput(TEXT("mp.StopLiveLowerBodyTrial"), OutputDevice, nullptr));
+	TestEqual(TEXT("Stop restores legs off"), IntValue(TEXT("mp.MediaPipeDriveLegs")), 0);
+	TestEqual(TEXT("Stop restores pelvis translation off"), IntValue(TEXT("mp.MediaPipeDrivePelvisTranslation")), 0);
+	TestEqual(TEXT("Stop disables the HMD scaffold"), FloatValue(TEXT("mp.MediaPipeLegScaffoldHmdWeight")), 0.0f);
+	TestEqual(TEXT("Stop hides the VR tracking panel"), IntValue(TEXT("mp.QuestVrTrackingPanel")), 0);
+	TestEqual(TEXT("Stop disables the HMD head drive"), IntValue(TEXT("mp.MediaPipeDriveHmdHead")), 0);
+	TestEqual(TEXT("Stop disables the HMD lean drive"), IntValue(TEXT("mp.MediaPipeDriveHmdLean")), 0);
+	TestEqual(TEXT("Stop disables the hip twist drive"), IntValue(TEXT("mp.MediaPipeDriveHipTwist")), 0);
+
+	for (const TPair<IConsoleVariable*, FString>& Snapshot : Snapshots)
+	{
+		if (Snapshot.Key)
+		{
+			Snapshot.Key->Set(*Snapshot.Value, ECVF_SetByConsole);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeAvatarCalibrationProfileCVarAutomationTest,
 	"TestingKit5.MediaPipe.Diagnostics.AvatarCalibrationProfileCVar",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

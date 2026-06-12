@@ -222,6 +222,10 @@ public:
 		Snapshot.TimestampSeconds = FPlatformTime::Seconds();
 
 		const bool bBodyActive = Snapshot.bActive != 0;
+		Snapshot.Hips = BuildJointSnapshot(
+			JointLocations[static_cast<int32>(XR_BODY_JOINT_HIPS_FB)],
+			TrackingToWorldTransform,
+			WorldToMetersScale);
 		FillSideSnapshot(
 			Snapshot.Left,
 			JointLocations,

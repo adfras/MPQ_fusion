@@ -344,6 +344,106 @@ namespace MediaPipeBodySolverMath
 	MEDIAPIPEDRIVER_API FMediaPipeGroundedFootPitchResult SolveGroundedFootPitch(
 		const FMediaPipeGroundedFootPitchInput& Input);
 
+	struct FMediaPipeHmdHeadYawNeutralState
+	{
+		bool bHasNeutral = false;
+		float NeutralYawDeg = 0.0f;
+
+		void Reset()
+		{
+			bHasNeutral = false;
+			NeutralYawDeg = 0.0f;
+		}
+	};
+
+	// Self-calibrating HMD head-yaw neutral: the neutral slowly follows the HMD yaw (wrap-safe),
+	// so sustained body turns recenter while quick glances read as head yaw. Returns the signed
+	// yaw delta from the neutral in degrees.
+	MEDIAPIPEDRIVER_API float UpdateHmdHeadNeutralYaw(
+		FMediaPipeHmdHeadYawNeutralState& State,
+		float HmdYawDeg,
+		float DeltaSeconds,
+		float HalfLifeSeconds);
+
+	struct FMediaPipeHipYawEstimatorState
+	{
+		bool bHasNeutralWidth = false;
+		float NeutralWidthCm = 0.0f;
+		float CurrentSign = 0.0f;
+		int32 SignFlipFrames = 0;
+		bool bHasSmoothedYaw = false;
+		float SmoothedYawDeg = 0.0f;
+
+		void Reset()
+		{
+			bHasNeutralWidth = false;
+			NeutralWidthCm = 0.0f;
+			CurrentSign = 0.0f;
+			SignFlipFrames = 0;
+			bHasSmoothedYaw = false;
+			SmoothedYawDeg = 0.0f;
+		}
+	};
+
+	struct FMediaPipeHipYawEstimatorInput
+	{
+		// Planar width of the hip line in centimeters (|right hip - left hip| ignoring up).
+		float HipWidthCm = 0.0f;
+		// Depth separation of the hips along the camera axis; only its SIGN is consumed (with
+		// hysteresis), because monocular depth magnitude is unreliable.
+		float HipDepthDeltaCm = 0.0f;
+		float DeltaSeconds = 0.0f;
+		// Yaw below this reads as frontal-stance noise and stays zero.
+		float DeadbandDeg = 8.0f;
+		float MaxYawDeg = 60.0f;
+		float SmoothingHalfLifeSeconds = 0.25f;
+		// The depth sign must exceed this and persist SignFlipFramesRequired frames to flip.
+		float SignDepthThresholdCm = 2.5f;
+		int32 SignFlipFramesRequired = 8;
+		// Per-second decay of the rolling-max neutral width. Deliberately very slow: held hip
+		// twists must persist for minutes (a fast decay re-absorbs them, the original held-twist
+		// bug), while an inflated neutral still recovers because frontal stances keep
+		// re-establishing the true maximum.
+		float NeutralWidthDecayPerSecond = 0.002f;
+	};
+
+	// Monocular hip-yaw estimator built on foreshortening: a front camera observes the planar
+	// hip-line WIDTH directly (it shrinks as cos(yaw) when the hips turn), which is far stronger
+	// than the depth-based line direction. Magnitude comes from the width ratio against a
+	// rolling-max neutral width; the rotation sign comes from the hip depth delta with frame
+	// hysteresis so monocular depth noise cannot flicker the direction. Output is deadbanded,
+	// clamped, and smoothed.
+	MEDIAPIPEDRIVER_API float UpdateHipYawEstimator(
+		FMediaPipeHipYawEstimatorState& State,
+		const FMediaPipeHipYawEstimatorInput& Input);
+
+	// Signed twist of a rotation delta about an axis, in degrees (swing-twist decomposition).
+	// Convention-free: extracting the world-up twist of (Current * Initial^-1) measures how far
+	// a tracked joint has yawed since its neutral capture regardless of the joint's local axis
+	// conventions, which OpenXR body-tracking vendors do not standardize.
+	MEDIAPIPEDRIVER_API float ExtractTwistAboutAxisDeg(const FQuat& Delta, const FVector& Axis);
+
+	// Heading-based body yaw from a tracked joint. The index (0=X 1=Y 2=Z) of the joint's local
+	// axis with the largest horizontal projection is chosen once at neutral latch; afterwards the
+	// yaw is that axis's horizontal heading drift, which pitch and roll of bends barely perturb
+	// (the full-delta swing-twist mixes them in). Returns INDEX_NONE when every axis is too
+	// vertical to carry a heading.
+	MEDIAPIPEDRIVER_API int32 SelectMostHorizontalAxis(const FQuat& WorldRot);
+
+	// Horizontal heading (degrees, atan2 of the XY projection) of the given local axis. Returns
+	// false when the projection is too short to be reliable - hold the previous yaw instead.
+	MEDIAPIPEDRIVER_API bool TryGetAxisHeadingDeg(const FQuat& WorldRot, int32 AxisIndex, float& OutHeadingDeg);
+
+	// Wrap-aware angular approach: exponential ease toward the target with a hard rate limit, so
+	// step changes in the target (source switches, tracking re-acquisition) walk the output
+	// instead of snapping it.
+	MEDIAPIPEDRIVER_API float ApproachAngleDeg(
+		float CurrentDeg,
+		float TargetDeg,
+		float DeltaSeconds,
+		float HalfLifeSeconds,
+		float MaxRateDegPerSec);
+
 	MEDIAPIPEDRIVER_API FVector LerpNormalized(const FVector& A, const FVector& B, float Alpha);
 	MEDIAPIPEDRIVER_API FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up);
 	MEDIAPIPEDRIVER_API FQuat MakeSemanticBodyBasis(const FMediaPipeSemanticBodyBasisInput& Input);

@@ -15,6 +15,7 @@
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestWebcamSourceActor.h"
 #include "MediaPipeRuntimeCVars.h"
+#include "MediaPipeVrTrackingPanelActor.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
 
 #include "Camera/CameraComponent.h"
@@ -253,6 +254,48 @@ void AMediaPipeEmbodiedAvatarPawn::Tick(float DeltaSeconds)
 	}
 	SyncAvatarToPawnRoot(false);
 	UpdateMediaPipeSelfViewAvatar(false);
+	EnsureVrTrackingPanel();
+}
+
+void AMediaPipeEmbodiedAvatarPawn::EnsureVrTrackingPanel()
+{
+	UWorld* World = GetWorld();
+	const bool bWantPanel =
+		World &&
+		World->IsGameWorld() &&
+		MediaPipeRuntimeCVars::CVarQuestVrTrackingPanel.GetValueOnGameThread() != 0;
+	if (!bWantPanel)
+	{
+		if (TrackingPanelActor)
+		{
+			TrackingPanelActor->Destroy();
+			TrackingPanelActor = nullptr;
+		}
+		return;
+	}
+
+	if (TrackingPanelActor)
+	{
+		return;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	TrackingPanelActor = World->SpawnActor<AMediaPipeVrTrackingPanelActor>(
+		AMediaPipeVrTrackingPanelActor::StaticClass(),
+		GetActorTransform(),
+		SpawnParameters);
+	if (TrackingPanelActor)
+	{
+#if WITH_EDITOR
+		TrackingPanelActor->SetActorLabel(TEXT("MP_LiveVrTrackingPanel"));
+#endif
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("Placed embodied pawn: spawned VR tracking panel pawn=%s panel=%s."),
+			*GetNameSafe(this),
+			*GetNameSafe(TrackingPanelActor));
+	}
 }
 
 void AMediaPipeEmbodiedAvatarPawn::PossessedBy(AController* NewController)

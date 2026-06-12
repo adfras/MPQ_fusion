@@ -611,6 +611,7 @@ private:
 	FMediaPipeResolvedMetaHumanTarget TargetMetaHumanProfile;
 	FMediaPipeAvatarProfileResolverLogState TargetProfileLogState;
 	bool bHasCachedQuestHmdPose = false;
+	bool bCachedQuestHmdWorn = false;
 	FVector CachedQuestHmdWorld = FVector::ZeroVector;
 	FQuat CachedQuestHmdRotWorld = FQuat::Identity;
 	FVector CachedQuestTrackingUpWorld = FVector::UpVector;
@@ -699,6 +700,9 @@ private:
 	void DrivePelvisTranslationCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void UpdateFkRootGroundingCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveSpineCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
+	void UpdateLiveNeutralGate(float DeltaSeconds);
+	void DriveHmdHeadCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
+	void DriveLivePelvisLeanTwistCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveArmCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
 	bool TryApplyQuestWristPositionWorld(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FVector& MediaPipeWristWorld, FVector& InOutWristWorld, FQuestWristMappingTrace* OutTrace = nullptr);
 	bool DriveQuestHandCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FVector& ForearmAxisComp, const FQuat& MediaPipeHandTargetCS, float DeltaSeconds, FQuestHandRotationTrace* OutTrace = nullptr, const FQuestWristMappingTrace* WristTrace = nullptr);

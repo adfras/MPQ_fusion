@@ -311,7 +311,78 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 				}
 				FVector TargetPelvisOffset = CompUp * DeltaHeightCm;
 
-				const float PlanarWeight = FMath::Clamp(PelvisPlanarTranslationWeight, 0.0f, 1.0f);
+				// Lateral hip sway, metric: the Quest body-tracking hips joint POSITION against
+				// its neutral (latched after the donning gate opens) translates the pelvis when
+				// the wearer shifts their hips, which the camera's hip-vs-support estimate only
+				// approximates. Live worn-headset sessions only - replay and fused evaluation
+				// keep their existing pelvis ownership. While fresh it replaces the camera
+				// planar term below (same physical quantity); on dropout the sway eases home.
+				BodyState.bBodyTrackingSwayActive = false;
+				const bool bLiveSwayEligible =
+					BodyState.bLiveNeutralGateArmed &&
+					BodyState.bLiveNeutralsReady &&
+					!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+					!ShouldUseBodyFusionPoseForEvaluation() &&
+					BodyState.ReferenceRigHipHeightCm > KINDA_SMALL_NUMBER &&
+					PelvisPlanarMaxOffsetRatio > KINDA_SMALL_NUMBER;
+				if (bLiveSwayEligible)
+				{
+					const double NowSeconds = FPlatformTime::Seconds();
+					const double ChainAgeSeconds = FullArmChain.TimestampSeconds >= 0.0
+						? NowSeconds - FullArmChain.TimestampSeconds
+						: -1.0;
+					const bool bHipsPosFresh =
+						FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking &&
+						FullArmChain.bActive != 0 &&
+						FullArmChain.Hips.bPositionValid != 0 &&
+						ChainAgeSeconds >= 0.0 &&
+						ChainAgeSeconds <= 0.3;
+					if (bHipsPosFresh)
+					{
+						const FVector HipsPosWorld = FullArmChain.Hips.WorldTransform.GetLocation();
+						const bool bGap =
+							BodyState.LastBodyTrackingHipsPosSampleSeconds > 0.0 &&
+							NowSeconds - BodyState.LastBodyTrackingHipsPosSampleSeconds > 1.0;
+						if (!BodyState.bHasBodyTrackingHipsNeutralPos || bGap)
+						{
+							// (Re-)latch so the currently applied sway is preserved: tracking
+							// gaps and re-acquisitions never step the pelvis.
+							BodyState.BodyTrackingHipsNeutralPosWorld =
+								HipsPosWorld - FVector(BodyState.BodyTrackingSwayWorldXY, 0.0f);
+							BodyState.bHasBodyTrackingHipsNeutralPos = true;
+						}
+						BodyState.LastBodyTrackingHipsPosSampleSeconds = NowSeconds;
+
+						const float MaxSwayCm = BodyState.ReferenceRigHipHeightCm * PelvisPlanarMaxOffsetRatio;
+						FVector2D SwayXY(
+							HipsPosWorld.X - BodyState.BodyTrackingHipsNeutralPosWorld.X,
+							HipsPosWorld.Y - BodyState.BodyTrackingHipsNeutralPosWorld.Y);
+						const float SwayCm = SwayXY.Size();
+						if (SwayCm > MaxSwayCm)
+						{
+							SwayXY *= MaxSwayCm / SwayCm;
+						}
+						BodyState.BodyTrackingSwayWorldXY = SwayXY;
+						BodyState.bBodyTrackingSwayActive = true;
+					}
+					else if (!BodyState.BodyTrackingSwayWorldXY.IsNearlyZero() && DeltaSeconds > 0.0f)
+					{
+						// Tracking lost: walk the held sway home instead of snapping or freezing.
+						const float HomeAlpha = 1.0f - FMath::Pow(0.5f, DeltaSeconds / 1.5f);
+						BodyState.BodyTrackingSwayWorldXY =
+							FMath::Lerp(BodyState.BodyTrackingSwayWorldXY, FVector2D::ZeroVector, HomeAlpha);
+					}
+					if (!BodyState.BodyTrackingSwayWorldXY.IsNearlyZero())
+					{
+						const FVector SwayComp = TargetCompTransform.InverseTransformVectorNoScale(
+							FVector(BodyState.BodyTrackingSwayWorldXY, 0.0f));
+						TargetPelvisOffset += SwayComp - FVector::DotProduct(SwayComp, CompUp) * CompUp;
+					}
+				}
+
+				const float PlanarWeight = BodyState.bBodyTrackingSwayActive
+					? 0.0f
+					: FMath::Clamp(PelvisPlanarTranslationWeight, 0.0f, 1.0f);
 				if (PlanarWeight > KINDA_SMALL_NUMBER && BodyState.ReferenceRigHipHeightCm > KINDA_SMALL_NUMBER && PelvisPlanarMaxOffsetRatio > KINDA_SMALL_NUMBER)
 				{
 					FVector CompForward = TargetCompTransform.InverseTransformVectorNoScale(FVector::ForwardVector).GetSafeNormal();
@@ -490,6 +561,458 @@ void FAnimNode_MediaPipePoseDriven::UpdateFkRootGroundingCS(FCSPose<FCompactPose
 	BodyState.SmoothedFkRootGroundOffsetComp =
 		FVector(0.0f, 0.0f, MediaPipeBodySolverMath::SmoothFkRootGroundingOffsetZ(SmoothInput));
 	BodyState.bHasSmoothedFkRootGroundOffset = true;
+}
+
+void FAnimNode_MediaPipePoseDriven::UpdateLiveNeutralGate(float DeltaSeconds)
+{
+	// Donning gate for the worn-headset drives. VR Preview is pressed bent over a desk holding
+	// the headset, so the first seconds of HMD data describe the donning posture, not the
+	// wearer's neutral - and several references (body-yaw zero, lean neutral, hips heading)
+	// anchor to their first samples. Nothing may latch until the worn headset has been upright
+	// and still for a moment; at that instant every live neutral re-zeros to the settled
+	// standing pose. One-way per session so later bends and dropouts never re-gate.
+	if (BodyState.bLiveNeutralsReady)
+	{
+		return;
+	}
+	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+		ShouldUseBodyFusionPoseForEvaluation())
+	{
+		// Replay and fused-pose evaluation carry verified observations from frame one.
+		BodyState.bLiveNeutralsReady = true;
+		return;
+	}
+	if (!bHasCachedQuestHmdPose)
+	{
+		// No HMD this frame. The gate only ever arms when one appears, so camera-only desktop
+		// sessions run ungated.
+		return;
+	}
+	BodyState.bLiveNeutralGateArmed = true;
+
+	const FRotator HmdRotation = CachedQuestHmdRotWorld.Rotator();
+	bool bSettled = false;
+	if (BodyState.bHasLiveNeutralHmdSample && DeltaSeconds > 0.0f)
+	{
+		const float PlanarSpeedCmSec =
+			FVector2D(CachedQuestHmdWorld.X - BodyState.LastLiveNeutralHmdPos.X,
+				CachedQuestHmdWorld.Y - BodyState.LastLiveNeutralHmdPos.Y).Size() / DeltaSeconds;
+		const float YawRateDegSec =
+			FMath::Abs(FMath::FindDeltaAngleDegrees(BodyState.LastLiveNeutralHmdYawDeg, HmdRotation.Yaw)) / DeltaSeconds;
+		bSettled =
+			bCachedQuestHmdWorn &&
+			CachedQuestHmdWorld.Z > 120.0f &&
+			FMath::Abs(HmdRotation.Pitch) < 35.0f &&
+			PlanarSpeedCmSec < 40.0f &&
+			YawRateDegSec < 90.0f;
+	}
+	BodyState.bHasLiveNeutralHmdSample = true;
+	BodyState.LastLiveNeutralHmdPos = CachedQuestHmdWorld;
+	BodyState.LastLiveNeutralHmdYawDeg = HmdRotation.Yaw;
+
+	BodyState.LiveNeutralSettleSeconds = bSettled ? BodyState.LiveNeutralSettleSeconds + DeltaSeconds : 0.0f;
+	if (BodyState.LiveNeutralSettleSeconds < 1.0f)
+	{
+		return;
+	}
+
+	// Settled: this standing pose is the wearer's neutral. Re-zero every live reference.
+	BodyState.bLiveNeutralsReady = true;
+	BodyState.HmdHeightScaffold.Reset();
+	BodyState.HmdHeadYawNeutral.Reset();
+	BodyState.HipTwistNeutral.Reset();
+	BodyState.HipYawEstimator.Reset();
+	BodyState.bHasHmdLeanNeutral = false;
+	BodyState.HmdLeanNeutralXY = FVector2D::ZeroVector;
+	BodyState.bHasInitialBodyYawNeutral = false;
+	BodyState.InitialBodyYawNeutralDeg = 0.0f;
+	BodyState.bBodyTrackingYawLatched = false;
+	BodyState.bHasBodyTrackingCandidate = false;
+	BodyState.BodyTrackingHipsStableSeconds = 0.0f;
+	BodyState.LastBodyTrackingYawDeg = 0.0f;
+	BodyState.bHasSmoothedBodyYaw = false;
+	BodyState.SmoothedBodyYawDeg = 0.0f;
+	BodyState.PrevBodyYawSource = 0;
+}
+
+void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
+{
+	// Live pelvis lean + hip twist for worn-headset trials, used when spine retargeting is off
+	// (the proven live profile) so the body still follows the wearer's torso:
+	// - Lean pitch/roll comes from the HMD's planar displacement against a self-calibrating
+	//   neutral - leaning back moves the head backward metrically and the body follows, so the
+	//   first-person camera stays over the avatar's chest instead of drifting off it.
+	// - Twist yaw comes from the MediaPipe hip-line direction against its own neutral.
+	// Dataset replay, fused-pose evaluation, and spine-driven profiles keep pelvis ownership.
+	const bool bDriveLean = CVarMediaPipeDriveHmdLean.GetValueOnAnyThread() != 0 && bHasCachedQuestHmdPose;
+	const bool bDriveTwist = CVarMediaPipeDriveHipTwist.GetValueOnAnyThread() != 0 && bHasPoseFrame;
+	if ((!bDriveLean && !bDriveTwist) ||
+		bDriveSpine ||
+		!bHasReferencePose ||
+		!Pelvis.IsValidToEvaluate())
+	{
+		return;
+	}
+	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+		ShouldUseBodyFusionPoseForEvaluation())
+	{
+		return;
+	}
+	if (BodyState.bLiveNeutralGateArmed && !BodyState.bLiveNeutralsReady)
+	{
+		// Still donning the headset: nothing observed yet is a trustworthy neutral.
+		return;
+	}
+
+	const float NeutralHalfLife = FMath::Max(CVarMediaPipeLivePoseNeutralHalfLife.GetValueOnAnyThread(), 0.05f);
+	const bool bMirror = CVarMediaPipeLivePoseMirror.GetValueOnAnyThread() != 0;
+
+	// Body yaw is resolved FIRST: the closed-loop lean below is solved around the twisted
+	// torso, so a turned pelvis can never rotate the chest out from under the HMD (which is
+	// what put the camera back inside the body when twist was composed after the lean).
+	float TargetYawDeg = 0.0f;
+	bool bBodyTrackingHipsUsed = false;
+	if (bDriveTwist || bDriveLean)
+	{
+		// Primary pelvis yaw: the Quest runtime's own hips joint. Quest 3 inside-out body
+		// tracking observes the torso directly, so isolated hip twists register even when the
+		// head and the phone camera see nothing. The yaw is the horizontal heading drift of the
+		// joint's most-horizontal local axis (convention-free, and immune to the pitch/roll of
+		// bends); the neutral heading latches only after the heading has been stable so
+		// headset-donning noise never becomes the zero point.
+		const double NowSeconds = FPlatformTime::Seconds();
+		const double FullArmChainAgeSeconds = FullArmChain.TimestampSeconds >= 0.0
+			? NowSeconds - FullArmChain.TimestampSeconds
+			: -1.0;
+		const bool bBodyTrackingHipsFresh =
+			FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking &&
+			FullArmChain.bActive != 0 &&
+			FullArmChain.Hips.bOrientationValid != 0 &&
+			FullArmChainAgeSeconds >= 0.0 &&
+			FullArmChainAgeSeconds <= 0.3;
+		if (bBodyTrackingHipsFresh)
+		{
+			const FQuat HipsRotWorld = FullArmChain.Hips.WorldTransform.GetRotation();
+			if (BodyState.LastBodyTrackingHipsSampleSeconds > 0.0 &&
+				NowSeconds - BodyState.LastBodyTrackingHipsSampleSeconds > 1.0)
+			{
+				// Tracking gap: the runtime may have re-initialized the joint frame, so the
+				// neutral has to be re-latched (relative to the applied yaw, so no step).
+				BodyState.bBodyTrackingYawLatched = false;
+				BodyState.bHasBodyTrackingCandidate = false;
+			}
+			BodyState.LastBodyTrackingHipsSampleSeconds = NowSeconds;
+
+			if (!BodyState.bBodyTrackingYawLatched)
+			{
+				const int32 AxisIndex = MediaPipeBodySolverMath::SelectMostHorizontalAxis(HipsRotWorld);
+				float HeadingDeg = 0.0f;
+				if (AxisIndex != INDEX_NONE &&
+					MediaPipeBodySolverMath::TryGetAxisHeadingDeg(HipsRotWorld, AxisIndex, HeadingDeg))
+				{
+					const bool bCandidateHolds =
+						BodyState.bHasBodyTrackingCandidate &&
+						AxisIndex == BodyState.BodyTrackingHipsAxisIndex &&
+						FMath::Abs(FMath::FindDeltaAngleDegrees(
+							BodyState.BodyTrackingHipsCandidateHeadingDeg, HeadingDeg)) <= 8.0f;
+					if (!bCandidateHolds)
+					{
+						BodyState.bHasBodyTrackingCandidate = true;
+						BodyState.BodyTrackingHipsAxisIndex = AxisIndex;
+						BodyState.BodyTrackingHipsCandidateHeadingDeg = HeadingDeg;
+						BodyState.BodyTrackingHipsStableSeconds = 0.0f;
+					}
+					else
+					{
+						BodyState.BodyTrackingHipsStableSeconds += DeltaSeconds;
+						if (BodyState.BodyTrackingHipsStableSeconds >= 0.75f)
+						{
+							BodyState.BodyTrackingHipsNeutralHeadingDeg = FRotator::NormalizeAxis(
+								HeadingDeg -
+								(BodyState.bHasSmoothedBodyYaw ? BodyState.SmoothedBodyYawDeg : 0.0f));
+							BodyState.bBodyTrackingYawLatched = true;
+						}
+					}
+				}
+			}
+			if (BodyState.bBodyTrackingYawLatched)
+			{
+				float HeadingDeg = 0.0f;
+				if (MediaPipeBodySolverMath::TryGetAxisHeadingDeg(
+						HipsRotWorld, BodyState.BodyTrackingHipsAxisIndex, HeadingDeg))
+				{
+					BodyState.LastBodyTrackingYawDeg = FMath::Clamp(
+						FRotator::NormalizeAxis(HeadingDeg - BodyState.BodyTrackingHipsNeutralHeadingDeg),
+						-100.0f, 100.0f);
+
+					// Slow drift recenter: sustained near-zero yaw means the wearer is facing
+					// forward, so the neutral heading may creep toward the current heading to
+					// absorb IOBT tracking-space drift (max 0.5 deg/s - imperceptible). Held
+					// twists never qualify: yaw past the stillness band resets the clock.
+					if (FMath::Abs(BodyState.LastBodyTrackingYawDeg) < 10.0f)
+					{
+						BodyState.BodyYawRecenterStillSeconds += DeltaSeconds;
+						if (BodyState.BodyYawRecenterStillSeconds > 5.0f)
+						{
+							BodyState.BodyTrackingHipsNeutralHeadingDeg = MediaPipeBodySolverMath::ApproachAngleDeg(
+								BodyState.BodyTrackingHipsNeutralHeadingDeg,
+								HeadingDeg,
+								DeltaSeconds,
+								20.0f,
+								0.5f);
+						}
+					}
+					else
+					{
+						BodyState.BodyYawRecenterStillSeconds = 0.0f;
+					}
+				}
+				// else: a deep bend turned the latched axis vertical - hold the last yaw.
+				TargetYawDeg = BodyState.LastBodyTrackingYawDeg;
+				bBodyTrackingHipsUsed = true;
+			}
+		}
+	}
+	if (!bBodyTrackingHipsUsed && bDriveLean)
+	{
+		// Fallback body yaw: the slow neutral component of the HMD yaw is the wearer's facing;
+		// its drift from the session-start value turns the pelvis while the fast remainder
+		// stays head glance (the HMD head drive).
+		if (BodyState.HmdHeadYawNeutral.bHasNeutral)
+		{
+			if (!BodyState.bHasInitialBodyYawNeutral)
+			{
+				BodyState.InitialBodyYawNeutralDeg = BodyState.HmdHeadYawNeutral.NeutralYawDeg;
+				BodyState.bHasInitialBodyYawNeutral = true;
+			}
+			else if (BodyState.PrevBodyYawSource == 2)
+			{
+				// Body tracking just dropped out: re-zero so this source's first target equals
+				// the currently applied yaw instead of snapping to its own reference.
+				BodyState.InitialBodyYawNeutralDeg = FRotator::NormalizeAxis(
+					BodyState.HmdHeadYawNeutral.NeutralYawDeg -
+					(BodyState.bHasSmoothedBodyYaw ? BodyState.SmoothedBodyYawDeg : 0.0f));
+			}
+			TargetYawDeg = FMath::Clamp(
+				FMath::FindDeltaAngleDegrees(BodyState.InitialBodyYawNeutralDeg, BodyState.HmdHeadYawNeutral.NeutralYawDeg),
+				-90.0f, 90.0f);
+		}
+	}
+	if (!bBodyTrackingHipsUsed && bDriveTwist)
+	{
+		// Camera-observed hip twist rides on top of the fallback body yaw, estimated from
+		// FORESHORTENING: a front camera observes the planar hip-line width directly (it
+		// shrinks as cos(yaw) when the hips turn), which is far stronger than monocular hip
+		// depth. The depth delta only supplies the rotation sign, gated by frame hysteresis.
+		FVector LeftHipWorld = FVector::ZeroVector;
+		FVector RightHipWorld = FVector::ZeroVector;
+		if (IsMeasured((int32)EMediaPipePoseLandmark::LeftHip) &&
+			IsMeasured((int32)EMediaPipePoseLandmark::RightHip) &&
+			TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) &&
+			TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
+		{
+			const FVector HipLine = RightHipWorld - LeftHipWorld;
+			FVector SourceDepthAxis = PoseToWorldTransform.GetUnitAxis(EAxis::X);
+			SourceDepthAxis.Z = 0.0f;
+			SourceDepthAxis = SourceDepthAxis.GetSafeNormal();
+			if (SourceDepthAxis.IsNearlyZero())
+			{
+				SourceDepthAxis = FVector::ForwardVector;
+			}
+
+			MediaPipeBodySolverMath::FMediaPipeHipYawEstimatorInput HipYawInput;
+			HipYawInput.HipWidthCm = FVector2D(HipLine.X, HipLine.Y).Size();
+			HipYawInput.HipDepthDeltaCm = FVector::DotProduct(HipLine, SourceDepthAxis);
+			HipYawInput.DeltaSeconds = DeltaSeconds;
+			HipYawInput.MaxYawDeg = FMath::Max(CVarMediaPipeHipTwistMaxDeg.GetValueOnAnyThread(), 0.0f);
+			float HipResidualDeg = MediaPipeBodySolverMath::UpdateHipYawEstimator(
+				BodyState.HipYawEstimator, HipYawInput);
+			if (bMirror)
+			{
+				HipResidualDeg = -HipResidualDeg;
+			}
+			TargetYawDeg += HipResidualDeg;
+		}
+	}
+
+	// Every yaw source feeds ONE rate-limited state, so source switches and tracking dropouts
+	// walk the pelvis over a fraction of a second instead of snapping it.
+	BodyState.SmoothedBodyYawDeg = MediaPipeBodySolverMath::ApproachAngleDeg(
+		BodyState.bHasSmoothedBodyYaw ? BodyState.SmoothedBodyYawDeg : TargetYawDeg,
+		TargetYawDeg,
+		DeltaSeconds,
+		0.2f,
+		120.0f);
+	BodyState.bHasSmoothedBodyYaw = true;
+	BodyState.PrevBodyYawSource = bBodyTrackingHipsUsed ? 2 : (bDriveLean || bDriveTwist ? 1 : 0);
+	const float TwistYawDeg = BodyState.SmoothedBodyYawDeg;
+
+	BodyState.LastBodyYawDeg = TwistYawDeg;
+	BodyState.LastBodyYawSource = BodyState.PrevBodyYawSource;
+
+	FVector CompUp = TargetCompTransform.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();
+	if (CompUp.IsNearlyZero())
+	{
+		CompUp = FVector::UpVector;
+	}
+	const FQuat TwistComp(CompUp, FMath::DegreesToRadians(TwistYawDeg));
+
+	const float MaxLeanDeg = FMath::Max(CVarMediaPipeHmdLeanMaxDeg.GetValueOnAnyThread(), 0.0f);
+	const FVector CurrentPelvisComp = RefPelvisTranslationComp + BodyState.SmoothedPelvisOffsetComp;
+
+	FQuat LeanSwingComp = FQuat::Identity;
+	if (bDriveLean)
+	{
+		// Closed-loop lean: rotate the pelvis so the avatar's TWISTED reference pelvis->head
+		// line points at the actual HMD position mapped into the avatar's component frame. The
+		// camera stays 1:1 with the real head (never lag it); the body is solved to sit
+		// underneath it, so bending forward/back can no longer leave the camera inside the
+		// chest - at any body yaw, because the lean is solved after the twist. When the mapped
+		// HMD is implausible for this skeleton (a non-embodied reference avatar elsewhere in the
+		// room), fall back to the displacement-vs-neutral heuristic.
+		// The camera sits at the EYES, in front of the head bone; target the head bone behind
+		// the HMD along its view direction or a deep bend rotates the face/chest through the
+		// camera (the inside-the-body view).
+		const FQuat HmdRotComp = TargetCompTransform.InverseTransformRotation(CachedQuestHmdRotWorld);
+		const FVector HmdComp =
+			TargetCompTransform.InverseTransformPosition(CachedQuestHmdWorld) -
+			HmdRotComp.GetForwardVector() * FMath::Max(CVarMediaPipeHmdLeanEyeBackCm.GetValueOnAnyThread(), 0.0f);
+		const FVector RefTorso = (RefHeadPosComp - RefPelvisTranslationComp);
+		const FVector TwistedRefTorso = TwistComp.RotateVector(RefTorso);
+		const FVector DesiredTorso = HmdComp - CurrentPelvisComp;
+		const float PlanarDistanceCm = FVector2D(HmdComp.X - CurrentPelvisComp.X, HmdComp.Y - CurrentPelvisComp.Y).Size();
+		const bool bHmdMapsOntoAvatar =
+			RefTorso.Size() > 10.0f &&
+			DesiredTorso.Z > RefTorso.Size() * 0.25f &&
+			DesiredTorso.Size() < RefTorso.Size() * 2.5f &&
+			PlanarDistanceCm < 120.0f;
+
+		if (bHmdMapsOntoAvatar)
+		{
+			LeanSwingComp = FQuat::FindBetweenVectors(TwistedRefTorso.GetSafeNormal(), DesiredTorso.GetSafeNormal());
+		}
+		else
+		{
+			// Heuristic fallback: HMD planar displacement against a slow neutral, expressed in
+			// the wearer's average facing frame.
+			const FVector2D HmdPlanarXY(CachedQuestHmdWorld.X, CachedQuestHmdWorld.Y);
+			if (!BodyState.bHasHmdLeanNeutral)
+			{
+				BodyState.HmdLeanNeutralXY = HmdPlanarXY;
+				BodyState.bHasHmdLeanNeutral = true;
+			}
+			else if (DeltaSeconds > 0.0f)
+			{
+				const float Alpha = 1.0f - FMath::Pow(0.5f, DeltaSeconds / NeutralHalfLife);
+				BodyState.HmdLeanNeutralXY = FMath::Lerp(BodyState.HmdLeanNeutralXY, HmdPlanarXY, Alpha);
+			}
+
+			const FVector2D Displacement = HmdPlanarXY - BodyState.HmdLeanNeutralXY;
+			const float LeverCm = FMath::Max(
+				CachedQuestHmdWorld.Z * (1.0f - FMath::Clamp(CVarMediaPipeLegScaffoldHipFromHmdRatio.GetValueOnAnyThread(), 0.05f, 0.95f)),
+				30.0f);
+			const FVector LeanAxisWorld = FVector(-Displacement.Y, Displacement.X, 0.0f).GetSafeNormal();
+			if (!LeanAxisWorld.IsNearlyZero())
+			{
+				const float LeanDeg = FMath::RadiansToDegrees(FMath::Atan2(
+					FMath::Max(Displacement.Size() - 2.0f, 0.0f), LeverCm));
+				const FVector LeanAxisComp = TargetCompTransform.InverseTransformVectorNoScale(LeanAxisWorld).GetSafeNormal();
+				if (!LeanAxisComp.IsNearlyZero())
+				{
+					LeanSwingComp = FQuat(LeanAxisComp, FMath::DegreesToRadians(LeanDeg));
+				}
+			}
+		}
+
+		// Clamp the lean swing magnitude.
+		FVector SwingAxis = FVector::ZeroVector;
+		float SwingAngleRad = 0.0f;
+		LeanSwingComp.ToAxisAndAngle(SwingAxis, SwingAngleRad);
+		const float MaxLeanRad = FMath::DegreesToRadians(MaxLeanDeg);
+		if (SwingAngleRad > MaxLeanRad)
+		{
+			LeanSwingComp = FQuat(SwingAxis, MaxLeanRad);
+		}
+	}
+
+	// Twist first, then lean the twisted torso onto the HMD line: (Lean * Twist) * RefTorso ==
+	// DesiredTorso exactly, so the chest stays under the camera at any body yaw.
+	const FQuat TargetPelvisRotCS = ((LeanSwingComp * TwistComp) * RefPelvisComp).GetNormalized();
+	UpdateSmoothedRotation(
+		BodyState.bHasSmoothedPelvisRotCS,
+		BodyState.SmoothedPelvisRotCS,
+		TargetPelvisRotCS,
+		HalfLifeToAlpha(SpineRotationHalfLifeSeconds, DeltaSeconds));
+	ApplyRotationCS(CSPose, Pelvis, BodyState.SmoothedPelvisRotCS);
+}
+
+void FAnimNode_MediaPipePoseDriven::DriveHmdHeadCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
+{
+	// Live head follow: the avatar head tracks the worn HMD rotation. Pitch and roll apply
+	// directly; yaw is measured against a self-calibrating neutral so sustained body turns
+	// recenter while quick glances read as head yaw. Runs after DriveSpineCS so it owns the
+	// final head write when enabled. Dataset replay and fused-pose evaluation keep their own
+	// head ownership.
+	if (CVarMediaPipeDriveHmdHead.GetValueOnAnyThread() == 0 ||
+		!bHasCachedQuestHmdPose ||
+		!bHasReferencePose ||
+		!Head.IsValidToEvaluate())
+	{
+		return;
+	}
+	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+		ShouldUseBodyFusionPoseForEvaluation())
+	{
+		return;
+	}
+	if (BodyState.bLiveNeutralGateArmed && !BodyState.bLiveNeutralsReady)
+	{
+		// Still donning the headset: the yaw neutral must seed from the settled standing pose.
+		return;
+	}
+
+	const FRotator HmdRotation = CachedQuestHmdRotWorld.Rotator();
+	const float YawDeltaDeg = MediaPipeBodySolverMath::UpdateHmdHeadNeutralYaw(
+		BodyState.HmdHeadYawNeutral,
+		HmdRotation.Yaw,
+		DeltaSeconds,
+		FMath::Max(CVarMediaPipeHmdHeadYawNeutralHalfLife.GetValueOnAnyThread(), 0.05f));
+
+	const bool bMirror = CVarMediaPipeHmdHeadMirror.GetValueOnAnyThread() != 0;
+	const FRotator HeadDeltaRotation(
+		HmdRotation.Pitch,
+		bMirror ? -YawDeltaDeg : YawDeltaDeg,
+		bMirror ? -HmdRotation.Roll : HmdRotation.Roll);
+
+	FVector AvatarForwardPlanar = GetTargetForwardWorld();
+	AvatarForwardPlanar.Z = 0.0f;
+	AvatarForwardPlanar = AvatarForwardPlanar.GetSafeNormal();
+	if (AvatarForwardPlanar.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FQuat AvatarYawQuat = MakeQuatFromForwardUp(AvatarForwardPlanar, FVector::UpVector);
+	const FQuat HeadBasisWorld = (AvatarYawQuat * FQuat(HeadDeltaRotation)).GetNormalized();
+	const FVector HeadForwardComp =
+		TargetCompTransform.InverseTransformVectorNoScale(HeadBasisWorld.GetForwardVector()).GetSafeNormal();
+	const FVector HeadUpComp =
+		TargetCompTransform.InverseTransformVectorNoScale(HeadBasisWorld.GetUpVector()).GetSafeNormal();
+	if (HeadForwardComp.IsNearlyZero() || HeadUpComp.IsNearlyZero() ||
+		FVector::CrossProduct(HeadForwardComp, HeadUpComp).IsNearlyZero())
+	{
+		return;
+	}
+
+	const FQuat TargetHeadBasisComp = MakeQuatFromForwardUp(HeadForwardComp, HeadUpComp);
+	const FQuat TargetHeadRotCS = ((TargetHeadBasisComp * RefHeadBasisComp.Inverse()) * RefHeadComp).GetNormalized();
+	UpdateSmoothedRotation(
+		BodyState.bHasSmoothedHeadRotCS,
+		BodyState.SmoothedHeadRotCS,
+		TargetHeadRotCS,
+		HalfLifeToAlpha(HeadRotationHalfLifeSeconds, DeltaSeconds),
+		HeadRotationMaxStepDegrees);
+	ApplyRotationCS(CSPose, Head, BodyState.SmoothedHeadRotCS);
 }
 
 void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)

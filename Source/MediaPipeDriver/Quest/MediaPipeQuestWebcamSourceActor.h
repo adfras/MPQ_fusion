@@ -28,6 +28,11 @@ public:
 	void ConfigureCaptureDevice(const FString& InCaptureDeviceUrl, const FString& InDisplayName);
 	void ConfigureLowLoadDefaults(float MaxHz, const FString& ModelPath, int32 InputMaxDimension);
 
+	// Live preview texture with the tracked-bone overlay baked in (direct WMF capture path).
+	// Consumed by the in-VR tracking panel; null until the first preview frame is built.
+	UTexture2D* GetDirectPreviewTexture() const { return DirectPreviewTexture; }
+	FIntPoint GetDirectPreviewSize() const { return DirectPreviewSize; }
+
 	UPROPERTY(VisibleAnywhere, Category = "MediaPipe")
 	UMediaPipePoseTrackerComponent* PoseTracker = nullptr;
 

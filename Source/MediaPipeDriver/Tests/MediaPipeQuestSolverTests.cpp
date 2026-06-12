@@ -1275,6 +1275,188 @@ bool FMediaPipeQuestFingerSolverRestOffsetAutomationTest::RunTest(const FString&
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeQuestFingerSolverSplayClampAutomationTest,
+	"TestingKit5.MediaPipe.QuestFingerSolver.SplayClamp",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeQuestFingerSolverSplayClampAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeQuestFingerSolver;
+
+	// Finger pointing forward, curl plane vertical (hinge axis = right).
+	const FVector Hinge = FVector::RightVector;
+	const float Splay20Rad = FMath::DegreesToRadians(20.0f);
+	const FVector Splayed20 =
+		(FVector::ForwardVector * FMath::Cos(Splay20Rad) + Hinge * FMath::Sin(Splay20Rad)).GetSafeNormal();
+
+	// Zero allowance flattens the direction into the curl plane, preserving its in-plane part.
+	const FVector FlattenedDir = ClampQuestFingerSegmentSplay(Splayed20, Hinge, 0.0f);
+	TestTrue(TEXT("Zero splay allowance flattens into the curl plane"),
+		FMath::Abs(FVector::DotProduct(FlattenedDir, Hinge)) < 0.001f);
+	TestTrue(TEXT("The in-plane direction is preserved"),
+		FlattenedDir.Equals(FVector::ForwardVector, 0.001f));
+
+	// A nonzero allowance clamps to the limit with the original sign.
+	const FVector Clamped8 = ClampQuestFingerSegmentSplay(Splayed20, Hinge, 8.0f);
+	const float ClampedSplayDeg = FMath::RadiansToDegrees(
+		FMath::Asin(FMath::Clamp(FVector::DotProduct(Clamped8, Hinge), -1.0f, 1.0f)));
+	TestTrue(TEXT("Out-of-plane angle clamps to the allowance"),
+		FMath::IsNearlyEqual(ClampedSplayDeg, 8.0f, 0.1f));
+
+	// Negative splay clamps symmetrically.
+	const FVector SplayedNeg =
+		(FVector::ForwardVector * FMath::Cos(Splay20Rad) - Hinge * FMath::Sin(Splay20Rad)).GetSafeNormal();
+	const FVector ClampedNeg = ClampQuestFingerSegmentSplay(SplayedNeg, Hinge, 8.0f);
+	const float ClampedNegDeg = FMath::RadiansToDegrees(
+		FMath::Asin(FMath::Clamp(FVector::DotProduct(ClampedNeg, Hinge), -1.0f, 1.0f)));
+	TestTrue(TEXT("Negative splay clamps to the negative allowance"),
+		FMath::IsNearlyEqual(ClampedNegDeg, -8.0f, 0.1f));
+
+	// Directions within the allowance pass through untouched, curl angle included.
+	const float Curl50Rad = FMath::DegreesToRadians(50.0f);
+	const FVector Curled =
+		(FVector::ForwardVector * FMath::Cos(Curl50Rad) - FVector::UpVector * FMath::Sin(Curl50Rad)).GetSafeNormal();
+	const FVector CurledOut = ClampQuestFingerSegmentSplay(Curled, Hinge, 0.0f);
+	TestTrue(TEXT("Pure curl passes through a zero splay allowance"), CurledOut.Equals(Curled, 0.001f));
+
+	// Degenerate: a direction parallel to the hinge axis stays untouched.
+	const FVector Parallel = ClampQuestFingerSegmentSplay(Hinge, Hinge, 0.0f);
+	TestTrue(TEXT("A hinge-parallel direction is left alone"), Parallel.Equals(Hinge, 0.001f));
+
+	// Measure/apply round-trip: the neutral-relative path measures splay, subtracts the
+	// wearer's structural bias, and rebuilds with only the deliberate spread.
+	TestTrue(TEXT("Measured splay matches the constructed angle"),
+		FMath::IsNearlyEqual(MeasureQuestFingerSegmentSplayDeg(Splayed20, Hinge), 20.0f, 0.1f));
+	const FVector Rebuilt5 = ApplyQuestFingerSegmentSplayDeg(Splayed20, Hinge, 5.0f);
+	TestTrue(TEXT("Applied splay rebuilds the requested angle"),
+		FMath::IsNearlyEqual(MeasureQuestFingerSegmentSplayDeg(Rebuilt5, Hinge), 5.0f, 0.1f));
+	const FVector Rebuilt5InPlane = (Rebuilt5 - FVector::DotProduct(Rebuilt5, Hinge) * Hinge).GetSafeNormal();
+	TestTrue(TEXT("Applied splay preserves the in-plane curl direction"),
+		Rebuilt5InPlane.Equals(FVector::ForwardVector, 0.001f));
+	// Subtracting a structural bias equal to the measurement lands exactly in-plane: the
+	// avatar rests in its own rig-natural pose for any wearer.
+	const FVector NeutralRelative = ApplyQuestFingerSegmentSplayDeg(
+		Splayed20, Hinge, MeasureQuestFingerSegmentSplayDeg(Splayed20, Hinge) - 20.0f);
+	TestTrue(TEXT("A fully absorbed bias rests the finger in the curl plane"),
+		FMath::Abs(FVector::DotProduct(NeutralRelative, Hinge)) < 0.001f);
+	TestTrue(TEXT("Degenerate apply returns the direction unchanged"),
+		ApplyQuestFingerSegmentSplayDeg(Hinge, Hinge, 5.0f).Equals(Hinge, 0.001f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeQuestFingerSolverPairSeparationAutomationTest,
+	"TestingKit5.MediaPipe.QuestFingerSolver.PairSeparation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeQuestFingerSolverPairSeparationAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeQuestFingerSolver;
+
+	const FVector Axis = FVector::UpVector;
+	auto DirAtYawDeg = [](const float YawDeg)
+	{
+		const float Rad = FMath::DegreesToRadians(YawDeg);
+		return FVector(FMath::Cos(Rad), FMath::Sin(Rad), 0.0f);
+	};
+	auto SignedSeparationDeg = [&](const FVector& A, const FVector& B)
+	{
+		const FVector RawCross = FVector::CrossProduct(A, B);
+		const float UnsignedDeg = FMath::RadiansToDegrees(
+			FMath::Atan2(RawCross.Size(), FVector::DotProduct(A, B)));
+		return FVector::DotProduct(RawCross, Axis) >= 0.0f ? UnsignedDeg : -UnsignedDeg;
+	};
+
+	// A too-close pair is pushed apart symmetrically to the minimum.
+	FVector DirA = DirAtYawDeg(0.0f);
+	FVector DirB = DirAtYawDeg(2.0f);
+	EnforceQuestFingerPairSeparation(DirA, DirB, Axis, 6.0f);
+	TestTrue(TEXT("A too-close pair reaches the minimum separation"),
+		FMath::IsNearlyEqual(SignedSeparationDeg(DirA, DirB), 6.0f, 0.1f));
+	TestTrue(TEXT("The push is symmetric"),
+		FMath::IsNearlyEqual(SignedSeparationDeg(DirA, DirAtYawDeg(0.0f)), 2.0f, 0.1f));
+
+	// A CROSSED pair (negative signed angle - the interpenetration case) is uncrossed.
+	DirA = DirAtYawDeg(0.0f);
+	DirB = DirAtYawDeg(-4.0f);
+	EnforceQuestFingerPairSeparation(DirA, DirB, Axis, 6.0f);
+	TestTrue(TEXT("A crossed pair is uncrossed to the minimum separation"),
+		FMath::IsNearlyEqual(SignedSeparationDeg(DirA, DirB), 6.0f, 0.1f));
+
+	// An adequately separated pair is untouched.
+	DirA = DirAtYawDeg(0.0f);
+	DirB = DirAtYawDeg(12.0f);
+	EnforceQuestFingerPairSeparation(DirA, DirB, Axis, 6.0f);
+	TestTrue(TEXT("A separated pair is left untouched"),
+		DirA.Equals(DirAtYawDeg(0.0f), 0.001f) && DirB.Equals(DirAtYawDeg(12.0f), 0.001f));
+
+	// Curl is preserved: a curled-down too-close pair keeps its pitch while spreading.
+	const float CurlRad = FMath::DegreesToRadians(50.0f);
+	DirA = (DirAtYawDeg(0.0f) * FMath::Cos(CurlRad) - FVector::UpVector * FMath::Sin(CurlRad)).GetSafeNormal();
+	DirB = (DirAtYawDeg(2.0f) * FMath::Cos(CurlRad) - FVector::UpVector * FMath::Sin(CurlRad)).GetSafeNormal();
+	const float PitchBeforeA = FVector::DotProduct(DirA, FVector::UpVector);
+	EnforceQuestFingerPairSeparation(DirA, DirB, Axis, 6.0f);
+	TestTrue(TEXT("Separation about the pair axis preserves curl"),
+		FMath::IsNearlyEqual(FVector::DotProduct(DirA, FVector::UpVector), PitchBeforeA, 0.001f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeQuestFingerSolverPoseGateAutomationTest,
+	"TestingKit5.MediaPipe.QuestFingerSolver.PoseGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeQuestFingerSolverPoseGateAutomationTest::RunTest(const FString& Parameters)
+{
+	using namespace MediaPipeQuestFingerSolver;
+
+	const FMediaPipeQuestHandPoseGateSettings Settings; // 5.0/s reject, 1.5/s stable, 0.25 s recover
+	const float FrameDt = 1.0f / 60.0f;
+	FMediaPipeQuestHandPoseGateState State;
+
+	// A steady open hand passes.
+	TestFalse(TEXT("First sample passes"), UpdateQuestHandPoseGate(State, 0.05f, true, FrameDt, Settings));
+	TestFalse(TEXT("A steady pose passes"), UpdateQuestHandPoseGate(State, 0.06f, true, FrameDt, Settings));
+
+	// A real fast fist (~4 curl-units/s) passes every frame.
+	float Curl = 0.06f;
+	bool bAnyHeld = false;
+	for (int32 Frame = 0; Frame < 14; ++Frame)
+	{
+		Curl = FMath::Min(Curl + 4.0f * FrameDt, 1.0f);
+		bAnyHeld |= UpdateQuestHandPoseGate(State, Curl, true, FrameDt, Settings);
+	}
+	TestFalse(TEXT("A real fast fist is never held"), bAnyHeld);
+
+	// The measured tracking collapse (0.09 -> 1.00 in one ~0.1 s frame) is rejected...
+	State.Reset();
+	UpdateQuestHandPoseGate(State, 0.09f, true, 0.1f, Settings);
+	TestTrue(TEXT("A physically impossible snap is held"),
+		UpdateQuestHandPoseGate(State, 1.0f, true, 0.1f, Settings));
+	// ...and the new pose is accepted once it stays stable for the recovery window.
+	bool bHeld = true;
+	float HeldSeconds = 0.0f;
+	for (int32 Frame = 0; Frame < 30 && bHeld; ++Frame)
+	{
+		bHeld = UpdateQuestHandPoseGate(State, 1.0f, true, FrameDt, Settings);
+		HeldSeconds += FrameDt;
+	}
+	TestFalse(TEXT("A stable post-snap pose is eventually accepted"), bHeld);
+	TestTrue(TEXT("Recovery takes roughly the configured window"),
+		HeldSeconds >= 0.2f && HeldSeconds <= 0.4f);
+
+	// Untracked frames are always held; tracking return re-accepts through stability.
+	TestTrue(TEXT("An untracked frame is held"),
+		UpdateQuestHandPoseGate(State, 1.0f, false, FrameDt, Settings));
+	TestTrue(TEXT("The first tracked frame after a gap is still held"),
+		UpdateQuestHandPoseGate(State, 1.0f, true, FrameDt, Settings));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeQuestFingerSolverCurlAutomationTest,
 	"TestingKit5.MediaPipe.QuestFingerSolver.Curl",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

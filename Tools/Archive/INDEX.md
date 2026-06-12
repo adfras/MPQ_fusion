@@ -22,7 +22,6 @@ archiving (2026-06-11, REFACTOR_PLAN Phase 5). Active tooling lives one level up
 | `InspectMovementAvatarMap.py` | One-off movement avatar map inspection |
 | `InspectWallacePostProcess.py` | One-off Wallace post-process inspection |
 | `RunQuestWristObjectiveGate.ps1` | Quest wrist objective gate runner (wrist calibration era) |
-| `StartQuestMirrorEvidenceCapture.ps1` / `StopQuestMirrorEvidenceCapture.ps1` | Quest mirror evidence capture session control |
 | `TestMetaHumanBodyReplayExpectations.ps1` | MetaHuman body replay expectation tests (May 2026) |
 | `VerifyEmbodiedPawnArchitecture.py` | One-off embodied pawn architecture verification |
 | `analyze_vp2_manny_motion_signals.py` | VP2 Manny motion signal analysis (from removed `Scripts/`) |

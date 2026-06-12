@@ -156,6 +156,160 @@ namespace MediaPipeQuestFingerSolver
 		return (FQuat::FindBetweenNormals(BaseSegmentComp, TargetSegmentComp) * BaseRotCS).GetNormalized();
 	}
 
+	FVector ClampQuestFingerSegmentSplay(
+		const FVector& DesiredSegmentDir,
+		const FVector& CurlPlaneNormal,
+		const float MaxSplayDeg)
+	{
+		const FVector Dir = DesiredSegmentDir.GetSafeNormal();
+		const FVector Normal = CurlPlaneNormal.GetSafeNormal();
+		if (Dir.IsNearlyZero() || Normal.IsNearlyZero())
+		{
+			return DesiredSegmentDir;
+		}
+
+		const float OutOfPlaneSin = FMath::Clamp(FVector::DotProduct(Dir, Normal), -1.0f, 1.0f);
+		const float SplayDeg = FMath::RadiansToDegrees(FMath::Asin(OutOfPlaneSin));
+		const float MaxDeg = FMath::Max(MaxSplayDeg, 0.0f);
+		if (FMath::Abs(SplayDeg) <= MaxDeg)
+		{
+			return Dir;
+		}
+
+		const FVector InPlane = (Dir - OutOfPlaneSin * Normal).GetSafeNormal();
+		if (InPlane.IsNearlyZero())
+		{
+			// Degenerate: the direction is parallel to the hinge axis - no in-plane component
+			// to preserve, so leave it alone rather than inventing one.
+			return Dir;
+		}
+
+		const float AllowedRad = FMath::DegreesToRadians(MaxDeg) * FMath::Sign(SplayDeg);
+		return (InPlane * FMath::Cos(AllowedRad) + Normal * FMath::Sin(AllowedRad)).GetSafeNormal();
+	}
+
+	float MeasureQuestFingerSegmentSplayDeg(const FVector& SegmentDir, const FVector& CurlPlaneNormal)
+	{
+		const FVector Dir = SegmentDir.GetSafeNormal();
+		const FVector Normal = CurlPlaneNormal.GetSafeNormal();
+		if (Dir.IsNearlyZero() || Normal.IsNearlyZero())
+		{
+			return 0.0f;
+		}
+		return FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(FVector::DotProduct(Dir, Normal), -1.0f, 1.0f)));
+	}
+
+	FVector ApplyQuestFingerSegmentSplayDeg(
+		const FVector& SegmentDir,
+		const FVector& CurlPlaneNormal,
+		const float SplayDeg)
+	{
+		const FVector Dir = SegmentDir.GetSafeNormal();
+		const FVector Normal = CurlPlaneNormal.GetSafeNormal();
+		if (Dir.IsNearlyZero() || Normal.IsNearlyZero())
+		{
+			return SegmentDir;
+		}
+
+		const float OutOfPlaneSin = FMath::Clamp(FVector::DotProduct(Dir, Normal), -1.0f, 1.0f);
+		const FVector InPlane = (Dir - OutOfPlaneSin * Normal).GetSafeNormal();
+		if (InPlane.IsNearlyZero())
+		{
+			// Degenerate: parallel to the hinge axis - no in-plane component to preserve.
+			return Dir;
+		}
+
+		const float SplayRad = FMath::DegreesToRadians(FMath::Clamp(SplayDeg, -80.0f, 80.0f));
+		return (InPlane * FMath::Cos(SplayRad) + Normal * FMath::Sin(SplayRad)).GetSafeNormal();
+	}
+
+	bool UpdateQuestHandPoseGate(
+		FMediaPipeQuestHandPoseGateState& State,
+		const float MeanCurl01,
+		const bool bTracked,
+		const float DeltaSeconds,
+		const FMediaPipeQuestHandPoseGateSettings& Settings)
+	{
+		float RatePerSec = 0.0f;
+		if (State.bHasLastSample && DeltaSeconds > 0.0f)
+		{
+			RatePerSec = FMath::Abs(MeanCurl01 - State.LastSampleMeanCurl01) / DeltaSeconds;
+		}
+		State.LastSampleMeanCurl01 = MeanCurl01;
+		const bool bFirstSample = !State.bHasLastSample;
+		State.bHasLastSample = true;
+
+		if (!bTracked)
+		{
+			// Untracked frames carry stale or garbage joints: hold, and re-accept through the
+			// stability window once tracking returns.
+			State.bRecovering = true;
+			State.StableSeconds = 0.0f;
+			return true;
+		}
+		if (bFirstSample)
+		{
+			return false;
+		}
+
+		if (RatePerSec > FMath::Max(Settings.MaxCurlRatePerSec, 0.1f))
+		{
+			// Faster than fingers can physically move: tracking collapse, not motion.
+			State.bRecovering = true;
+			State.StableSeconds = 0.0f;
+			return true;
+		}
+
+		if (State.bRecovering)
+		{
+			if (RatePerSec <= FMath::Max(Settings.StableRatePerSec, 0.05f))
+			{
+				State.StableSeconds += DeltaSeconds;
+				if (State.StableSeconds >= FMath::Max(Settings.RecoverSeconds, 0.0f))
+				{
+					State.bRecovering = false;
+					State.StableSeconds = 0.0f;
+					return false;
+				}
+			}
+			else
+			{
+				State.StableSeconds = 0.0f;
+			}
+			return true;
+		}
+
+		return false;
+	}
+
+	void EnforceQuestFingerPairSeparation(
+		FVector& InOutDirA,
+		FVector& InOutDirB,
+		const FVector& SeparationAxis,
+		const float MinSeparationDeg)
+	{
+		const FVector Axis = SeparationAxis.GetSafeNormal();
+		const FVector DirA = InOutDirA.GetSafeNormal();
+		const FVector DirB = InOutDirB.GetSafeNormal();
+		if (Axis.IsNearlyZero() || DirA.IsNearlyZero() || DirB.IsNearlyZero() || MinSeparationDeg <= 0.0f)
+		{
+			return;
+		}
+
+		const FVector RawCross = FVector::CrossProduct(DirA, DirB);
+		const float UnsignedDeg = FMath::RadiansToDegrees(
+			FMath::Atan2(RawCross.Size(), FVector::DotProduct(DirA, DirB)));
+		const float SignedDeg = FVector::DotProduct(RawCross, Axis) >= 0.0f ? UnsignedDeg : -UnsignedDeg;
+		if (SignedDeg >= MinSeparationDeg)
+		{
+			return;
+		}
+
+		const float HalfDeficitDeg = (MinSeparationDeg - SignedDeg) * 0.5f;
+		InOutDirA = DirA.RotateAngleAxis(-HalfDeficitDeg, Axis).GetSafeNormal();
+		InOutDirB = DirB.RotateAngleAxis(HalfDeficitDeg, Axis).GetSafeNormal();
+	}
+
 	FVector GetQuestFingerSegmentWorld(const FQuestHandTrackingSnapshot& Snapshot, const bool bIsLeft, const int32 FingerIndex, const int32 SegmentIndex)
 	{
 		const int32 StartKey = static_cast<int32>(QuestFingerStartKeypoint(FingerIndex, SegmentIndex));

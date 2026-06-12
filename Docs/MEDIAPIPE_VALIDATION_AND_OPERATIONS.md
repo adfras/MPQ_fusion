@@ -1,6 +1,77 @@
 # MediaPipe Validation And Operations
 
-Status: consolidated 2026-06-05 for TestingKit5/UE 5.8.
+Status: consolidated 2026-06-05 for TestingKit5/UE 5.8. Updated 2026-06-12 with the live
+lower-body trial flow.
+
+## Live Lower-Body Trial (worn headset, 2026-06-12)
+
+One-command flow for trialing the replay-verified lower-body solve live with the Quest
+headset, Quest hands, and iPhone (Camo) MediaPipe tracking. The user presses VR Preview
+themselves; the placed self-view MetaHuman stands in front of the wearer
+(`bShowMediaPipeSelfView` on the embodied pawn), and a tracking panel floats to the wearer's
+right showing the live iPhone feed with the tracked-bone skeleton drawn on it.
+
+Run sheet:
+
+1. Confirm the iPhone/Camo source (see "Manny iPhone/Camo Baseline" for the camera index and
+   `mp.AutoQuestWebcamDirectWmfCapture 1`; the panel needs the direct WMF capture path).
+2. In the editor console: `mp.StartLiveLowerBodyTrial`
+3. Press VR Preview and stand in view of the iPhone camera.
+4. Observe: the self-view MetaHuman in front follows squats/steps with metric depth (HMD is
+   the squat-depth authority); the right-side panel shows which bones the camera is tracking
+   (green=tracked, amber=weak, red=stale; missing limbs draw nothing).
+5. `mp.StopLiveLowerBodyTrial` restores the stable-body live defaults.
+
+What the trial layer enables (CVar policy layer `LiveLowerBodyTrial`, priority CaptureScope,
+re-asserted after every live profile apply so the stable-body defaults cannot stomp it; an
+ACTIVE dataset replay still outranks it, and a stale finished-replay layer is dropped):
+legs/pelvis drive with FK root grounding and foot rotation (no leg IK), knee-pole
+suppression 0.6, grounded world-up feet, flat-foot pitch clamp, HMD squat scaffold
+(HmdWeight 1.0, FlexionWeight 0.8, MaxAdjust 40 deg), bend redistribution 0.8, scaffold
+diagnostics rows, HMD head follow (`mp.MediaPipeDriveHmdHead`: pitch/roll direct, yaw
+against a self-calibrating neutral, mirrored for the mirror-facing avatar via
+`mp.MediaPipeHmdHeadMirror`), HMD body lean (`mp.MediaPipeDriveHmdLean`: pelvis pitch/roll
+from the HMD's planar displacement so leaning back keeps the camera over the avatar's
+chest), hip twist (`mp.MediaPipeDriveHipTwist`: pelvis yaw primarily from the Quest body-tracking
+hips joint - heading drift of its most-horizontal axis, donning-gated neutral, slow
+recenter under sustained near-zero yaw - with the MediaPipe foreshortening estimator
+bounded by `mp.MediaPipeHipTwistMaxDeg` as the fallback; mirrored via
+`mp.MediaPipeLivePoseMirror`), lateral hip sway (pelvis translation from the body-tracking
+hips joint position against its gate-latched neutral, clamped by the planar offset ratio),
+responsiveness raises (`mp.MediaPipeAdaptivePoseBeta 0.45`,
+`mp.MediaPipeAdaptivePoseMaxPredictionMs 80` - less One-Euro lag on fast leg moves, longer
+prediction against phone transport latency), `mp.QuestVrTrackingPanel 1`, and the preview
+body skeleton (`mp.AutoQuestWebcamPreviewBodySkeleton`).
+
+Live neutral references (body-yaw zero, lean neutral, hips heading/position neutrals, HMD
+height baseline) latch through a DONNING GATE: nothing latches until the headset reports
+worn, sits above 120 cm, is roughly level, and has been still for 1 s - then every live
+neutral re-zeros to that settled standing pose (one-way per session). Scaffold rows log it
+as `neutralGate(armed=.. ready=.. settle=..)` plus `bodyYaw(deg=.. src=..)` and
+`sway(x=.. y=.. active=..)`.
+
+VR Preview auto-screenshots: the CodexAgent editor module starts
+`Tools/StartQuestMirrorEvidenceCapture.ps1` automatically on every VR-Preview PIE and saves
+Oculus Mirror captures under `Saved/QuestScreenshots/vrpreview_quest_mirror_<timestamp>/`.
+(The 2026-06-11 tools consolidation had archived that script, which silently disabled the
+auto-capture; it is restored to `Tools/` - keep it there.) The layer deliberately does NOT enable
+`mp.MediaPipeDriveSpine`: the 2026-06-12 worn-headset trial showed spine retargeting on top
+of the live profile stiffens the Quest-driven arms and parks the head on the camera-locked
+chest basis ("arms and head don't move"); upper-body ownership stays exactly on the proven
+live profile.
+
+For worn-headset evidence (screenshots/logs), run `Tools\CaptureMetaHumanQuestVrEvidence.ps1`
+alongside the VR Preview session.
+
+Tracking panel tuning: `mp.QuestVrTrackingPanelRightCm` (58), `ForwardCm` (95), `UpCm` (-6),
+`WidthCm` (44), `FollowHalfLife` (0.22). The panel is a world-space quad managed by the
+embodied pawn (`MP_LiveVrTrackingPanel`) textured with the direct webcam preview (overlay
+baked in), so the desktop spectator window and the headset see the same diagnostics.
+
+Evidence to watch in the log: `mp.MediaPipeLegScaffold actor=...` rows (HMD
+baseline/drop/alpha/confidence, fused share, per-leg flexion/redistribution/foot pitch,
+contact state). Lower-body quality conclusions still require the worn-headset confirmation,
+not desktop PIE alone.
 
 ## Build
 

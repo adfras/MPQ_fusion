@@ -11,6 +11,7 @@
 #include "MediaPipePoseLog.h"
 #include "MediaPipePoseDrivenSkeletalActor.h"
 #include "MediaPipePoseTrackerComponent.h"
+#include "MediaPipeCVarPolicy.h"
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestWebcamSourceActor.h"
 #include "MediaPipeRuntimeCVars.h"
@@ -572,6 +573,130 @@ void ReassertTrackingFusionReplayPoseCVarsIfActive(const TCHAR* ProfileName)
 		ProfileName);
 }
 
+// Live lower-body trial: brings the replay-verified lower-body solve (Quest/HMD metric squat
+// scaffold, grounded flexion correction, bend redistribution, flat-foot pitch) plus the in-VR
+// tracking panel to a worn-headset session. Armed with mp.StartLiveLowerBodyTrial before or
+// during VR Preview; the layer sits above live profiles in the CVar policy stack and is
+// re-asserted after every live profile apply so the stable-body defaults cannot stomp it.
+// The dataset-replay layer still outranks it.
+static const FName LiveLowerBodyTrialPolicyId(TEXT("LiveLowerBodyTrial"));
+
+void ApplyLiveLowerBodyTrialPolicyLayer()
+{
+	// A finished dataset replay leaves its higher-priority policy layer in the stack; if no
+	// replay is actually active, drop the stale layer so it cannot silently mute the live
+	// trial settings it also covers. An active replay keeps outranking the trial.
+	static const FName ReplayEvaluationPolicyId(TEXT("ReplayEvaluation"));
+	if (!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+		FMediaPipeCVarPolicyStack::Get().IsLayerActive(ReplayEvaluationPolicyId))
+	{
+		FMediaPipeCVarPolicyStack::Get().Remove(ReplayEvaluationPolicyId);
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("LiveLowerBodyTrial: removed stale ReplayEvaluation policy layer (no dataset replay is active)."));
+	}
+
+	FMediaPipeCVarPolicyLayer Layer;
+	Layer.PolicyId = LiveLowerBodyTrialPolicyId;
+	Layer.Priority = EMediaPipeCVarPolicyPriority::CaptureScope;
+	// Deliberately does NOT touch mp.MediaPipeDriveSpine: the live stable-body profile keeps
+	// spine retargeting off so the Quest arm solve and upper body stay on their proven path
+	// (the 2026-06-12 worn-headset trial showed spine-on stiffens arms/head live). The head
+	// follows the live HMD through mp.MediaPipeDriveHmdHead instead.
+	Layer.Settings = {
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdHead"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdLean"), 1),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeHmdLeanMaxDeg"), 55.0f),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHipTwist"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegReliabilityStabilize"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDrivePelvisTranslation"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveLegs"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeUseLegIK"), 0),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeUseLegIKFootPlant"), 0),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeUseFkRootGrounding"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveFootRotation"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegUseBasisRoll"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootForwardHysteresis"), 1),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"), 0.6f),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootGroundedWorldUp"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootGroundedPitchClamp"), 1),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldHmdWeight"), 1.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldFlexionWeight"), 0.8f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldFlexionMaxAdjustDeg"), 40.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"), 0.8f),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegScaffoldLog"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.QuestVrTrackingPanel"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.AutoQuestWebcamPreviewBodySkeleton"), 1),
+		// Responsiveness: the One-Euro conditioner's velocity beta trims filter lag exactly
+		// where it is felt (fast leg moves), and a longer prediction horizon cancels more of the
+		// phone->PC transport latency. Slow/held poses keep their default smoothness.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeAdaptivePoseBeta"), 0.45f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"), 80.0f),
+		// Finger overlap mitigations tried 2026-06-12 (splay clamps, pairwise separation, pose
+		// gate) are all DISABLED here after worn-headset testing: the separation metric is
+		// blind to lateral convergence between fingers at different curls, and the pose gate's
+		// rate threshold rejected real fist closes (visible twitching). The CVars remain for
+		// experiments; fingers run the accepted segment-direction defaults until a researched
+		// fix lands.
+	};
+	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
+}
+
+void ReassertLiveLowerBodyTrialIfArmed(const TCHAR* ProfileName)
+{
+	if (!FMediaPipeCVarPolicyStack::Get().IsLayerActive(LiveLowerBodyTrialPolicyId))
+	{
+		return;
+	}
+
+	ApplyLiveLowerBodyTrialPolicyLayer();
+	UE_LOG(LogMediaPipePose, Log,
+		TEXT("%s: live lower-body trial armed; re-asserted trial policy (legs/pelvis/spine on, HMD squat scaffold, bend redistribution, flat-foot pitch, VR tracking panel)."),
+		ProfileName);
+}
+
+FAutoConsoleCommand CmdStartLiveLowerBodyTrial(
+	TEXT("mp.StartLiveLowerBodyTrial"),
+	TEXT("Arm the live lower-body trial for worn-headset sessions: enables legs/pelvis/spine with the Quest/HMD metric squat scaffold, grounded flexion correction, bend redistribution, flat-foot pitch, scaffold diagnostics rows, and the in-VR tracking panel. Survives live profile re-applies; disarm with mp.StopLiveLowerBodyTrial."),
+	FConsoleCommandDelegate::CreateStatic([]()
+	{
+		ApplyLiveLowerBodyTrialPolicyLayer();
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.StartLiveLowerBodyTrial: armed. Press VR Preview (or continue the current session); legs, the HMD squat scaffold, and the right-side tracking panel are active. Watch mp.MediaPipeLegScaffold rows for source contributions."));
+	}));
+
+FAutoConsoleCommand CmdStopLiveLowerBodyTrial(
+	TEXT("mp.StopLiveLowerBodyTrial"),
+	TEXT("Disarm the live lower-body trial and restore the stable-body live defaults (legs/pelvis off, scaffold off, tracking panel hidden)."),
+	FConsoleCommandDelegate::CreateStatic([]()
+	{
+		FMediaPipeCVarPolicyStack::Get().Remove(LiveLowerBodyTrialPolicyId);
+		if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
+		{
+			FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThread();
+		}
+		else
+		{
+			SetConsoleInt(TEXT("mp.MediaPipeDriveHmdHead"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeDriveHmdLean"), 0);
+			SetConsoleFloat(TEXT("mp.MediaPipeHmdLeanMaxDeg"), 35.0f);
+			SetConsoleInt(TEXT("mp.MediaPipeDriveHipTwist"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeLegReliabilityStabilize"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeDrivePelvisTranslation"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeDriveLegs"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeUseFkRootGrounding"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeDriveFootRotation"), 0);
+			SetConsoleFloat(TEXT("mp.MediaPipeLegKneeBackwardPoleSuppression"), 0.0f);
+			SetConsoleInt(TEXT("mp.MediaPipeFootGroundedWorldUp"), 0);
+			SetConsoleInt(TEXT("mp.MediaPipeFootGroundedPitchClamp"), 0);
+			SetConsoleFloat(TEXT("mp.MediaPipeLegScaffoldHmdWeight"), 0.0f);
+			SetConsoleFloat(TEXT("mp.MediaPipeLegScaffoldFlexionWeight"), 0.0f);
+			SetConsoleFloat(TEXT("mp.MediaPipeLegScaffoldBendRedistributionWeight"), 0.0f);
+			SetConsoleInt(TEXT("mp.MediaPipeLegScaffoldLog"), 0);
+		}
+		SetConsoleInt(TEXT("mp.QuestVrTrackingPanel"), 0);
+		UE_LOG(LogMediaPipePose, Log, TEXT("mp.StopLiveLowerBodyTrial: disarmed; stable-body live defaults restored."));
+	}));
+
 void ApplyStableMediaPipeRetargetProfile()
 {
 	// Same MediaPipe-side baseline used by mp.PlayMediaPipeVisualCycle. Keep this
@@ -623,6 +748,7 @@ void ApplyStableMediaPipeRetargetProfile()
 	SetConsoleInt(TEXT("mp.MediaPipeFootForwardHysteresis"), 1);
 
 	ReassertTrackingFusionReplayPoseCVarsIfActive(TEXT("ApplyStableMediaPipeRetargetProfile"));
+	ReassertLiveLowerBodyTrialIfArmed(TEXT("ApplyStableMediaPipeRetargetProfile"));
 }
 
 void ApplyMediaPipeOnlyEmbodiedWebcamProfile()
@@ -3629,6 +3755,7 @@ void ApplyAutoQuestProfile()
 		GetConsoleFloatValue(TEXT("mp.QuestWristMaxRelativeDeltaCm")));
 
 	ReassertTrackingFusionReplayPoseCVarsIfActive(TEXT("ApplyAutoQuestProfile"));
+	ReassertLiveLowerBodyTrialIfArmed(TEXT("ApplyAutoQuestProfile"));
 }
 
 void SpawnAutoQuestWebcamHands(UWorld* World)
