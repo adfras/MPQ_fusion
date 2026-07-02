@@ -444,6 +444,78 @@ namespace MediaPipeBodySolverMath
 		float HalfLifeSeconds,
 		float MaxRateDegPerSec);
 
+	// Continuous ground-contact blend for the grounded foot-pitch solve: 1 at/below the acquire
+	// height, fading linearly to 0 at the release height. A binary near-floor gate snaps the
+	// foot between the solved and raw pitch when a foreshortened foot (lunge back foot) jitters
+	// around the threshold; this fades instead.
+	MEDIAPIPEDRIVER_API float ComputeFootGroundBlend01(
+		float HeightAboveFloorCm,
+		float AcquireHeightCm,
+		float ReleaseHeightCm);
+
+	// Direction approach with an exponential ease and a hard turn-rate limit. The foot-forward
+	// selection falls back between distinct sources (raw ankle->toe, last stable heading,
+	// torso forward) and each switch is instantaneous; routing the chosen direction through
+	// this keeps the applied foot heading physically continuous no matter which source fired.
+	MEDIAPIPEDRIVER_API FVector ApproachDirection(
+		const FVector& CurrentDir,
+		const FVector& TargetDir,
+		float DeltaSeconds,
+		float HalfLifeSeconds,
+		float MaxTurnDegPerSec);
+
+	// Anatomical foot-heading bound: clamps a direction's PLANAR heading into a band around the
+	// reference (torso) heading, preserving its vertical (pitch) component. A foot is attached
+	// to a body - it cannot yaw freely - so bounding the heading makes propeller spins and
+	// heading snaps geometrically impossible regardless of landmark noise. A rate limiter alone
+	// cannot do this: chasing a sign-flipping target turns it into continuous rotation
+	// (observed live 2026-06-13).
+	MEDIAPIPEDRIVER_API FVector ClampPlanarHeadingToReference(
+		const FVector& Dir,
+		const FVector& ReferenceForward,
+		float MaxDeltaDeg);
+
+	// Distributes the scaffold's pelvis-drop flexion correction by each leg's MEASURED bend
+	// share (squared, normalized to the pair mean, clamped [0,2]). A lunge drops the HMD just
+	// like a squat, but its bend is asymmetric: the camera sees which knee is doing the bending
+	// (the intent), so that leg takes the compression and the straight leg stays straight.
+	// Symmetric bends return 1/1 (squats unchanged).
+	MEDIAPIPEDRIVER_API void ComputeLegFlexionShareWeights(
+		float MeasuredFlexionLDeg,
+		float MeasuredFlexionRDeg,
+		float& OutWeightL,
+		float& OutWeightR);
+
+	// Depth-robust segment length: a decaying minimum. Monocular depth noise INFLATES the
+	// apparent length of a limb segment pointing toward the camera; the running minimum tracks
+	// the true length, the slow decay lets it re-adapt upward, and the floor against the
+	// current observation bounds underestimation.
+	MEDIAPIPEDRIVER_API float UpdateDecayingMinLengthCm(
+		bool& bInOutHasState,
+		float& InOutLenCm,
+		float ObservedLenCm,
+		float DeltaSeconds,
+		float DecayPerSec);
+
+	// Re-pitches a direction so its vertical component matches the MEASURED landmark vertical
+	// delta over a depth-robust length, preserving the planar heading. The image-plane vertical
+	// is monocular capture's reliable axis; depth inflation shrinks a normalized direction's
+	// elevation (a raised knee reads low). Near-vertical directions with no meaningful heading
+	// are returned unchanged.
+	MEDIAPIPEDRIVER_API FVector RepitchDirectionFromVerticalRatio(
+		const FVector& Dir,
+		float MeasuredDeltaZCm,
+		float StableLenCm);
+
+	// Anatomical adduction bound: limits a thigh direction's travel past vertical TOWARD the
+	// body midline. With the reliability stabilizer off, monocular drift walks the knees into
+	// each other (observed live 2026-07-02); bounding adduction stops that without damping any
+	// other motion. Abduction (outward) is never limited.
+	MEDIAPIPEDRIVER_API FVector ClampDirectionAdduction(
+		const FVector& Dir,
+		const FVector& OutwardDir,
+		float MaxAdductionDeg);
+
 	MEDIAPIPEDRIVER_API FVector LerpNormalized(const FVector& A, const FVector& B, float Alpha);
 	MEDIAPIPEDRIVER_API FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up);
 	MEDIAPIPEDRIVER_API FQuat MakeSemanticBodyBasis(const FMediaPipeSemanticBodyBasisInput& Input);

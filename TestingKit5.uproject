@@ -87,6 +87,14 @@
 		{
 			"Name": "ModelContextProtocol",
 			"Enabled": true
+		},
+		{
+			"Name": "Bridge",
+			"Enabled": false
+		},
+		{
+			"Name": "Fab",
+			"Enabled": false
 		}
 	]
 }

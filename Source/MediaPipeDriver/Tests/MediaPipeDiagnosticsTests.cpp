@@ -756,6 +756,13 @@ bool FMediaPipeLiveLowerBodyTrialCommandAutomationTest::RunTest(const FString& P
 		TEXT("mp.AutoQuestWebcamPreviewBodySkeleton"),
 		TEXT("mp.MediaPipeAdaptivePoseBeta"),
 		TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"),
+		TEXT("mp.MediaPipeAdaptivePoseMinCutoff"),
+		TEXT("mp.MediaPipeFootGroundedBlend"),
+		TEXT("mp.MediaPipeFootForwardSmoothing"),
+		TEXT("mp.MediaPipeFootHeadingClamp"),
+		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),
+		TEXT("mp.MediaPipeLegSagittalRepitch"),
+		TEXT("mp.MediaPipeLegAdductionClamp"),
 	};
 
 	TArray<TPair<IConsoleVariable*, FString>> Snapshots;
@@ -794,11 +801,26 @@ bool FMediaPipeLiveLowerBodyTrialCommandAutomationTest::RunTest(const FString& P
 	TestEqual(TEXT("Trial leans the body from HMD displacement"), IntValue(TEXT("mp.MediaPipeDriveHmdLean")), 1);
 	TestEqual(TEXT("Trial widens the lean clamp for deep bends"), FloatValue(TEXT("mp.MediaPipeHmdLeanMaxDeg")), 55.0f);
 	TestEqual(TEXT("Trial twists the pelvis from the hip line"), IntValue(TEXT("mp.MediaPipeDriveHipTwist")), 1);
-	TestEqual(TEXT("Trial stabilizes legs on low reliability"), IntValue(TEXT("mp.MediaPipeLegReliabilityStabilize")), 1);
+	TestEqual(TEXT("Trial drives legs at full extent (stabilizer off per 2026-06-13 acceptance)"),
+		IntValue(TEXT("mp.MediaPipeLegReliabilityStabilize")), 0);
 	TestEqual(TEXT("Trial raises the One-Euro velocity beta for fast-move responsiveness"),
 		FloatValue(TEXT("mp.MediaPipeAdaptivePoseBeta")), 0.45f);
 	TestEqual(TEXT("Trial widens the pose prediction horizon"),
 		FloatValue(TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs")), 80.0f);
+	TestEqual(TEXT("Trial reduces low-speed smoothing for full-extent legs"),
+		FloatValue(TEXT("mp.MediaPipeAdaptivePoseMinCutoff")), 2.6f);
+	TestEqual(TEXT("Trial fades grounded foot pitch continuously (no lunge back-foot snap)"),
+		IntValue(TEXT("mp.MediaPipeFootGroundedBlend")), 1);
+	TestEqual(TEXT("Trial rate-limits the applied foot forward (no forward-source snaps)"),
+		IntValue(TEXT("mp.MediaPipeFootForwardSmoothing")), 1);
+	TestEqual(TEXT("Trial bounds the foot heading anatomically (no propeller spins)"),
+		IntValue(TEXT("mp.MediaPipeFootHeadingClamp")), 1);
+	TestEqual(TEXT("Trial distributes pelvis-drop flexion by measured bend (lunges stay lunges)"),
+		IntValue(TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion")), 1);
+	TestEqual(TEXT("Trial re-pitches leg segments from measured verticals (full-height knee raises)"),
+		IntValue(TEXT("mp.MediaPipeLegSagittalRepitch")), 1);
+	TestEqual(TEXT("Trial bounds thigh adduction (knees cannot drift together)"),
+		IntValue(TEXT("mp.MediaPipeLegAdductionClamp")), 1);
 	TestEqual(TEXT("Trial leaves the finger mitigations off (worn-headset regressions)"),
 		IntValue(TEXT("mp.QuestFingerPairSeparation")), 0);
 	TestEqual(TEXT("Trial leaves the hand pose gate off (rejected real fist closes)"),

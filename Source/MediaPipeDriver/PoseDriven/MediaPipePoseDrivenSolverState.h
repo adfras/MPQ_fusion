@@ -307,6 +307,17 @@ struct FMediaPipeLegSolverState
 	float LastShinTiltDeg = 0.0f;
 	float LastFootPitchAppliedDeg = 0.0f;
 	float LastFootExtraDownPitchDeg = 0.0f;
+	// Continuous ground-contact factor for the grounded foot-pitch blend (mp.MediaPipeFootGroundedBlend).
+	bool bHasSmoothedFootGroundBlend = false;
+	float SmoothedFootGroundBlend01 = 0.0f;
+	// Rate-limited applied foot-forward direction (mp.MediaPipeFootForwardSmoothing).
+	bool bHasSmoothedAppliedFootForward = false;
+	FVector SmoothedAppliedFootForwardWorld = FVector::ZeroVector;
+	// Depth-robust segment lengths for the sagittal re-pitch (mp.MediaPipeLegSagittalRepitch).
+	bool bHasThighLenEstimate = false;
+	float ThighLenEstimateCm = 0.0f;
+	bool bHasCalfLenEstimate = false;
+	float CalfLenEstimateCm = 0.0f;
 
 	void ResetFootPlant()
 	{
@@ -336,6 +347,14 @@ struct FMediaPipeLegSolverState
 		LastShinTiltDeg = 0.0f;
 		LastFootPitchAppliedDeg = 0.0f;
 		LastFootExtraDownPitchDeg = 0.0f;
+		bHasSmoothedFootGroundBlend = false;
+		SmoothedFootGroundBlend01 = 0.0f;
+		bHasSmoothedAppliedFootForward = false;
+		SmoothedAppliedFootForwardWorld = FVector::ZeroVector;
+		bHasThighLenEstimate = false;
+		ThighLenEstimateCm = 0.0f;
+		bHasCalfLenEstimate = false;
+		CalfLenEstimateCm = 0.0f;
 	}
 
 	void ResetRotationSmoothing()

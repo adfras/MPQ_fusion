@@ -247,6 +247,47 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 		}
 	}
+
+	// Sagittal re-pitch: monocular depth noise INFLATES the apparent femur/shin length when a
+	// segment points toward the camera, shrinking its normalized elevation - a raised knee
+	// reads low (observed live 2026-07-02). The landmarks' vertical deltas are image-plane
+	// reliable, so re-pitch each segment to match its measured vertical drop over a
+	// depth-robust decaying-minimum length, preserving the planar heading. Live-trial gated.
+	if (CVarMediaPipeLegSagittalRepitch.GetValueOnAnyThread() != 0)
+	{
+		FMediaPipeLegSolverState& RepitchLegState = bIsLeft ? LeftLegState : RightLegState;
+		const float ObservedThighLenCm = (KneeWorld - HipWorld).Size();
+		const float ObservedCalfLenCm = (AnkleWorld - KneeWorld).Size();
+		const float LengthDecayPerSec = FMath::Max(
+			CVarMediaPipeLegSagittalLengthDecayPerSec.GetValueOnAnyThread(), 0.0f);
+		if (ObservedThighLenCm > 5.0f && ObservedCalfLenCm > 5.0f)
+		{
+			const float StableThighLenCm = MediaPipeBodySolverMath::UpdateDecayingMinLengthCm(
+				RepitchLegState.bHasThighLenEstimate, RepitchLegState.ThighLenEstimateCm,
+				ObservedThighLenCm, DeltaSeconds, LengthDecayPerSec);
+			const float StableCalfLenCm = MediaPipeBodySolverMath::UpdateDecayingMinLengthCm(
+				RepitchLegState.bHasCalfLenEstimate, RepitchLegState.CalfLenEstimateCm,
+				ObservedCalfLenCm, DeltaSeconds, LengthDecayPerSec);
+			DesiredThighWorld = MediaPipeBodySolverMath::RepitchDirectionFromVerticalRatio(
+				DesiredThighWorld, KneeWorld.Z - HipWorld.Z, StableThighLenCm);
+			DesiredCalfWorld = MediaPipeBodySolverMath::RepitchDirectionFromVerticalRatio(
+				DesiredCalfWorld, AnkleWorld.Z - KneeWorld.Z, StableCalfLenCm);
+		}
+	}
+
+	// Anatomical adduction bound: with the reliability stabilizer off (full-extent legs),
+	// monocular drift walks the knees into each other (observed live 2026-07-02). Bounding the
+	// thigh's travel past vertical toward the midline stops that without damping any other
+	// motion; abduction stays unlimited. Live-trial gated.
+	if (CVarMediaPipeLegAdductionClamp.GetValueOnAnyThread() != 0 &&
+		!OutwardWorldSeed.IsNearlyZero())
+	{
+		DesiredThighWorld = MediaPipeBodySolverMath::ClampDirectionAdduction(
+			DesiredThighWorld,
+			OutwardWorldSeed,
+			CVarMediaPipeLegAdductionMaxDeg.GetValueOnAnyThread());
+	}
+
 	const FVector RawDesiredFootWorld = bCanDriveFoot
 		? (bHeelMeasured && !(ToeWorld - HeelWorld).IsNearlyZero()
 			? (ToeWorld - HeelWorld).GetSafeNormal()
@@ -372,6 +413,24 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		BodyState.ScaffoldHmdShare01 > KINDA_SMALL_NUMBER &&
 		(bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor))
 	{
+		// Asymmetric distribution: the HMD drop says HOW FAR the body lowered; the camera's
+		// per-leg measured bend says WHICH leg is doing the bending. Equal distribution bends
+		// the straight back leg of a lunge into a squat (observed live 2026-06-13); weighting
+		// by the measured bend share keeps lunges asymmetric while squats stay symmetric.
+		float FlexionShareWeight = 1.0f;
+		if (CVarMediaPipeLegScaffoldAsymmetricFlexion.GetValueOnAnyThread() != 0)
+		{
+			const FMediaPipeLegSolverState& OtherLegState = bIsLeft ? RightLegState : LeftLegState;
+			float WeightL = 1.0f;
+			float WeightR = 1.0f;
+			MediaPipeBodySolverMath::ComputeLegFlexionShareWeights(
+				bIsLeft ? SideLegState.LastFlexionMeasuredDeg : OtherLegState.LastFlexionMeasuredDeg,
+				bIsLeft ? OtherLegState.LastFlexionMeasuredDeg : SideLegState.LastFlexionMeasuredDeg,
+				WeightL,
+				WeightR);
+			FlexionShareWeight = bIsLeft ? WeightL : WeightR;
+		}
+
 		MediaPipeBodySolverMath::FMediaPipeGroundedLegFlexionInput FlexionInput;
 		FlexionInput.ThighDirWorld = DesiredThighWorld;
 		FlexionInput.CalfDirWorld = DesiredCalfWorld;
@@ -382,7 +441,8 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		FlexionInput.TargetPelvisDropCm = BodyState.ScaffoldPelvisDropCm;
 		FlexionInput.MaxAdjustDeg =
 			FMath::Max(CVarMediaPipeLegScaffoldFlexionMaxAdjustDeg.GetValueOnAnyThread(), 0.0f);
-		FlexionInput.AdjustWeight01 = ScaffoldFlexionWeight * BodyState.ScaffoldHmdShare01;
+		FlexionInput.AdjustWeight01 = FMath::Clamp(
+			ScaffoldFlexionWeight * BodyState.ScaffoldHmdShare01 * FlexionShareWeight, 0.0f, 1.0f);
 		FlexionInput.BendFallbackNormalWorld =
 			FVector::CrossProduct(LegForwardWorld, DesiredThighWorld).GetSafeNormal();
 		const MediaPipeBodySolverMath::FMediaPipeGroundedLegFlexionResult FlexionResult =
@@ -458,11 +518,18 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		const float PlanarFootForwardLength = RawPlanarFootForward.Size();
 		const bool bFootForwardTooVertical = FMath::Abs(FVector::DotProduct(DesiredFootWorld, FootPlaneUpWorld)) >= VerticalDotThreshold;
 		const bool bFootPlanarTooShort = PlanarFootForwardLength <= PlanarMinLength;
+		// A LIFTED foot may genuinely point toes-down: planarizing it merely for being vertical
+		// renders a horizontal foot during knee raises (observed live 2026-06-13). With the
+		// ground-blend feature on, vertical/short directions force planarization only while the
+		// foot is near its observed floor; with it off the legacy behavior is unchanged.
+		const bool bLiftedVerticalAllowed =
+			CVarMediaPipeFootGroundedBlend.GetValueOnAnyThread() != 0 &&
+			!bCurrentSourceFootGrounded &&
+			!bNearObservedFloorForRelease;
 		const bool bShouldPlanarizeFootForward =
 			bCurrentSourceFootGrounded ||
 			bNearObservedFloorForRelease ||
-			bFootForwardTooVertical ||
-			bFootPlanarTooShort;
+			((bFootForwardTooVertical || bFootPlanarTooShort) && !bLiftedVerticalAllowed);
 		const FVector PlanarFootForward = RawPlanarFootForward.GetSafeNormal();
 		if (bShouldPlanarizeFootForward && !PlanarFootForward.IsNearlyZero())
 		{
@@ -513,9 +580,41 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	// high on the ankle and its raw axis pitch is useless for ground contact.
 	SideLegState.LastFootPitchAppliedDeg = 0.0f;
 	SideLegState.LastFootExtraDownPitchDeg = 0.0f;
+	// The legacy gate is BINARY on the near-floor flag: a lunge's foreshortened back foot
+	// jitters its measured height around the release threshold, snapping the foot between the
+	// solved and raw pitch (measured live 2026-06-13). With mp.MediaPipeFootGroundedBlend the
+	// solve fades continuously by height above the observed floor instead (time-smoothed);
+	// with it off this block is byte-identical to the legacy behavior for replay stability.
+	const bool bUseFootGroundedBlend = CVarMediaPipeFootGroundedBlend.GetValueOnAnyThread() != 0;
+	float FootGroundBlend01 = (bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor) ? 1.0f : 0.0f;
+	if (bUseFootGroundedBlend)
+	{
+		const float TargetBlend01 = MediaPipeBodySolverMath::ComputeFootGroundBlend01(
+			HeightAboveObservedFloorCm, AcquireHeightCm, FootPlantReleaseHeightCm);
+		if (!SideLegState.bHasSmoothedFootGroundBlend)
+		{
+			SideLegState.SmoothedFootGroundBlend01 = TargetBlend01;
+			SideLegState.bHasSmoothedFootGroundBlend = true;
+		}
+		else
+		{
+			// Asymmetric: ground fast (planting must feel instant), release slow (upward
+			// landmark noise spikes on the camera-far foot must not snap the plant away;
+			// a genuine lift keeps rising and takes the handover after the release delay).
+			const bool bReleasing = TargetBlend01 < SideLegState.SmoothedFootGroundBlend01;
+			const float BlendAlpha = HalfLifeToAlpha(
+				FMath::Max(bReleasing
+					? CVarMediaPipeFootGroundedBlendReleaseHalfLife.GetValueOnAnyThread()
+					: CVarMediaPipeFootGroundedBlendHalfLife.GetValueOnAnyThread(), 0.0f),
+				DeltaSeconds);
+			SideLegState.SmoothedFootGroundBlend01 = FMath::Lerp(
+				SideLegState.SmoothedFootGroundBlend01, TargetBlend01, BlendAlpha);
+		}
+		FootGroundBlend01 = SideLegState.SmoothedFootGroundBlend01;
+	}
 	if (bCanDriveFoot &&
 		CVarMediaPipeFootGroundedPitchClamp.GetValueOnAnyThread() != 0 &&
-		(bCurrentSourceFootGrounded || bCurrentSourceFootNearFloor))
+		FootGroundBlend01 > KINDA_SMALL_NUMBER)
 	{
 		if (bHeelMeasured)
 		{
@@ -545,9 +644,53 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			FMath::Max(CVarMediaPipeFootGroundedMaxExtraDownPitchDeg.GetValueOnAnyThread(), 0.0f);
 		const MediaPipeBodySolverMath::FMediaPipeGroundedFootPitchResult FootPitchResult =
 			MediaPipeBodySolverMath::SolveGroundedFootPitch(FootPitchInput);
-		FootForwardForRotationWorld = FootPitchResult.FootForwardWorld;
+		FootForwardForRotationWorld = bUseFootGroundedBlend
+			? FMath::Lerp(FootForwardForRotationWorld, FootPitchResult.FootForwardWorld, FootGroundBlend01).GetSafeNormal()
+			: FootPitchResult.FootForwardWorld;
 		SideLegState.LastFootPitchAppliedDeg = FootPitchResult.AppliedPitchDeg;
 		SideLegState.LastFootExtraDownPitchDeg = FootPitchResult.ExtraDownPitchDeg;
+	}
+
+	// Anatomical heading bound FIRST: a foot attached to a body cannot yaw freely, so the
+	// applied heading is clamped into a band around the torso heading. This is what actually
+	// kills propeller spins - the rate limiter below would otherwise CHASE a sign-flipping
+	// direction estimate into continuous rotation (observed live 2026-06-13).
+	if (bCanDriveFoot &&
+		bHasLegTorsoBasis &&
+		CVarMediaPipeFootHeadingClamp.GetValueOnAnyThread() != 0 &&
+		!FootForwardForRotationWorld.IsNearlyZero())
+	{
+		FootForwardForRotationWorld = MediaPipeBodySolverMath::ClampPlanarHeadingToReference(
+			FootForwardForRotationWorld,
+			LegForwardWorld,
+			CVarMediaPipeFootHeadingClampMaxDeg.GetValueOnAnyThread());
+	}
+
+	// The foot-forward selection above switches INSTANTLY between distinct fallback sources
+	// (raw ankle->toe, last stable heading, torso forward) when the foreshortened back foot's
+	// landmarks jitter across their validity thresholds - the residual lunge snap (2026-06-13).
+	// Route the chosen direction through a rate-limited ease so every switch becomes a
+	// physically plausible turn. Live-trial gated; replay stays byte-stable.
+	if (bCanDriveFoot &&
+		CVarMediaPipeFootForwardSmoothing.GetValueOnAnyThread() != 0 &&
+		!FootForwardForRotationWorld.IsNearlyZero())
+	{
+		if (!SideLegState.bHasSmoothedAppliedFootForward ||
+			SideLegState.SmoothedAppliedFootForwardWorld.IsNearlyZero())
+		{
+			SideLegState.SmoothedAppliedFootForwardWorld = FootForwardForRotationWorld.GetSafeNormal();
+			SideLegState.bHasSmoothedAppliedFootForward = true;
+		}
+		else
+		{
+			SideLegState.SmoothedAppliedFootForwardWorld = MediaPipeBodySolverMath::ApproachDirection(
+				SideLegState.SmoothedAppliedFootForwardWorld,
+				FootForwardForRotationWorld,
+				DeltaSeconds,
+				FMath::Max(CVarMediaPipeFootForwardSmoothingHalfLife.GetValueOnAnyThread(), 0.0f),
+				CVarMediaPipeFootForwardMaxTurnDegPerSec.GetValueOnAnyThread());
+		}
+		FootForwardForRotationWorld = SideLegState.SmoothedAppliedFootForwardWorld;
 	}
 
 	const FVector FootForwardForRotationComp = bCanDriveFoot

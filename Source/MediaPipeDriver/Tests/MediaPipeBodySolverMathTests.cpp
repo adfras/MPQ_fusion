@@ -900,6 +900,102 @@ bool FMediaPipeBodySolverMathBodyYawHeadingAutomationTest::RunTest(const FString
 	TestFalse(TEXT("A near-vertical axis reports no heading"),
 		TryGetAxisHeadingDeg(AxisVertical, 0, HeadingDeg));
 
+	// Foot ground blend: 1 at/below the acquire height, linear fade, 0 at/above release.
+	TestTrue(TEXT("On the floor the foot is fully grounded"),
+		FMath::IsNearlyEqual(ComputeFootGroundBlend01(0.0f, 4.0f, 12.0f), 1.0f, 0.001f));
+	TestTrue(TEXT("At the acquire height the foot is still fully grounded"),
+		FMath::IsNearlyEqual(ComputeFootGroundBlend01(4.0f, 4.0f, 12.0f), 1.0f, 0.001f));
+	TestTrue(TEXT("Halfway between acquire and release blends halfway"),
+		FMath::IsNearlyEqual(ComputeFootGroundBlend01(8.0f, 4.0f, 12.0f), 0.5f, 0.001f));
+	TestTrue(TEXT("At the release height the foot is fully lifted"),
+		FMath::IsNearlyEqual(ComputeFootGroundBlend01(12.0f, 4.0f, 12.0f), 0.0f, 0.001f));
+	TestTrue(TEXT("Degenerate thresholds do not divide by zero"),
+		ComputeFootGroundBlend01(5.0f, 6.0f, 6.0f) >= 0.0f);
+
+	// ApproachDirection: a 90-degree source flip becomes a rate-limited turn.
+	const FVector Flip = ApproachDirection(FVector::ForwardVector, FVector::RightVector, 1.0f / 60.0f, 0.1f, 360.0f);
+	const float FlipStepDeg = FMath::RadiansToDegrees(
+		FMath::Acos(FMath::Clamp(FVector::DotProduct(Flip, FVector::ForwardVector), -1.0f, 1.0f)));
+	TestTrue(TEXT("A direction flip is rate limited to the per-frame budget"),
+		FlipStepDeg <= 360.0f / 60.0f + 0.1f);
+	FVector Walk = FVector::ForwardVector;
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Walk = ApproachDirection(Walk, FVector::RightVector, 1.0f / 60.0f, 0.1f, 360.0f);
+	}
+	TestTrue(TEXT("The direction walk converges to the target"), Walk.Equals(FVector::RightVector, 0.01f));
+
+	// ClampPlanarHeadingToReference: in-band passes, out-of-band clamps, pitch preserved,
+	// vertical directions left alone.
+	const FVector TorsoFwd = FVector::ForwardVector;
+	const FVector InBand = FVector(FMath::Cos(FMath::DegreesToRadians(30.0f)), FMath::Sin(FMath::DegreesToRadians(30.0f)), -0.5f).GetSafeNormal();
+	TestTrue(TEXT("An in-band foot heading passes through"),
+		ClampPlanarHeadingToReference(InBand, TorsoFwd, 50.0f).Equals(InBand, 0.001f));
+	const FVector Behind = FVector(-1.0f, 0.2f, -0.4f).GetSafeNormal();
+	const FVector Bounded = ClampPlanarHeadingToReference(Behind, TorsoFwd, 50.0f);
+	const float BoundedHeadingDeg = FMath::RadiansToDegrees(FMath::Atan2(Bounded.Y, Bounded.X));
+	TestTrue(TEXT("A backwards foot heading clamps to the band edge"),
+		FMath::IsNearlyEqual(FMath::Abs(BoundedHeadingDeg), 50.0f, 0.5f));
+	TestTrue(TEXT("Clamping preserves the vertical (pitch) component"),
+		FMath::IsNearlyEqual(Bounded.Z, Behind.Z, 0.05f));
+	const FVector NearVertical = FVector(0.01f, 0.0f, -1.0f).GetSafeNormal();
+	TestTrue(TEXT("A near-vertical foot direction is left alone"),
+		ClampPlanarHeadingToReference(NearVertical, TorsoFwd, 50.0f).Equals(NearVertical, 0.001f));
+
+	// ComputeLegFlexionShareWeights: squats symmetric, lunges asymmetric, straight legs inert.
+	float WeightL = 0.0f;
+	float WeightR = 0.0f;
+	ComputeLegFlexionShareWeights(60.0f, 60.0f, WeightL, WeightR);
+	TestTrue(TEXT("A symmetric squat keeps both legs at full weight"),
+		FMath::IsNearlyEqual(WeightL, 1.0f, 0.001f) && FMath::IsNearlyEqual(WeightR, 1.0f, 0.001f));
+	ComputeLegFlexionShareWeights(90.0f, 20.0f, WeightL, WeightR);
+	TestTrue(TEXT("A lunge sends the compression to the bent front leg"), WeightL > 1.5f);
+	TestTrue(TEXT("A lunge leaves the straight back leg nearly untouched"), WeightR < 0.2f);
+	ComputeLegFlexionShareWeights(2.0f, 1.0f, WeightL, WeightR);
+	TestTrue(TEXT("Two straight legs distribute evenly"),
+		FMath::IsNearlyEqual(WeightL, 1.0f, 0.001f) && FMath::IsNearlyEqual(WeightR, 1.0f, 0.001f));
+
+	// UpdateDecayingMinLengthCm: rejects inflation spikes, re-adapts slowly, bounded below.
+	bool bHasLen = false;
+	float LenCm = 0.0f;
+	TestTrue(TEXT("First length observation seeds the estimate"),
+		FMath::IsNearlyEqual(UpdateDecayingMinLengthCm(bHasLen, LenCm, 40.0f, 1.0f / 60.0f, 0.03f), 40.0f, 0.001f));
+	TestTrue(TEXT("A depth-inflated observation is rejected"),
+		UpdateDecayingMinLengthCm(bHasLen, LenCm, 55.0f, 1.0f / 60.0f, 0.03f) < 40.1f);
+	float Adapted = LenCm;
+	for (int32 Frame = 0; Frame < 60 * 30; ++Frame)
+	{
+		Adapted = UpdateDecayingMinLengthCm(bHasLen, LenCm, 46.0f, 1.0f / 60.0f, 0.03f);
+	}
+	TestTrue(TEXT("A persistently longer true length is re-adapted"), Adapted > 45.0f);
+	TestTrue(TEXT("A short-noise observation is floor-bounded"),
+		UpdateDecayingMinLengthCm(bHasLen, LenCm, 20.0f, 1.0f / 60.0f, 0.03f) >= 14.0f - 0.001f);
+
+	// RepitchDirectionFromVerticalRatio: elevation restored from measured verticals, heading kept.
+	const FVector InflatedThigh = FVector(0.8f, 0.0f, 0.6f).GetSafeNormal();
+	const FVector Repitched = RepitchDirectionFromVerticalRatio(InflatedThigh, 36.0f, 40.0f);
+	TestTrue(TEXT("Re-pitch restores the measured vertical ratio"),
+		FMath::IsNearlyEqual(Repitched.Z, 0.9f, 0.01f));
+	TestTrue(TEXT("Re-pitch preserves the planar heading"),
+		FMath::IsNearlyEqual(FMath::Atan2(Repitched.Y, Repitched.X), 0.0f, 0.01f));
+	const FVector VerticalDir = FVector(0.01f, 0.0f, -1.0f).GetSafeNormal();
+	TestTrue(TEXT("A vertical direction with no heading is left alone"),
+		RepitchDirectionFromVerticalRatio(VerticalDir, -30.0f, 40.0f).Equals(VerticalDir, 0.001f));
+
+	// ClampDirectionAdduction: inward travel bounded, outward and downward untouched.
+	const FVector Outward = FVector::RightVector;
+	const FVector Adducted = FVector(0.1f, -0.5f, -0.86f).GetSafeNormal();
+	const FVector AdductionClamped = ClampDirectionAdduction(Adducted, Outward, 10.0f);
+	TestTrue(TEXT("Excess adduction clamps to the limit"),
+		FMath::IsNearlyEqual(-FVector::DotProduct(AdductionClamped, Outward),
+			FMath::Sin(FMath::DegreesToRadians(10.0f)), 0.005f));
+	const FVector StraightDown = FVector(0.0f, -0.05f, -1.0f).GetSafeNormal();
+	TestTrue(TEXT("Mild adduction passes through"),
+		ClampDirectionAdduction(StraightDown, Outward, 10.0f).Equals(StraightDown, 0.001f));
+	const FVector Abducted = FVector(0.0f, 0.6f, -0.8f).GetSafeNormal();
+	TestTrue(TEXT("Abduction is never limited"),
+		ClampDirectionAdduction(Abducted, Outward, 10.0f).Equals(Abducted, 0.001f));
+
 	// ApproachAngleDeg: rate-limited, converging, and wrap-aware.
 	const float Step = ApproachAngleDeg(0.0f, 90.0f, 0.1f, 0.2f, 120.0f);
 	TestTrue(TEXT("A large target step is rate limited"), Step <= 12.0f + KINDA_SMALL_NUMBER);

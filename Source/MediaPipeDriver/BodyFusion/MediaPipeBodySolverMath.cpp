@@ -809,4 +809,181 @@ namespace MediaPipeBodySolverMath
 		const float StepDeg = FMath::Clamp(DeltaDeg * Alpha, -MaxStepDeg, MaxStepDeg);
 		return FRotator::NormalizeAxis(CurrentDeg + StepDeg);
 	}
+
+	float ComputeFootGroundBlend01(
+		const float HeightAboveFloorCm,
+		const float AcquireHeightCm,
+		const float ReleaseHeightCm)
+	{
+		const float Acquire = FMath::Max(AcquireHeightCm, 0.0f);
+		const float Release = FMath::Max(ReleaseHeightCm, Acquire + 0.1f);
+		return FMath::Clamp((Release - HeightAboveFloorCm) / (Release - Acquire), 0.0f, 1.0f);
+	}
+
+	FVector ApproachDirection(
+		const FVector& CurrentDir,
+		const FVector& TargetDir,
+		const float DeltaSeconds,
+		const float HalfLifeSeconds,
+		const float MaxTurnDegPerSec)
+	{
+		const FVector Current = CurrentDir.GetSafeNormal();
+		const FVector Target = TargetDir.GetSafeNormal();
+		if (Current.IsNearlyZero() || Target.IsNearlyZero() || DeltaSeconds <= 0.0f)
+		{
+			return Target.IsNearlyZero() ? Current : Target;
+		}
+
+		const float AngleRad = FMath::Acos(FMath::Clamp(FVector::DotProduct(Current, Target), -1.0f, 1.0f));
+		if (AngleRad < KINDA_SMALL_NUMBER)
+		{
+			return Target;
+		}
+
+		const float Alpha = 1.0f - FMath::Pow(0.5f, DeltaSeconds / FMath::Max(HalfLifeSeconds, 0.01f));
+		const float MaxStepRad = FMath::DegreesToRadians(FMath::Max(MaxTurnDegPerSec, 1.0f)) * DeltaSeconds;
+		const float StepRad = FMath::Min(AngleRad * Alpha, MaxStepRad);
+
+		FVector Axis = FVector::CrossProduct(Current, Target).GetSafeNormal();
+		if (Axis.IsNearlyZero())
+		{
+			// Antiparallel: pick any perpendicular axis so the turn can begin.
+			Axis = FVector::CrossProduct(Current, FMath::Abs(Current.Z) < 0.9f ? FVector::UpVector : FVector::ForwardVector).GetSafeNormal();
+			if (Axis.IsNearlyZero())
+			{
+				return Target;
+			}
+		}
+		return Current.RotateAngleAxis(FMath::RadiansToDegrees(StepRad), Axis).GetSafeNormal();
+	}
+
+	FVector ClampPlanarHeadingToReference(
+		const FVector& Dir,
+		const FVector& ReferenceForward,
+		const float MaxDeltaDeg)
+	{
+		const FVector2D Planar(Dir.X, Dir.Y);
+		const FVector2D RefPlanar(ReferenceForward.X, ReferenceForward.Y);
+		if (Planar.Size() < 0.05f || RefPlanar.Size() < 0.05f)
+		{
+			// A near-vertical foot has no meaningful heading; a degenerate reference cannot
+			// anchor one. Leave the direction alone.
+			return Dir;
+		}
+
+		const float HeadingDeg = FMath::RadiansToDegrees(FMath::Atan2(Planar.Y, Planar.X));
+		const float RefHeadingDeg = FMath::RadiansToDegrees(FMath::Atan2(RefPlanar.Y, RefPlanar.X));
+		const float DeltaDeg = FMath::FindDeltaAngleDegrees(RefHeadingDeg, HeadingDeg);
+		const float MaxDeg = FMath::Max(MaxDeltaDeg, 0.0f);
+		if (FMath::Abs(DeltaDeg) <= MaxDeg)
+		{
+			return Dir;
+		}
+
+		const float ClampedHeadingRad = FMath::DegreesToRadians(
+			RefHeadingDeg + FMath::Clamp(DeltaDeg, -MaxDeg, MaxDeg));
+		const float PlanarSize = Planar.Size();
+		return FVector(
+			FMath::Cos(ClampedHeadingRad) * PlanarSize,
+			FMath::Sin(ClampedHeadingRad) * PlanarSize,
+			Dir.Z).GetSafeNormal();
+	}
+
+	void ComputeLegFlexionShareWeights(
+		const float MeasuredFlexionLDeg,
+		const float MeasuredFlexionRDeg,
+		float& OutWeightL,
+		float& OutWeightR)
+	{
+		const float FlexL = FMath::Max(MeasuredFlexionLDeg, 0.0f);
+		const float FlexR = FMath::Max(MeasuredFlexionRDeg, 0.0f);
+		if (FlexL < 5.0f && FlexR < 5.0f)
+		{
+			// Both legs essentially straight: nothing to distribute.
+			OutWeightL = 1.0f;
+			OutWeightR = 1.0f;
+			return;
+		}
+
+		const float SquaredL = FlexL * FlexL;
+		const float SquaredR = FlexR * FlexR;
+		const float MeanSquared = FMath::Max((SquaredL + SquaredR) * 0.5f, KINDA_SMALL_NUMBER);
+		OutWeightL = FMath::Clamp(SquaredL / MeanSquared, 0.0f, 2.0f);
+		OutWeightR = FMath::Clamp(SquaredR / MeanSquared, 0.0f, 2.0f);
+	}
+
+	float UpdateDecayingMinLengthCm(
+		bool& bInOutHasState,
+		float& InOutLenCm,
+		const float ObservedLenCm,
+		const float DeltaSeconds,
+		const float DecayPerSec)
+	{
+		if (ObservedLenCm <= KINDA_SMALL_NUMBER)
+		{
+			return bInOutHasState ? InOutLenCm : 0.0f;
+		}
+		if (!bInOutHasState)
+		{
+			InOutLenCm = ObservedLenCm;
+			bInOutHasState = true;
+			return InOutLenCm;
+		}
+
+		const float Grown = InOutLenCm * (1.0f + FMath::Max(DecayPerSec, 0.0f) * FMath::Max(DeltaSeconds, 0.0f));
+		InOutLenCm = FMath::Max(FMath::Min(ObservedLenCm, Grown), ObservedLenCm * 0.7f);
+		return InOutLenCm;
+	}
+
+	FVector RepitchDirectionFromVerticalRatio(
+		const FVector& Dir,
+		const float MeasuredDeltaZCm,
+		const float StableLenCm)
+	{
+		if (StableLenCm <= KINDA_SMALL_NUMBER)
+		{
+			return Dir;
+		}
+		const FVector2D Planar(Dir.X, Dir.Y);
+		if (Planar.Size() < 0.02f)
+		{
+			// No meaningful heading to preserve.
+			return Dir;
+		}
+
+		const float VerticalRatio = FMath::Clamp(MeasuredDeltaZCm / StableLenCm, -0.995f, 0.995f);
+		const FVector2D PlanarDir = Planar.GetSafeNormal();
+		const float PlanarScale = FMath::Sqrt(FMath::Max(1.0f - VerticalRatio * VerticalRatio, 0.0f));
+		return FVector(PlanarDir.X * PlanarScale, PlanarDir.Y * PlanarScale, VerticalRatio).GetSafeNormal();
+	}
+
+	FVector ClampDirectionAdduction(
+		const FVector& Dir,
+		const FVector& OutwardDir,
+		const float MaxAdductionDeg)
+	{
+		const FVector Outward = OutwardDir.GetSafeNormal();
+		const FVector DirNorm = Dir.GetSafeNormal();
+		if (Outward.IsNearlyZero() || DirNorm.IsNearlyZero())
+		{
+			return Dir;
+		}
+
+		const float LateralComp = FVector::DotProduct(DirNorm, Outward);
+		const float MaxAdductionSin = FMath::Sin(FMath::DegreesToRadians(FMath::Max(MaxAdductionDeg, 0.0f)));
+		if (-LateralComp <= MaxAdductionSin)
+		{
+			return DirNorm;
+		}
+
+		const FVector Rest = DirNorm - LateralComp * Outward;
+		const FVector RestDir = Rest.GetSafeNormal();
+		if (RestDir.IsNearlyZero())
+		{
+			return DirNorm;
+		}
+		const float ClampedLateral = -MaxAdductionSin;
+		return (RestDir * FMath::Sqrt(FMath::Max(1.0f - ClampedLateral * ClampedLateral, 0.0f)) +
+			Outward * ClampedLateral).GetSafeNormal();
+	}
 }

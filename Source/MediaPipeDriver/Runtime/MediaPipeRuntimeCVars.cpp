@@ -1223,6 +1223,71 @@ namespace MediaPipeRuntimeCVars
 		30.0f,
 		TEXT("Extra downward foot pitch allowed past the reference flat-contact slope while grounded, so heel raises and toe stands keep working under the grounded foot pitch clamp."));
 
+	TAutoConsoleVariable<int32> CVarMediaPipeFootGroundedBlend(
+		TEXT("mp.MediaPipeFootGroundedBlend"),
+		0,
+		TEXT("When non-zero, the grounded foot-pitch solve fades continuously between the solved and raw pitch by height above the observed floor (time-smoothed), instead of gating binarily on the near-floor flag. The binary gate snaps a lunge's foreshortened back foot when its noisy height jitters around the release threshold (measured live 2026-06-13). Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootGroundedBlendHalfLife(
+		TEXT("mp.MediaPipeFootGroundedBlendHalfLife"),
+		0.12f,
+		TEXT("Temporal smoothing half-life (seconds) for the mp.MediaPipeFootGroundedBlend ground-contact factor while GROUNDING (blend increasing). Kept short so real planting feels instant."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootGroundedBlendReleaseHalfLife(
+		TEXT("mp.MediaPipeFootGroundedBlendReleaseHalfLife"),
+		0.35f,
+		TEXT("Temporal smoothing half-life (seconds) for the mp.MediaPipeFootGroundedBlend factor while RELEASING (blend decreasing). Longer than the grounding half-life so upward landmark noise spikes (measured 3-5x worse on the camera-far foot, 2026-06-13) cannot snap a planted foot to the raw pitch; a genuine lift keeps rising and takes the handover after this delay."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFootForwardSmoothing(
+		TEXT("mp.MediaPipeFootForwardSmoothing"),
+		0,
+		TEXT("When non-zero, the applied foot-forward direction is rate-limited and eased, so the instantaneous switches between the foot-forward fallback sources (raw ankle-toe, last stable heading, torso forward - the residual lunge back-foot snap, measured 2026-06-13) become physically continuous turns. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootForwardSmoothingHalfLife(
+		TEXT("mp.MediaPipeFootForwardSmoothingHalfLife"),
+		0.10f,
+		TEXT("Ease half-life (seconds) for mp.MediaPipeFootForwardSmoothing."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootForwardMaxTurnDegPerSec(
+		TEXT("mp.MediaPipeFootForwardMaxTurnDegPerSec"),
+		360.0f,
+		TEXT("Hard turn-rate limit (degrees/second) for the applied foot-forward direction under mp.MediaPipeFootForwardSmoothing. Real foot pivots stay under this; source-switch snaps do not."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFootHeadingClamp(
+		TEXT("mp.MediaPipeFootHeadingClamp"),
+		0,
+		TEXT("When non-zero, the applied foot-forward planar heading is clamped into a band around the wearer's torso heading. A foot attached to a body cannot yaw freely, so this makes propeller spins and heading snaps geometrically impossible regardless of landmark noise (a rate limiter alone chases sign-flipping targets into continuous rotation - observed live 2026-06-13). Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootHeadingClampMaxDeg(
+		TEXT("mp.MediaPipeFootHeadingClampMaxDeg"),
+		50.0f,
+		TEXT("Half-width (degrees) of the allowed foot heading band around the torso heading for mp.MediaPipeFootHeadingClamp. Normal stances, lunges, and moderate toe-out fit comfortably; extreme sideways foot poses clamp."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegSagittalRepitch(
+		TEXT("mp.MediaPipeLegSagittalRepitch"),
+		0,
+		TEXT("When non-zero, re-pitch each leg segment so its elevation matches the measured landmark vertical delta over a depth-robust decaying-minimum segment length. Monocular depth noise inflates the apparent length of a segment pointing at the camera, which makes raised knees read low (observed live 2026-07-02). Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegSagittalLengthDecayPerSec(
+		TEXT("mp.MediaPipeLegSagittalLengthDecayPerSec"),
+		0.03f,
+		TEXT("Upward re-adaptation rate (fraction/second) of the decaying-minimum segment length used by mp.MediaPipeLegSagittalRepitch."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegAdductionClamp(
+		TEXT("mp.MediaPipeLegAdductionClamp"),
+		0,
+		TEXT("When non-zero, bound each thigh's travel past vertical toward the body midline. With the reliability stabilizer off, monocular drift walks the knees into each other (observed live 2026-07-02); the anatomical bound stops that without damping any other motion. Abduction (outward) is never limited. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeLegAdductionMaxDeg(
+		TEXT("mp.MediaPipeLegAdductionMaxDeg"),
+		10.0f,
+		TEXT("Maximum thigh adduction (degrees past vertical toward the midline) allowed by mp.MediaPipeLegAdductionClamp."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldAsymmetricFlexion(
+		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),
+		0,
+		TEXT("When non-zero, the scaffold's pelvis-drop flexion correction is distributed by each leg's MEASURED bend share instead of equally. A lunge drops the HMD like a squat but bends asymmetrically; equal distribution bends the straight back leg and turns lunges into squats (observed live 2026-06-13). The camera's per-leg bend is the intent signal; squats stay symmetric automatically. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
 	TAutoConsoleVariable<int32> CVarQuestVrTrackingPanel(
 		TEXT("mp.QuestVrTrackingPanel"),
 		0,

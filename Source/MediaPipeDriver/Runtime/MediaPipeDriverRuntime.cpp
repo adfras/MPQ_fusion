@@ -607,7 +607,10 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdLean"), 1),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeHmdLeanMaxDeg"), 55.0f),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHipTwist"), 1),
-		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegReliabilityStabilize"), 1),
+		// 2026-06-13 worn-headset feedback: legs should move to the wearer's full extent. The
+		// reliability stabilizer damped them whenever iPhone confidence dipped; off by user
+		// acceptance (trade-off: legs can wobble when the camera loses them).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegReliabilityStabilize"), 0),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDrivePelvisTranslation"), 1),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveLegs"), 1),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeUseLegIK"), 0),
@@ -628,9 +631,30 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.AutoQuestWebcamPreviewBodySkeleton"), 1),
 		// Responsiveness: the One-Euro conditioner's velocity beta trims filter lag exactly
 		// where it is felt (fast leg moves), and a longer prediction horizon cancels more of the
-		// phone->PC transport latency. Slow/held poses keep their default smoothness.
+		// phone->PC transport latency. Slow/held poses keep their default smoothness. The raised
+		// MinCutoff reduces low-speed smoothing so gentle leg moves keep their full extent
+		// (2026-06-13 worn-headset acceptance).
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeAdaptivePoseBeta"), 0.45f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeAdaptivePoseMaxPredictionMs"), 80.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeAdaptivePoseMinCutoff"), 2.6f),
+		// Continuous grounded-foot pitch blend: stops the lunge back-foot snap (binary
+		// near-floor gate jittering at the release threshold; measured 2026-06-13).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootGroundedBlend"), 1),
+		// Rate-limited foot-forward: the residual snap was the forward-source fallbacks
+		// switching instantly on the noisy camera-far foot (measured 2026-06-13).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootForwardSmoothing"), 1),
+		// Anatomical foot heading bound: a rate limiter alone chases sign-flipping direction
+		// estimates into propeller spins (observed 2026-06-13); the torso-relative clamp makes
+		// that geometrically impossible.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootHeadingClamp"), 1),
+		// Distribute the HMD pelvis-drop by each leg's measured bend so lunges stay lunges
+		// (equal distribution bent the straight back leg into a squat; observed 2026-06-13).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"), 1),
+		// Sagittal re-pitch: depth inflation made raised knees read low (observed 2026-07-02).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegSagittalRepitch"), 1),
+		// Anatomical adduction bound: with the stabilizer off, drift walked the knees into
+		// each other (observed 2026-07-02).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegAdductionClamp"), 1),
 		// Finger overlap mitigations tried 2026-06-12 (splay clamps, pairwise separation, pose
 		// gate) are all DISABLED here after worn-headset testing: the separation metric is
 		// blind to lateral convergence between fingers at different curls, and the pose gate's
