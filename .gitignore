@@ -13,6 +13,8 @@ Content/*
 !Content/MetaHumanRooms/**
 !Content/Mirror/
 !Content/Mirror/**
+!Content/Python/
+!Content/Python/**
 Binaries/
 Build/
 DerivedDataCache/

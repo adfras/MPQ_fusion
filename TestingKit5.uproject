@@ -89,6 +89,22 @@
 			"Enabled": true
 		},
 		{
+			"Name": "AllToolsets",
+			"Enabled": true
+		},
+		{
+			"Name": "MetaHumanCharacter",
+			"Enabled": true
+		},
+		{
+			"Name": "MetaHuman",
+			"Enabled": true
+		},
+		{
+			"Name": "MetaHumanBodyTracker",
+			"Enabled": true
+		},
+		{
 			"Name": "Bridge",
 			"Enabled": false
 		},
