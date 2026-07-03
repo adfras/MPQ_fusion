@@ -37,23 +37,34 @@ remains the metric authority for height and squat depth.
 
 ## Step 1 — capture
 
-Record one performance into both systems simultaneously:
+One command prepares everything editor-side:
 
-- The canonical Quest+MediaPipe dataset recording, exactly as for the replay
-  gate (existing capture tooling / `Tools/SetupRecordedQuestMediaPipeReplayMap.py`
-  conventions).
-- The raw iPhone video file itself (Camo can record locally, or record the
-  same feed). MHA wants the actual video, not landmarks.
+```text
+py prepare_mha_groundtruth_session.py
+```
 
-Protocol requirements:
+(`Content/Python/prepare_mha_groundtruth_session.py` — loads the live trial
+map, restores the Kellan profile, and arms
+`mp.PrepareAvatarLockedSyncCalibrationCapture label=mha_groundtruth analyze=1`:
+30 Hz, all bones, 210 s, the standard seven guided 30-second phases.)
 
-- Camera static, full body in frame the whole take (same framing rules as the
-  MediaPipe baseline).
-- Start the take with a **sync clap** — one sharp full-arm clap visible to the
-  camera while wearing the headset. This is the time-alignment event for both
-  streams.
-- Include the known hard cases in one take: squat to depth, knee raises,
-  overhead reach/hold, hands crossing midline.
+Then the human protocol, in order:
+
+1. iPhone on the usual mount, Camo running (rear Wide 1x, full body in frame,
+   camera static — same framing rules as the MediaPipe baseline).
+2. **Start the raw video recording.** Preferred: Camo Studio's record button
+   on the desktop (records at the hub, independent of the virtual-camera
+   consumer). MHA needs the actual video file, not landmarks. Fallback if
+   Camo Studio can't record while UE consumes the feed: any screen/OBS
+   capture of the Camo Studio preview window at full frame rate.
+3. Press **VR Preview**.
+4. One sharp full-arm **sync clap** facing the camera — the time-alignment
+   event between the dataset clock and the video.
+5. Follow the seven green phase prompts. The standard phases already contain
+   every hard case this comparison needs (legs block = knee lifts + squats,
+   arms block = reaches, feet block = heel/toe work).
+6. After the 210 s run ends, stop the video recording. Note the video
+   filename next to the dataset label `mha_groundtruth`.
 
 ## Step 2 — offline solve
 

@@ -75,6 +75,45 @@ the create/set-shape calls, not the workflow.
    should match closely (angles are proportion-invariant); positional
    measurements should scale with limb length, not clamp, snap, or invert.
 
+## First matrix run — results (2026-07-03, engine 5.8.0-55116800)
+
+All four variants replayed the canonical dataset (seek 147 s, 66 s capture,
+legs/feet window) via profile-driven pawn binding. Table from
+`Tools/summarize_proportion_matrix.py`:
+
+```text
+metric                  Kellan(base)       PM_Tall      PM_Short   PM_LongArms  PM_ShortLegs
+knee_l_min                    114.13        113.66        113.79        113.54        113.64
+knee_r_min                    111.04        113.45        112.95        112.95        112.95
+knee_l/r_max                  174.96        178.97        178.97        178.97        178.97
+ball_median (cm)                0.80          1.01          1.08          1.04          1.07
+penetration_frames                 0             0             0             0             0
+segment_drift_cm                0.00          0.00          0.00          0.00          0.00
+```
+
+Findings:
+
+- **Lower body scales gracefully.** Knee minima proportion-invariant within
+  ~2.5 deg, no floor penetration, zero leg segment drift on any variant —
+  155 cm to 195 cm.
+- **Template rest-pose difference, not proportion:** every variant maxes knee
+  extension at ~179 deg vs Kellan's ~175 deg, uniformly. Attribute to the
+  blank-template rig vs Kellan's rig; revisit only if a variant is ever worn.
+- **Hands/fingers visibly deform on variants** (user-observed live on PM_Tall,
+  screenshot in Saved/Screenshots/WindowsEditor: PM_Tall_hand_deformation_
+  evidence). The leg metrics cannot see this — first confirmed
+  proportion-robustness defect, upper-body class. Next pass needs a
+  wrist/hand-chain metric (e.g., hand segment-length drift + wrist step
+  distribution) added to the sampler before tuning anything.
+
+Mechanics that make reruns cheap: profiles in
+`/Game/MetaHumans/_ProportionMatrix/Profiles/` (created by
+`Content/Python/register_pm_profiles.py`), registered per session via
+`mp.MetaHumanProfileAssetPaths`, avatar selected by setting the replay map
+pawn's `MetaHumanProfileId` property (transient, editor-world — the pawn
+property OVERRIDES `mp.MetaHumanActiveProfile`, which the pawn stomps at
+tracking start). Restore the pawn to Kellan after runs.
+
 ## What failure looks like (worth the gate)
 
 - Reach clamps tuned in centimeters (`mp.MediaPipeArmMaxWristStepCm 55`,
