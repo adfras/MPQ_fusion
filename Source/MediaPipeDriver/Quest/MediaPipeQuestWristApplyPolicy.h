@@ -68,6 +68,10 @@ struct FMediaPipeQuestArmDropoutDownFallbackPolicyInput
 	bool bCanInferCalibratedDownPose = false;
 	bool bHasRecentConstrainedArmSolve = false;
 	bool bHasLastReliableArmSample = false;
+	// USER RULE (2026-07-02): the camera outranks every synthetic pose. True when MediaPipe
+	// measures the whole arm this frame and its direction is NOT down-dominant - the fallback
+	// must then neither activate nor continue, no matter what the seeds or the continue latch say.
+	bool bMediaPipeSeesArmNotDown = false;
 };
 
 struct FMediaPipeQuestArmDropoutDownFallbackPolicyResult

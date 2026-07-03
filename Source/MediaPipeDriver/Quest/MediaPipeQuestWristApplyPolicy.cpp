@@ -127,6 +127,15 @@ FMediaPipeQuestArmDropoutDownFallbackPolicyResult FMediaPipeQuestWristApplyPolic
 		return Result;
 	}
 
+	// USER RULE (2026-07-02): never force an arm down while the camera sees it. This veto
+	// outranks the continue latch on purpose - the measured failure was an active fallback
+	// riding bContinueActiveFallback through a whole overhead raise, dragging the wrist to
+	// full-extension-down at the calibrated reach while MediaPipe watched the arm go up.
+	if (Input.bMediaPipeSeesArmNotDown)
+	{
+		return Result;
+	}
+
 	if (Input.bContinueActiveFallback)
 	{
 		Result.bUseFallback = true;

@@ -986,4 +986,38 @@ namespace MediaPipeBodySolverMath
 		return (RestDir * FMath::Sqrt(FMath::Max(1.0f - ClampedLateral * ClampedLateral, 0.0f)) +
 			Outward * ClampedLateral).GetSafeNormal();
 	}
+
+	FVector ClampKneeMedialBow(
+		const FVector& HipWorld,
+		const FVector& KneeWorld,
+		const FVector& AnkleWorld,
+		const FVector& OutwardDir,
+		const float MaxMedialBowDeg)
+	{
+		const FVector Outward = OutwardDir.GetSafeNormal();
+		const FVector HipToAnkle = AnkleWorld - HipWorld;
+		const FVector HipToKnee = KneeWorld - HipWorld;
+		const float HipToAnkleLen = HipToAnkle.Size();
+		const float HipToKneeLen = HipToKnee.Size();
+		if (Outward.IsNearlyZero() || HipToAnkleLen < 10.0f || HipToKneeLen < 10.0f)
+		{
+			return KneeWorld;
+		}
+
+		// The knee's lateral coordinate is compared against the hip->ankle line's lateral
+		// coordinate at the knee's own fraction along the leg.
+		const FVector HipToAnkleDir = HipToAnkle / HipToAnkleLen;
+		const float KneeAlongLeg = FMath::Clamp(
+			FVector::DotProduct(HipToKnee, HipToAnkleDir), 0.0f, HipToAnkleLen);
+		const FVector LinePointAtKnee = HipWorld + HipToAnkleDir * KneeAlongLeg;
+		const float MedialOffsetCm = FVector::DotProduct(LinePointAtKnee - KneeWorld, Outward);
+		const float MaxMedialCm =
+			FMath::Sin(FMath::DegreesToRadians(FMath::Max(MaxMedialBowDeg, 0.0f))) * HipToKneeLen;
+		if (MedialOffsetCm <= MaxMedialCm)
+		{
+			return KneeWorld;
+		}
+
+		return KneeWorld - Outward * (MaxMedialCm - MedialOffsetCm);
+	}
 }

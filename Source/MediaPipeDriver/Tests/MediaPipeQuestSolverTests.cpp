@@ -1996,6 +1996,27 @@ bool FMediaPipeQuestWristApplyPolicyAutomationTest::RunTest(const FString& Param
 	TestFalse(TEXT("Tracked Quest sides do not enter dropout-down fallback"),
 		TrackedSideDropout.bUseFallback);
 
+	// USER RULE (2026-07-02): the camera outranks the synthetic down pose. A measured MediaPipe
+	// arm that is NOT down-dominant blocks activation regardless of tracked-down seeds...
+	DropoutDownInput = MakeDropoutDownPolicyInput();
+	DropoutDownInput.bHasRecentTrackedArmPose = true;
+	DropoutDownInput.bLastTrackedPoseWasDown = true;
+	DropoutDownInput.bMediaPipeSeesArmNotDown = true;
+	const FMediaPipeQuestArmDropoutDownFallbackPolicyResult CameraUpVetoDropout =
+		FMediaPipeQuestWristApplyPolicy::ShouldUseDropoutDownFallback(DropoutDownInput);
+	TestFalse(TEXT("A MediaPipe arm that is not down-dominant vetoes dropout-down activation"),
+		CameraUpVetoDropout.bUseFallback);
+
+	// ...and cancels an ALREADY-ACTIVE fallback: the continue latch must not ride a whole
+	// overhead raise to full-extension-down while the camera watches the arm go up.
+	DropoutDownInput = MakeDropoutDownPolicyInput();
+	DropoutDownInput.bContinueActiveFallback = true;
+	DropoutDownInput.bMediaPipeSeesArmNotDown = true;
+	const FMediaPipeQuestArmDropoutDownFallbackPolicyResult CameraUpVetoContinueDropout =
+		FMediaPipeQuestWristApplyPolicy::ShouldUseDropoutDownFallback(DropoutDownInput);
+	TestFalse(TEXT("A MediaPipe arm that is not down-dominant cancels the active dropout-down continue latch"),
+		CameraUpVetoContinueDropout.bUseFallback);
+
 	FMediaPipeQuestReachScaleCalibrationInput ReachScaleInput;
 	ReachScaleInput.bEnabled = true;
 	ReachScaleInput.CurrentReachCm = 48.0f;

@@ -14,6 +14,11 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<int32> CVarMediaPipeUseLegIKFootPlant;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeUseFkRootGrounding;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveHandRotation;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeHandRotationOnQuestLoss;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeFingersOnQuestLoss;
+	extern TAutoConsoleVariable<float> CVarMediaPipeHandOwnershipHandbackSeconds;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeCameraHandTrace;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeFootContactKeyedState;
 	extern TAutoConsoleVariable<int32> CVarQuestHandTracking;
 	extern TAutoConsoleVariable<int32> CVarQuestHandReplay;
 	extern TAutoConsoleVariable<int32> CVarQuestHandDriveFingerBones;
@@ -264,6 +269,12 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipeLegSagittalLengthDecayPerSec;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeLegAdductionClamp;
 	extern TAutoConsoleVariable<float> CVarMediaPipeLegAdductionMaxDeg;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeKneeMedialBowClamp;
+	extern TAutoConsoleVariable<float> CVarMediaPipeKneeMedialBowMaxDeg;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeArmOverheadRescue;
+	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueMinReliability;
+	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueWristAboveShoulderCm;
+	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueDivergenceCm;
 	extern TAutoConsoleVariable<int32> CVarQuestVrTrackingPanel;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveHmdHead;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeHmdHeadMirror;

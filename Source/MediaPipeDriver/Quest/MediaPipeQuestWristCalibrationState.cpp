@@ -116,6 +116,27 @@ void FQuestWristSideRuntimeState::Reset()
 	ResetRotationCalibration();
 	ResetPositionContinuity();
 	LastHandRotationApplyTimeSeconds = -1.0;
+	LastMediaPipeHandRotationApplyTimeSeconds = -1.0;
+	MediaPipeHandStickyArraySide = 255;
+	// Camera-hand smoothing/continuity re-seeds from the current pose on the next camera frame.
+	// The ownership latch (bCameraHandOwnershipLatched) is deliberately NOT cleared here, same
+	// rule as bArmRescueActive: a pose-state reset must not hand a camera-driven hand back to a
+	// flickering Quest side.
+	bHasCameraHandSmoothedSwing = false;
+	CameraHandSmoothedSwingCS = FQuat::Identity;
+	bHasCameraHandSmoothedTwist = false;
+	CameraHandSmoothedTwistDeg = 0.0f;
+	bHasCameraHandLastGoodTarget = false;
+	CameraHandLastGoodTargetCS = FQuat::Identity;
+	CameraHandActiveBranch = 0;
+	CameraHandPendingBranch = 0;
+	CameraHandPendingBranchFrames = 0;
+	CameraHandSmoothLastStepTimeSeconds = -1.0;
+	bHasCameraHandLastApplied = false;
+	CameraHandLastAppliedRotCS = FQuat::Identity;
+	CameraHandChiralitySign = 0;
+	CameraHandChiralityPendingSign = 0;
+	CameraHandChiralityPendingSeconds = 0.0f;
 }
 
 void FQuestWristSideRuntimeState::ResetCalibration()

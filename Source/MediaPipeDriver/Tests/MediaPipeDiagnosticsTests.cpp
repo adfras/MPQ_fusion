@@ -763,6 +763,14 @@ bool FMediaPipeLiveLowerBodyTrialCommandAutomationTest::RunTest(const FString& P
 		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),
 		TEXT("mp.MediaPipeLegSagittalRepitch"),
 		TEXT("mp.MediaPipeLegAdductionClamp"),
+		TEXT("mp.MediaPipeArmOverheadRescue"),
+		TEXT("mp.QuestFingerPoseGateMaxCurlRatePerSec"),
+		TEXT("mp.MediaPipeKneeMedialBowClamp"),
+		TEXT("mp.MediaPipeArmReliabilityGate"),
+		TEXT("mp.AutoQuestWebcamHandLandmarker"),
+		TEXT("mp.MediaPipeHandRotationOnQuestLoss"),
+		TEXT("mp.MediaPipeFingersOnQuestLoss"),
+		TEXT("mp.MediaPipeFootContactKeyedState"),
 	};
 
 	TArray<TPair<IConsoleVariable*, FString>> Snapshots;
@@ -821,10 +829,26 @@ bool FMediaPipeLiveLowerBodyTrialCommandAutomationTest::RunTest(const FString& P
 		IntValue(TEXT("mp.MediaPipeLegSagittalRepitch")), 1);
 	TestEqual(TEXT("Trial bounds thigh adduction (knees cannot drift together)"),
 		IntValue(TEXT("mp.MediaPipeLegAdductionClamp")), 1);
-	TestEqual(TEXT("Trial leaves the finger mitigations off (worn-headset regressions)"),
+	TestEqual(TEXT("Trial leaves the finger separation mitigations off (worn-headset regressions)"),
 		IntValue(TEXT("mp.QuestFingerPairSeparation")), 0);
-	TestEqual(TEXT("Trial leaves the hand pose gate off (rejected real fist closes)"),
-		IntValue(TEXT("mp.QuestFingerPoseGate")), 0);
+	TestEqual(TEXT("Trial holds hands on untracked frames (no overhead hand distortion)"),
+		IntValue(TEXT("mp.QuestFingerPoseGate")), 1);
+	TestEqual(TEXT("Trial neutralizes the pose-gate rate threshold (no fist-close twitching)"),
+		FloatValue(TEXT("mp.QuestFingerPoseGateMaxCurlRatePerSec")), 1000.0f);
+	TestEqual(TEXT("Trial lets the camera rescue arms the Quest cannot see overhead"),
+		IntValue(TEXT("mp.MediaPipeArmOverheadRescue")), 1);
+	TestEqual(TEXT("Trial bounds medial knee bow (no knock-kneed drift)"),
+		IntValue(TEXT("mp.MediaPipeKneeMedialBowClamp")), 1);
+	TestEqual(TEXT("Trial never holds arms against the camera (reliability gate off per user rule)"),
+		IntValue(TEXT("mp.MediaPipeArmReliabilityGate")), 0);
+	TestEqual(TEXT("Trial runs the webcam hand landmarker for quest-loss hand pose"),
+		IntValue(TEXT("mp.AutoQuestWebcamHandLandmarker")), 1);
+	TestEqual(TEXT("Trial lets the camera drive hand rotation while a Quest hand is untracked"),
+		IntValue(TEXT("mp.MediaPipeHandRotationOnQuestLoss")), 1);
+	TestEqual(TEXT("Trial lets the camera drive fingers while a Quest hand is untracked"),
+		IntValue(TEXT("mp.MediaPipeFingersOnQuestLoss")), 1);
+	TestEqual(TEXT("Trial keeps foot contact state in the keyed store (lifted legs keep their scaffold exemption)"),
+		IntValue(TEXT("mp.MediaPipeFootContactKeyedState")), 1);
 
 	TestTrue(TEXT("Stop command executes"),
 		IConsoleManager::Get().ProcessUserConsoleInput(TEXT("mp.StopLiveLowerBodyTrial"), OutputDevice, nullptr));

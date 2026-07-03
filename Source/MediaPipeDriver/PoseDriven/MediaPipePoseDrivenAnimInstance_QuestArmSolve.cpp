@@ -45,6 +45,105 @@
 
 #include "MediaPipePoseDrivenAnimInstanceShared.h"
 
+namespace
+{
+// Maps the 21-landmark MediaPipe hand onto the 26-joint OpenXR hand snapshot layout so the
+// existing user-validated segment-direction finger solver can consume CAMERA hands unchanged
+// while a Quest hand is untracked (USER FEEDBACK 2026-07-03: overhead, frozen Quest hands
+// looked broken). Positions only - the accepted segmentDirection finger mode solves from
+// joint POSITIONS; identity rotations make the dormant jointOrientation mode veto itself.
+// MediaPipe hand world landmarks are HAND-CENTERED, not body-frame: every point is written as
+// a wrist-relative delta re-anchored on the avatar's solved wrist, matching the wrist-rotation
+// basis path above.
+void FillSyntheticQuestHandSideFromMediaPipe(
+	const FMediaPipeRawHandLandmarks& HandWorldLandmarks,
+	const FVector& AnchorWristWorld,
+	const FTransform& PoseToWorldTransform,
+	const float WorldScale,
+	const bool bMirrorLandmarksLR,
+	const bool bFillLeftSide,
+	FQuestHandTrackingSnapshot& InOutSnapshot)
+{
+	const FMediaPipeRawHandLandmark& WristRaw = HandWorldLandmarks.Landmarks[0];
+	auto LandmarkWorld = [&](const int32 HandLmIndex) -> FVector
+	{
+		const FMediaPipeRawHandLandmark& PointRaw = HandWorldLandmarks.Landmarks[HandLmIndex];
+		const FVector DeltaMp(
+			PointRaw.X - WristRaw.X,
+			PointRaw.Y - WristRaw.Y,
+			PointRaw.Z - WristRaw.Z);
+		FVector DeltaUe = MediaPipePoseCoordinate::MpWorldToUeLocalUnscaled(DeltaMp, bMirrorLandmarksLR) * WorldScale;
+		DeltaUe = PoseToWorldTransform.TransformVectorNoScale(DeltaUe);
+		return AnchorWristWorld + DeltaUe;
+	};
+
+	TStaticArray<FVector, QuestHandKeypointCount>& Positions =
+		bFillLeftSide ? InOutSnapshot.LeftPositionsWorld : InOutSnapshot.RightPositionsWorld;
+	TStaticArray<FQuat, QuestHandKeypointCount>& Rotations =
+		bFillLeftSide ? InOutSnapshot.LeftRotationsWorld : InOutSnapshot.RightRotationsWorld;
+	TStaticArray<float, QuestHandKeypointCount>& Radii =
+		bFillLeftSide ? InOutSnapshot.LeftRadii : InOutSnapshot.RightRadii;
+	auto SetJoint = [&](const EHandKeypoint Keypoint, const FVector& World)
+	{
+		const int32 JointIndex = static_cast<int32>(Keypoint);
+		Positions[JointIndex] = World;
+		Rotations[JointIndex] = FQuat::Identity;
+		Radii[JointIndex] = 1.0f;
+	};
+
+	// 21-landmark MediaPipe hand layout: 0 wrist; thumb 1 CMC, 2 MCP, 3 IP, 4 tip;
+	// then per finger (index 5.., middle 9.., ring 13.., little 17..): MCP, PIP, DIP, tip.
+	const FVector MiddleMcpWorld = LandmarkWorld(9);
+	SetJoint(EHandKeypoint::Wrist, AnchorWristWorld);
+	SetJoint(EHandKeypoint::Palm, (AnchorWristWorld + MiddleMcpWorld) * 0.5f);
+	SetJoint(EHandKeypoint::ThumbMetacarpal, LandmarkWorld(1));
+	SetJoint(EHandKeypoint::ThumbProximal, LandmarkWorld(2));
+	SetJoint(EHandKeypoint::ThumbDistal, LandmarkWorld(3));
+	SetJoint(EHandKeypoint::ThumbTip, LandmarkWorld(4));
+	struct FSyntheticFingerMap
+	{
+		EHandKeypoint Metacarpal;
+		EHandKeypoint Proximal;
+		EHandKeypoint Intermediate;
+		EHandKeypoint Distal;
+		EHandKeypoint Tip;
+		int32 McpLandmark;
+	};
+	const FSyntheticFingerMap Fingers[4] = {
+		{EHandKeypoint::IndexMetacarpal, EHandKeypoint::IndexProximal, EHandKeypoint::IndexIntermediate, EHandKeypoint::IndexDistal, EHandKeypoint::IndexTip, 5},
+		{EHandKeypoint::MiddleMetacarpal, EHandKeypoint::MiddleProximal, EHandKeypoint::MiddleIntermediate, EHandKeypoint::MiddleDistal, EHandKeypoint::MiddleTip, 9},
+		{EHandKeypoint::RingMetacarpal, EHandKeypoint::RingProximal, EHandKeypoint::RingIntermediate, EHandKeypoint::RingDistal, EHandKeypoint::RingTip, 13},
+		{EHandKeypoint::LittleMetacarpal, EHandKeypoint::LittleProximal, EHandKeypoint::LittleIntermediate, EHandKeypoint::LittleDistal, EHandKeypoint::LittleTip, 17},
+	};
+	for (const FSyntheticFingerMap& Finger : Fingers)
+	{
+		const FVector McpWorld = LandmarkWorld(Finger.McpLandmark);
+		// The 21-landmark set has no metacarpal joints; approximate them partway from the wrist
+		// toward each knuckle so metacarpal segment directions stay anatomically sane.
+		SetJoint(Finger.Metacarpal, FMath::Lerp(AnchorWristWorld, McpWorld, 0.4f));
+		SetJoint(Finger.Proximal, McpWorld);
+		SetJoint(Finger.Intermediate, LandmarkWorld(Finger.McpLandmark + 1));
+		SetJoint(Finger.Distal, LandmarkWorld(Finger.McpLandmark + 2));
+		SetJoint(Finger.Tip, LandmarkWorld(Finger.McpLandmark + 3));
+	}
+
+	if (bFillLeftSide)
+	{
+		InOutSnapshot.bHasLeft = 1;
+		InOutSnapshot.bLeftTracked = 1;
+		InOutSnapshot.LeftTimestampSeconds = FPlatformTime::Seconds();
+	}
+	else
+	{
+		InOutSnapshot.bHasRight = 1;
+		InOutSnapshot.bRightTracked = 1;
+		InOutSnapshot.RightTimestampSeconds = FPlatformTime::Seconds();
+	}
+	InOutSnapshot.HandTrackerCount = 1;
+	InOutSnapshot.ValidHandTrackerCount = 1;
+}
+} // namespace
+
 void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds)
 {
 	if (!bDriveArms)
@@ -99,7 +198,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		FullArmChainResult.bFresh;
 	const bool bBodyFusionPoseWriteActive = ShouldUseBodyFusionPoseForEvaluation();
 	const bool bTrackingFusionReplayActive = FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive();
-	const bool bMetaHumanFullArmChainDirectFresh =
+	bool bMetaHumanFullArmChainDirectFresh =
 		bMetaHumanFullArmChainFresh &&
 		(!bBodyFusionPoseWriteActive || bTrackingFusionReplayActive);
 	auto EmitMetaHumanFullArmChainLog = [&](
@@ -151,10 +250,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	const bool bQuestArmFallbackAllowed =
 		!bBodyFusionPoseWriteActive &&
 		!bMetaHumanFullArmChainDirectFresh;
-	const bool bQuestArmUsesWristEndpoint = QuestArmMode >= 1 && bQuestArmFallbackAllowed;
-	const bool bQuestArmUsesConstrainedSolve = QuestArmMode >= 2 && bQuestArmFallbackAllowed;
-	const bool bQuestArmUsesLegacyReachAssist = QuestArmMode == 1 && bQuestArmFallbackAllowed;
-	const bool bUseHmdRelativeAvatarArmFrame = QuestArmMode >= 3 && bQuestArmFallbackAllowed;
+	bool bQuestArmUsesWristEndpoint = QuestArmMode >= 1 && bQuestArmFallbackAllowed;
+	bool bQuestArmUsesConstrainedSolve = QuestArmMode >= 2 && bQuestArmFallbackAllowed;
+	bool bQuestArmUsesLegacyReachAssist = QuestArmMode == 1 && bQuestArmFallbackAllowed;
+	bool bUseHmdRelativeAvatarArmFrame = QuestArmMode >= 3 && bQuestArmFallbackAllowed;
 	FMediaPipeFusedUpperLimbSide FusedArmSide;
 	const bool bUseBodyFusionArm =
 		bBodyFusionPoseWriteActive &&
@@ -186,6 +285,152 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	const FVector MediaPipeSourceShoulderWorld = bHasMediaPipeArmWorld ? ShoulderWorld : FVector::ZeroVector;
 	const FVector MediaPipeSourceElbowWorld = bHasMediaPipeArmWorld ? ElbowWorld : FVector::ZeroVector;
 	const FVector MediaPipeSourceWristWorld = bHasMediaPipeArmWorld ? WristWorld : FVector::ZeroVector;
+
+	// Overhead MediaPipe rescue: hands above the head leave the headset cameras' view - Quest
+	// hand tracking drops and the body-tracking chain keeps SYNTHESIZING a guess that sags the
+	// arms down - while the phone camera still measures the whole arm (observed live
+	// 2026-07-02). When the Quest side is untracked and MediaPipe reliably sees the wrist above
+	// the shoulder, the camera takes the arm; dwell-time hysteresis prevents source flapping
+	// and the rotation smoothing blends the handover.
+	// The dwell/latch lives in the keyed runtime state (QuestWristSideState), NOT in node
+	// members: node state measurably does not survive pose-state resets (2026-07-03 root-cause
+	// session), and a latch that forgets its dwell every reset can never fire. RuntimeStateKey=0
+	// means this evaluation ran before the first PreUpdate - skip the rescue for that frame so
+	// the shared key-0 bucket is never read or written.
+	if (CVarMediaPipeArmOverheadRescue.GetValueOnAnyThread() != 0 &&
+		RuntimeStateKey != 0 &&
+		!bBodyFusionPoseWriteActive &&
+		!bTrackingFusionReplayActive)
+	{
+		const float RescueMinReliability = FMath::Clamp(
+			CVarMediaPipeArmOverheadRescueMinReliability.GetValueOnAnyThread(), 0.0f, 1.0f);
+		const float RescueReliability = bHasMediaPipeArmWorld
+			? FMath::Min3(
+				GetLandmarkReliability(ShoulderLm),
+				GetLandmarkReliability(ElbowLm),
+				GetLandmarkReliability(WristLm))
+			: 0.0f;
+		const float RescueWristAboveShoulderCm =
+			MediaPipeSourceWristWorld.Z - MediaPipeSourceShoulderWorld.Z;
+		// The Quest's tracked flag CANNOT be trusted overhead: measured 2026-07-02, hands sag
+		// with questTracked=1 throughout while the runtime synthesizes. Fire the rescue either
+		// on a true dropout OR when the camera's wrist sits far ABOVE where the Quest put the
+		// hand - the divergence measures the Quest being wrong directly. When the chain is
+		// stale the comparator is the previous frame's APPLIED quest wrist (LastTrackedQuestArm),
+		// so a tracked-but-synthesizing hand tracker is caught the same way as the body chain.
+		const double RescueNowWallSeconds = FPlatformTime::Seconds();
+		const bool bHasRecentTrackedQuestWristForDivergence =
+			QuestWristSideState.bHasLastTrackedQuestArmPose &&
+			QuestWristSideState.LastTrackedQuestArmTimeSeconds >= 0.0 &&
+			RescueNowWallSeconds - QuestWristSideState.LastTrackedQuestArmTimeSeconds <= 0.5;
+		const float RescueQuestDivergenceCm =
+			bMetaHumanFullArmChainFresh
+				? (MediaPipeSourceWristWorld.Z - FullArmChainResult.WristWorld.Z)
+				: (bHasRecentTrackedQuestWristForDivergence
+					? (MediaPipeSourceWristWorld.Z - QuestWristSideState.LastTrackedQuestArmWristWorld.Z)
+					: 0.0f);
+		const bool bQuestArmWrongOrLost =
+			!bQuestSideTrackedForArm ||
+			((bMetaHumanFullArmChainFresh || bHasRecentTrackedQuestWristForDivergence) &&
+				RescueQuestDivergenceCm >= CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread());
+		// USER RULE (2026-07-02): never hold an arm against the camera. When the Quest side is
+		// FULLY gone (hand untracked AND chain stale), any camera detection takes the arm - no
+		// reliability floor, no overhead-region requirement (measured: overhead MediaPipe
+		// reliability drops to 0.2-0.4 at the top of frame, well under the old 0.5 floor, and
+		// the rescue refused arms it could plainly see).
+		const bool bQuestArmFullyGone = !bQuestSideTrackedForArm && !bMetaHumanFullArmChainFresh;
+		const bool bRescueConditions =
+			bHasMediaPipeArmWorld &&
+			(bQuestArmFullyGone
+				? RescueReliability >= 0.05f
+				: (bQuestArmWrongOrLost &&
+					RescueReliability >= RescueMinReliability &&
+					RescueWristAboveShoulderCm >=
+						CVarMediaPipeArmOverheadRescueWristAboveShoulderCm.GetValueOnAnyThread()));
+
+		// Per-condition diagnostic (throttled): names which gate blocks the rescue so the
+		// worn-headset verdict can be matched against data instead of guesses.
+		{
+			double& LastRescueLogTimeSeconds = bIsLeft
+				? DiagnosticsState.LastArmRescueLogTimeSecondsL
+				: DiagnosticsState.LastArmRescueLogTimeSecondsR;
+			const double RescueNowSeconds = FPlatformTime::Seconds();
+			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(RescueNowSeconds, 1.0, LastRescueLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.ArmOverheadRescue: actor=%s side=%s active=%d conditions=%d hasMpArm=%d questTracked=%d chainFresh=%d divergenceCm=%.1f (min=%.1f) rel=%.2f (min=%.2f) wristAboveShoulderCm=%.1f (min=%.1f) enterS=%.2f exitS=%.2f node=%llu key=%u dt=%.4f resets=%u"),
+					*TargetActorName.ToString(),
+					bIsLeft ? TEXT("L") : TEXT("R"),
+					QuestWristSideState.bArmRescueActive ? 1 : 0,
+					bRescueConditions ? 1 : 0,
+					bHasMediaPipeArmWorld ? 1 : 0,
+					bQuestSideTrackedForArm ? 1 : 0,
+					bMetaHumanFullArmChainFresh ? 1 : 0,
+					RescueQuestDivergenceCm,
+					CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread(),
+					RescueReliability,
+					RescueMinReliability,
+					RescueWristAboveShoulderCm,
+					CVarMediaPipeArmOverheadRescueWristAboveShoulderCm.GetValueOnAnyThread(),
+					QuestWristSideState.ArmRescueEnterSeconds,
+					QuestWristSideState.ArmRescueExitSeconds,
+					NodeDiagSerial,
+					RuntimeStateKey,
+					DeltaSeconds,
+					PoseStateResetCount);
+			}
+		}
+		// Wall-clock dwell accumulation: DeltaSeconds reaches this solve as 0 on evaluations
+		// that ran without a paired update (measured: enterS never moved off 0.00), so the
+		// dwell steps from the keyed state's own last-update timestamp instead.
+		float RescueStepSeconds = QuestWristSideState.ArmRescueLastUpdateTimeSeconds >= 0.0
+			? static_cast<float>(RescueNowWallSeconds - QuestWristSideState.ArmRescueLastUpdateTimeSeconds)
+			: FMath::Max(DeltaSeconds, CachedDeltaTimeSeconds);
+		RescueStepSeconds = FMath::Clamp(RescueStepSeconds, 0.0f, 0.10f);
+		QuestWristSideState.ArmRescueLastUpdateTimeSeconds = RescueNowWallSeconds;
+		if (bRescueConditions)
+		{
+			QuestWristSideState.ArmRescueExitSeconds = 0.0f;
+			QuestWristSideState.ArmRescueEnterSeconds += RescueStepSeconds;
+			if (QuestWristSideState.ArmRescueEnterSeconds >= 0.15f)
+			{
+				QuestWristSideState.bArmRescueActive = true;
+			}
+		}
+		else
+		{
+			// DECAY the entry dwell instead of hard-resetting it: the Quest tracked flag
+			// flickers at frame rate near the FOV edge, and a hard reset let a single tracked
+			// frame erase the dwell forever - conditions held for seconds while the rescue
+			// never latched (measured 2026-07-02). With decay, majority-true flicker still
+			// accumulates; solidly-false conditions still drain to zero.
+			QuestWristSideState.ArmRescueEnterSeconds = FMath::Max(
+				QuestWristSideState.ArmRescueEnterSeconds - RescueStepSeconds * 0.5f, 0.0f);
+			QuestWristSideState.ArmRescueExitSeconds += RescueStepSeconds;
+			if (QuestWristSideState.ArmRescueExitSeconds >= 0.3f)
+			{
+				QuestWristSideState.bArmRescueActive = false;
+			}
+		}
+	}
+	else if (RuntimeStateKey != 0)
+	{
+		QuestWristSideState.bArmRescueActive = false;
+		QuestWristSideState.ArmRescueEnterSeconds = 0.0f;
+		QuestWristSideState.ArmRescueExitSeconds = 0.0f;
+		QuestWristSideState.ArmRescueLastUpdateTimeSeconds = -1.0;
+	}
+	const bool bMediaPipeArmRescue = QuestWristSideState.bArmRescueActive && bHasMediaPipeArmWorld;
+	if (bMediaPipeArmRescue)
+	{
+		// Demote every Quest-driven arm source: the plain MediaPipe landmark path below owns
+		// this arm until the Quest hand is tracked again.
+		bMetaHumanFullArmChainDirectFresh = false;
+		bQuestArmUsesWristEndpoint = false;
+		bQuestArmUsesConstrainedSolve = false;
+		bQuestArmUsesLegacyReachAssist = false;
+		bUseHmdRelativeAvatarArmFrame = false;
+	}
 
 	if (bMetaHumanFullArmChainRequested && !bMetaHumanFullArmChainFresh)
 	{
@@ -274,6 +519,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	ArmHoldInput.bHoldOnQuestHandLossEnabled =
 		!bUseBodyFusionArm &&
 		!bMetaHumanFullArmChainDirectFresh &&
+		!bMediaPipeArmRescue &&
 		CVarMediaPipeArmHoldOnQuestHandLoss.GetValueOnAnyThread() != 0;
 	ArmHoldInput.bQuestHandTrackingEnabled = bQuestHandTrackingEnabled;
 	ArmHoldInput.bQuestSideTracked = bQuestSideTrackedForArm;
@@ -291,9 +537,14 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		ArmObservationAlphaScale = 0.0f;
 	}
 
+	// USER RULE (2026-07-02): while the overhead rescue owns this arm, the reliability gate must
+	// not run - its hold branch lerps low-confidence samples back to the LAST RELIABLE target,
+	// which overhead (reliability 0.2-0.4 at the top of frame) is the lowered arm. The gate
+	// holding against the camera is exactly the forced-down failure the rescue exists to stop.
 	if (!bUseBodyFusionArm &&
 		!bMetaHumanFullArmChainDirectFresh &&
 		!bUseHmdRelativeAvatarArmFrame &&
+		!bMediaPipeArmRescue &&
 		CVarMediaPipeArmReliabilityGate.GetValueOnAnyThread() != 0)
 	{
 		const float ArmMinReliability = FMath::Clamp(CVarMediaPipeArmMinReliability.GetValueOnAnyThread(), 0.0f, 1.0f);
@@ -660,8 +911,22 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		DropoutPolicyInput.bCanInferCalibratedDownPose = bCanInferCalibratedDownPose;
 		DropoutPolicyInput.bHasRecentConstrainedArmSolve = bHasRecentConstrainedArmSolve;
 		DropoutPolicyInput.bHasLastReliableArmSample = bHasLastReliableArmPoseSeed;
+		// USER RULE (2026-07-02): the camera outranks the synthetic down pose. Down-dominance
+		// below the activation threshold while the whole arm is measured means the camera says
+		// the arm is NOT down - the fallback must not run, and an already-active fallback latch
+		// is cancelled outright (the measured failure rode the continue latch through a whole
+		// overhead raise at full-extension-down while the camera watched the arm go up).
+		DropoutPolicyInput.bMediaPipeSeesArmNotDown =
+			bHasMediaPipeArmWorld &&
+			MediaPipeDownDominance < MinDownDominance;
 		const FMediaPipeQuestArmDropoutDownFallbackPolicyResult DropoutPolicy =
 			FMediaPipeQuestWristApplyPolicy::ShouldUseDropoutDownFallback(DropoutPolicyInput);
+
+		if (DropoutPolicyInput.bMediaPipeSeesArmNotDown && QuestWristSideState.bDropoutDownFallbackActive)
+		{
+			QuestWristSideState.bDropoutDownFallbackActive = false;
+			QuestWristSideState.DropoutDownFallbackLastUpdateTimeSeconds = -1.0;
+		}
 
 		if (DropoutPolicy.bUseFallback)
 		{
@@ -3149,8 +3414,87 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	const FTransform HandBeforeCS = HandBone.IsValidToEvaluate()
 		? CSPose.GetComponentSpaceTransform(HandBone.CachedCompactPoseIndex)
 		: FTransform::Identity;
+	// OWNERSHIP LATCH (2026-07-03, measured): the previous "latched" ownership was recomputed
+	// per frame from (rescue || !tracked), so Quest tracked-flag flicker still alternated hand
+	// owners at frame rate (session log: camera owned only ~68%/47% of frames L/R across the
+	// measured overhead window; 21 of 30 sampled mp.QuestWristSolve rows showed the Quest path
+	// applying mid-takeover). The latch now lives in the KEYED side state: once the camera takes
+	// the hand it keeps it until the Quest side stays solidly tracked (and the rescue is off)
+	// for mp.MediaPipeHandOwnershipHandbackSeconds of wall-clock time, then hands back once.
+	const bool bCameraHandFeaturesEnabled =
+		bQuestHandTrackingEnabled &&
+		(CVarMediaPipeHandRotationOnQuestLoss.GetValueOnAnyThread() != 0 ||
+		 CVarMediaPipeFingersOnQuestLoss.GetValueOnAnyThread() != 0) &&
+		!bBodyFusionPoseWriteActive &&
+		!bTrackingFusionReplayActive;
+	bool bCameraOwnsHandPose = false;
+	if (bCameraHandFeaturesEnabled && RuntimeStateKey != 0)
+	{
+		const bool bWasCameraHandLatched = QuestWristSideState.bCameraHandOwnershipLatched;
+		const double OwnershipNowSeconds = FPlatformTime::Seconds();
+		const float OwnershipStepSeconds = QuestWristSideState.CameraHandOwnershipLastUpdateTimeSeconds >= 0.0
+			? FMath::Clamp(static_cast<float>(OwnershipNowSeconds - QuestWristSideState.CameraHandOwnershipLastUpdateTimeSeconds), 0.0f, 0.1f)
+			: 0.0f;
+		QuestWristSideState.CameraHandOwnershipLastUpdateTimeSeconds = OwnershipNowSeconds;
+		if (QuestWristSideState.bArmRescueActive || !bQuestSideTrackedForArm)
+		{
+			QuestWristSideState.bCameraHandOwnershipLatched = true;
+			QuestWristSideState.CameraHandQuestSolidSeconds = 0.0f;
+		}
+		else if (QuestWristSideState.bCameraHandOwnershipLatched)
+		{
+			QuestWristSideState.CameraHandQuestSolidSeconds += OwnershipStepSeconds;
+			// FAST HANDBACK when the arm is clearly DOWN (round two, 2026-07-03: after lowering,
+			// the Quest flickers at its FOV edge so the full solid dwell never completed and the
+			// camera kept owning hands-down with bottom-of-frame landmarks - the session's last
+			// ownership rows show both sides still camera-latched after the lowering phase).
+			// Down-low the Quest is the trustworthy source and the camera is the flaky one, so a
+			// tracked Quest hand takes back after 0.2 s instead of the full overhead dwell.
+			const bool bMediaPipeArmClearlyDown =
+				bHasMediaPipeArmWorld &&
+				(MediaPipeSourceWristWorld.Z - MediaPipeSourceShoulderWorld.Z) <= -10.0f;
+			const float RequiredSolidSeconds = bMediaPipeArmClearlyDown
+				? 0.2f
+				: FMath::Max(0.0f, CVarMediaPipeHandOwnershipHandbackSeconds.GetValueOnAnyThread());
+			if (QuestWristSideState.CameraHandQuestSolidSeconds >= RequiredSolidSeconds)
+			{
+				QuestWristSideState.bCameraHandOwnershipLatched = false;
+				QuestWristSideState.CameraHandQuestSolidSeconds = 0.0f;
+			}
+		}
+		bCameraOwnsHandPose = QuestWristSideState.bCameraHandOwnershipLatched;
+		if (CVarMediaPipeCameraHandTrace.GetValueOnAnyThread() != 0 &&
+			bWasCameraHandLatched != QuestWristSideState.bCameraHandOwnershipLatched)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MediaPipeCameraHandTrace: actor=%s node=%llu key=%u side=%s ownership=%s rescue=%d questTracked=%d questSolidS=%.2f"),
+				*TargetActorName.ToString(),
+				NodeDiagSerial,
+				RuntimeStateKey,
+				bIsLeft ? TEXT("L") : TEXT("R"),
+				QuestWristSideState.bCameraHandOwnershipLatched ? TEXT("cameraLatched") : TEXT("handbackToQuest"),
+				QuestWristSideState.bArmRescueActive ? 1 : 0,
+				bQuestSideTrackedForArm ? 1 : 0,
+				QuestWristSideState.CameraHandQuestSolidSeconds);
+		}
+	}
+	else if (bCameraHandFeaturesEnabled)
+	{
+		// Pre-PreUpdate evaluation (RuntimeStateKey==0): no per-component keyed store to latch
+		// in; fall back to the per-frame formula for this evaluation only.
+		bCameraOwnsHandPose = QuestWristSideState.bArmRescueActive || !bQuestSideTrackedForArm;
+	}
+	else if (RuntimeStateKey != 0 && QuestWristSideState.bCameraHandOwnershipLatched)
+	{
+		// Camera-hand features ended (fusion/replay took authority or the trial layer dropped):
+		// release the latch so a later re-enable starts clean.
+		QuestWristSideState.bCameraHandOwnershipLatched = false;
+		QuestWristSideState.CameraHandQuestSolidSeconds = 0.0f;
+	}
 	FQuestHandRotationTrace QuestHandRotationTrace;
-	const bool bQuestHandRotationApplied = DriveQuestHandCS(CSPose, bIsLeft, QuestForearmAxisComp, CurrentHandTargetCS, DeltaSeconds, &QuestHandRotationTrace, &QuestWristTrace);
+	const bool bQuestHandRotationApplied =
+		!bCameraOwnsHandPose &&
+		DriveQuestHandCS(CSPose, bIsLeft, QuestForearmAxisComp, CurrentHandTargetCS, DeltaSeconds, &QuestHandRotationTrace, &QuestWristTrace);
 	const FTransform HandAfterCS = HandBone.IsValidToEvaluate()
 		? CSPose.GetComponentSpaceTransform(HandBone.CachedCompactPoseIndex)
 		: FTransform::Identity;
@@ -3342,34 +3686,259 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		return;
 	}
 
-	if (bMetaHumanFullArmChainDirectFresh)
+	// USER FEEDBACK (2026-07-03): with the overhead rescue keeping the arm on the camera, the
+	// HAND froze at its last Quest rotation and snapped on reacquire; the first camera-hand
+	// attempt then twisted the wrist because it trusted MediaPipe's left/right HAND LABELS,
+	// which do not survive the mirrored self-view. The camera hand for this arm is now chosen
+	// by IMAGE-SPACE PROXIMITY: the detected hand whose normalized wrist sits closest to this
+	// side's normalized pose wrist (labels ignored; both models share the same image).
+	// Ownership is the LATCHED bCameraOwnsHandPose (rescue latch or untracked side), not the
+	// per-frame tracked flag: gating on the raw flag let camera and Quest alternate hand
+	// ownership at tracked-flag flicker rate (2026-07-03 stability verdict).
+	const bool bMediaPipeHandRotationOnQuestLoss =
+		CVarMediaPipeHandRotationOnQuestLoss.GetValueOnAnyThread() != 0 &&
+		bCameraOwnsHandPose &&
+		bHasMediaPipeArmWorld;
+	const bool bMediaPipeFingersOnQuestLoss =
+		CVarMediaPipeFingersOnQuestLoss.GetValueOnAnyThread() != 0 &&
+		bCameraOwnsHandPose &&
+		bHasMediaPipeArmWorld;
+	// Camera-hand rotation continuity lives in the KEYED side state (2026-07-03, measured:
+	// CacheBones_AnyThread -> BuildReferencePoseCache -> ResetRotationSmoothing runs every frame
+	// in live VR, wiping the FMediaPipeArmSolverState node members this path previously used, so
+	// none of the smoothing/branch-dwell mitigations ever engaged). The legacy camera-only mode
+	// (bMediaPipeHandRotationOnQuestLoss off) keeps the node members untouched.
+	const bool bUseKeyedCameraHandState = bMediaPipeHandRotationOnQuestLoss && RuntimeStateKey != 0;
+	const int32 CameraHandTraceEnabled = CVarMediaPipeCameraHandTrace.GetValueOnAnyThread();
+	// "Hold last rotation" must APPLY the held rotation: returning without applying leaves the
+	// hand at the pass-through pose for that frame (2026-07-03 log: handSel=none frames occurred
+	// about once per second per side during the overhead window - each one was a visible
+	// snap-out/snap-in). The hold expires after 0.75 s without a real camera apply.
+	auto ApplyHeldCameraHandRotation = [&](FCSPose<FCompactPose>& InOutCSPose) -> bool
 	{
-		DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestHands, DeltaSeconds);
-		return;
+		if (!bUseKeyedCameraHandState ||
+			!QuestWristSideState.bHasCameraHandLastApplied ||
+			!HandBone.IsValidToEvaluate())
+		{
+			return false;
+		}
+		const double HeldNowSeconds = FPlatformTime::Seconds();
+		if (QuestWristSideState.LastMediaPipeHandRotationApplyTimeSeconds < 0.0 ||
+			HeldNowSeconds - QuestWristSideState.LastMediaPipeHandRotationApplyTimeSeconds > 0.75)
+		{
+			return false;
+		}
+		ApplyRotationCS(InOutCSPose, HandBone, QuestWristSideState.CameraHandLastAppliedRotCS);
+		return true;
+	};
+
+	const FMediaPipeRawHandLandmarks* SelectedMediaPipeHandWorld = nullptr;
+	const FMediaPipeRawHandLandmarks* SelectedMediaPipeHandNormalized = nullptr;
+	bool bSelectedMediaPipeHandIsLeftArray = false;
+	float SelectedMediaPipeHandImageDist = -1.0f;
+	if ((bMediaPipeHandRotationOnQuestLoss || bMediaPipeFingersOnQuestLoss) &&
+		bHasPoseHands &&
+		bHasPoseFrame &&
+		PoseFrame.Normalized.IsValidIndex(WristLm))
+	{
+		const FMediaPipePoseLandmark& PoseWristNorm = PoseFrame.Normalized.Points[WristLm];
+		auto ImageDistToPoseWrist = [&](const FMediaPipeRawHandLandmarks& HandNormalized) -> float
+		{
+			const FMediaPipeRawHandLandmark& HandWristNorm = HandNormalized.Landmarks[0];
+			const float DX = HandWristNorm.X - PoseWristNorm.X;
+			const float DY = HandWristNorm.Y - PoseWristNorm.Y;
+			return FMath::Sqrt(DX * DX + DY * DY);
+		};
+		// Generous acceptance radius in normalized image units: the pose wrist and the hand
+		// model's wrist land within a few percent of the frame for the same physical hand,
+		// while the OTHER hand is at least a shoulder width away whenever both are detected.
+		const float MaxImageDist = 0.12f;
+		const float LeftDist = PoseHands.bHasLeft != 0
+			? ImageDistToPoseWrist(PoseHands.LeftNormalized)
+			: TNumericLimits<float>::Max();
+		const float RightDist = PoseHands.bHasRight != 0
+			? ImageDistToPoseWrist(PoseHands.RightNormalized)
+			: TNumericLimits<float>::Max();
+		bool bChooseLeftArray = LeftDist <= RightDist;
+		float ChosenDist = bChooseLeftArray ? LeftDist : RightDist;
+		// STICKINESS (2026-07-03 worn verdict: twist/snap): overhead both hands hover near each
+		// other in the image and the nearest match can alternate at frame rate. Keep the arm on
+		// its previous hand unless the other one is decisively closer.
+		const uint8 StickySide = QuestWristSideState.MediaPipeHandStickyArraySide;
+		if (StickySide != 255)
+		{
+			const float StickyDist = StickySide == 0 ? LeftDist : RightDist;
+			const float OtherDist = StickySide == 0 ? RightDist : LeftDist;
+			if (StickyDist <= MaxImageDist && OtherDist >= StickyDist * 0.7f)
+			{
+				bChooseLeftArray = (StickySide == 0);
+				ChosenDist = StickyDist;
+			}
+		}
+		// WRONG-HAND VETO (measured live 2026-07-03 07:13): with this side's own hand undetected
+		// for a stretch, the nearest-match adopted the OTHER arm's hand (side L matched mpRight
+		// at imageDist 0.087 - a true match measures 0.01-0.02 - then stickiness held it and the
+		// wrist snapped 141 degrees into reversed-forward branches). A hand that sits markedly
+		// closer to the OTHER arm's pose wrist belongs to that arm: never adopt it, hold instead.
+		if (ChosenDist <= MaxImageDist)
+		{
+			bool bBelongsToOtherArm = false;
+			const int32 OtherWristLm = bIsLeft
+				? (int32)EMediaPipePoseLandmark::RightWrist
+				: (int32)EMediaPipePoseLandmark::LeftWrist;
+			if (PoseFrame.Normalized.IsValidIndex(OtherWristLm))
+			{
+				const FMediaPipePoseLandmark& OtherWristNorm = PoseFrame.Normalized.Points[OtherWristLm];
+				if (FMath::IsFinite(OtherWristNorm.X) && FMath::IsFinite(OtherWristNorm.Y))
+				{
+					const FMediaPipeRawHandLandmarks& ChosenNormalized =
+						bChooseLeftArray ? PoseHands.LeftNormalized : PoseHands.RightNormalized;
+					const FMediaPipeRawHandLandmark& ChosenWristNorm = ChosenNormalized.Landmarks[HandLm_Wrist];
+					const float OtherDX = ChosenWristNorm.X - OtherWristNorm.X;
+					const float OtherDY = ChosenWristNorm.Y - OtherWristNorm.Y;
+					const float DistToOtherArmWrist = FMath::Sqrt(OtherDX * OtherDX + OtherDY * OtherDY);
+					bBelongsToOtherArm = DistToOtherArmWrist < ChosenDist * 0.9f;
+				}
+			}
+			if (!bBelongsToOtherArm)
+			{
+				SelectedMediaPipeHandWorld = bChooseLeftArray ? &PoseHands.LeftWorld : &PoseHands.RightWorld;
+				SelectedMediaPipeHandNormalized = bChooseLeftArray ? &PoseHands.LeftNormalized : &PoseHands.RightNormalized;
+				bSelectedMediaPipeHandIsLeftArray = bChooseLeftArray;
+				SelectedMediaPipeHandImageDist = ChosenDist;
+			}
+		}
+		if (RuntimeStateKey != 0)
+		{
+			QuestWristSideState.MediaPipeHandStickyArraySide =
+				SelectedMediaPipeHandWorld ? (bSelectedMediaPipeHandIsLeftArray ? 0 : 1) : 255;
+		}
 	}
 
-	if (!bDriveHandRotation)
+	// Fingers while the Quest hand is lost: feed the proximity-matched camera hand through the
+	// existing (user-validated) segment-direction finger solver via a synthetic OpenXR-layout
+	// snapshot. Without a camera hand this stays the real Quest snapshot, whose untracked side
+	// keeps the validated hold-pose behavior.
+	FQuestHandTrackingSnapshot SyntheticMediaPipeQuestHands;
+	bool bHasSyntheticMediaPipeQuestHands = false;
+	bool bQuestFingersForcedHold = false;
+	if (bMediaPipeFingersOnQuestLoss && SelectedMediaPipeHandWorld)
 	{
-		DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestHands, DeltaSeconds);
-		return;
+		SyntheticMediaPipeQuestHands.Reset();
+		FillSyntheticQuestHandSideFromMediaPipe(
+			*SelectedMediaPipeHandWorld,
+			WristWorld,
+			PoseToWorldTransform,
+			WorldScale,
+			bMirrorLandmarksLR,
+			bIsLeft,
+			SyntheticMediaPipeQuestHands);
+		bHasSyntheticMediaPipeQuestHands = true;
+	}
+	else if (bCameraOwnsHandPose && CVarMediaPipeFingersOnQuestLoss.GetValueOnAnyThread() != 0)
+	{
+		// The camera owns the hand but cannot see it this frame: force the side untracked in a
+		// copy so the finger pose gate HOLDS. Passing the raw snapshot let single tracked-flag
+		// blips drive one frame of synthesized Quest fingers between camera frames - the same
+		// alternating-owner snap as the wrist (2026-07-03 stability verdict).
+		SyntheticMediaPipeQuestHands = QuestHands;
+		if (bIsLeft)
+		{
+			SyntheticMediaPipeQuestHands.bLeftTracked = 0;
+		}
+		else
+		{
+			SyntheticMediaPipeQuestHands.bRightTracked = 0;
+		}
+		bQuestFingersForcedHold = true;
+	}
+	const FQuestHandTrackingSnapshot& QuestLossFingerSnapshot =
+		(bHasSyntheticMediaPipeQuestHands || bQuestFingersForcedHold) ? SyntheticMediaPipeQuestHands : QuestHands;
+
+	// Throttled takeover diagnostic: names which camera hand (if any) owns this arm's hand pose
+	// while the camera owns it (including hold frames where no camera hand is visible), so
+	// worn-headset verdicts map to data.
+	if (bCameraOwnsHandPose)
+	{
+		double& LastTakeoverLogTimeSeconds = bIsLeft
+			? DiagnosticsState.LastMediaPipeHandTakeoverLogTimeSecondsL
+			: DiagnosticsState.LastMediaPipeHandTakeoverLogTimeSecondsR;
+		const double TakeoverNowSeconds = FPlatformTime::Seconds();
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(TakeoverNowSeconds, 1.0, LastTakeoverLogTimeSeconds))
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MediaPipeHandTakeover: actor=%s node=%llu key=%u side=%s ownsHand=%d rescueLatched=%d rotWanted=%d fingersWanted=%d handSel=%s imageDist=%.3f mpHandLeftPresent=%d mpHandRightPresent=%d syntheticFingers=%d fingersHeld=%d"),
+				*TargetActorName.ToString(),
+				NodeDiagSerial,
+				RuntimeStateKey,
+				bIsLeft ? TEXT("L") : TEXT("R"),
+				bCameraOwnsHandPose ? 1 : 0,
+				QuestWristSideState.bArmRescueActive ? 1 : 0,
+				bMediaPipeHandRotationOnQuestLoss ? 1 : 0,
+				bMediaPipeFingersOnQuestLoss ? 1 : 0,
+				SelectedMediaPipeHandWorld ? (bSelectedMediaPipeHandIsLeftArray ? TEXT("mpLeft") : TEXT("mpRight")) : TEXT("none"),
+				SelectedMediaPipeHandImageDist,
+				bHasPoseHands ? (PoseHands.bHasLeft != 0 ? 1 : 0) : 0,
+				bHasPoseHands ? (PoseHands.bHasRight != 0 ? 1 : 0) : 0,
+				bHasSyntheticMediaPipeQuestHands ? 1 : 0,
+				bQuestFingersForcedHold ? 1 : 0);
+		}
+	}
+
+	bool bQuestFingersAlreadyDriven = false;
+	if (bMetaHumanFullArmChainDirectFresh)
+	{
+		DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		if (!bMediaPipeHandRotationOnQuestLoss)
+		{
+			return;
+		}
+		bQuestFingersAlreadyDriven = true;
+	}
+	else if (!bDriveHandRotation)
+	{
+		DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		if (!bMediaPipeHandRotationOnQuestLoss)
+		{
+			return;
+		}
+		bQuestFingersAlreadyDriven = true;
 	}
 
 	FVector HandForwardWorld = FVector::ZeroVector;
 	FVector HandUpWorld = FVector::ZeroVector;
 	bool bHasHandBasis = false;
 	float BasisSin = 1.0f;
+	const float RefCameraThumbUpDot = bIsLeft ? RefHandCameraThumbUpDotL : RefHandCameraThumbUpDotR;
+	float MeasuredThumbUpDot = 0.0f;
+	int32 CameraHandChiralityUsed = 0;
+	bool bThumbChiralityConfident = false;
+	float CameraHandCurlAvg = -2.0f;
 
 	if (bHasPoseHands)
 	{
 		auto TryGetRawHandPointWorld = [&](const int32 HandIdx, FVector& OutWorld) -> bool
 		{
-			const bool bHasSide = bIsLeft ? (PoseHands.bHasLeft != 0) : (PoseHands.bHasRight != 0);
-			if (!bHasSide)
+			// Prefer the image-space proximity match (label-free; survives the mirrored
+			// self-view). The label-based lookup remains only for the legacy camera-only mode
+			// where no proximity selection ran - in quest-loss mode a failed proximity match
+			// must NOT fall back to labels (that is how the wrong hand drove this arm).
+			const FMediaPipeRawHandLandmarks* HandWorldPtr = SelectedMediaPipeHandWorld;
+			if (!HandWorldPtr)
 			{
-				return false;
+				if (bMediaPipeHandRotationOnQuestLoss)
+				{
+					return false;
+				}
+				const bool bHasSide = bIsLeft ? (PoseHands.bHasLeft != 0) : (PoseHands.bHasRight != 0);
+				if (!bHasSide)
+				{
+					return false;
+				}
+				HandWorldPtr = bIsLeft ? &PoseHands.LeftWorld : &PoseHands.RightWorld;
 			}
 
-			const FMediaPipeRawHandLandmarks& HandWorld = bIsLeft ? PoseHands.LeftWorld : PoseHands.RightWorld;
+			const FMediaPipeRawHandLandmarks& HandWorld = *HandWorldPtr;
 			const FMediaPipeRawHandLandmark& WristRaw = HandWorld.Landmarks[HandLm_Wrist];
 			const FMediaPipeRawHandLandmark& PointRaw = HandWorld.Landmarks[HandIdx];
 
@@ -3391,13 +3960,35 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		{
 			const bool bHasMiddle = TryGetRawHandPointWorld(HandLm_MiddleMcp, MiddleMcpWorld);
 
-			HandForwardWorld = ((IndexMcpWorld + PinkyMcpWorld) * 0.5f - WristWorld).GetSafeNormal();
+			// IMAGE-PLANE BASIS (rebuilt 2026-07-03 round four): the hand landmarker's DEPTH is
+			// the liar - rounds 3/4 measured identical 2D detection quality on both hands while
+			// the 3D forward sat near-perpendicular to the forearm on one side all session
+			// (fwdDotForearm 0.19 vs 0.68), producing drift the 2D video never showed. The basis
+			// is therefore built from the landmark deltas PROJECTED onto the camera image plane
+			// (the same proven MpWorldToUe mapping; projection needs no new axis-sign
+			// assumptions since a plane is sign-invariant in its normal). What the 2D video
+			// shows is now literally what drives the wrist; the unobservable out-of-plane tilt
+			// follows the forearm instead of following depth noise. An edge-on hand collapses
+			// the 2D across vector -> BasisSin shrinks -> twist freezes (bTwistReliable) or the
+			// hold path keeps the last rotation: a monocular physical limit, frozen not spun.
+			const FVector ImagePlaneNormalWorld = PoseToWorldTransform.TransformVectorNoScale(
+				MediaPipePoseCoordinate::MpWorldToUeLocalUnscaled(FVector(0.0f, 0.0f, 1.0f), bMirrorLandmarksLR)).GetSafeNormal();
+			auto ProjectToImagePlane = [&ImagePlaneNormalWorld](const FVector& Direction) -> FVector
+			{
+				if (ImagePlaneNormalWorld.IsNearlyZero())
+				{
+					return Direction.GetSafeNormal();
+				}
+				return (Direction - FVector::DotProduct(Direction, ImagePlaneNormalWorld) * ImagePlaneNormalWorld).GetSafeNormal();
+			};
+
+			HandForwardWorld = ProjectToImagePlane((IndexMcpWorld + PinkyMcpWorld) * 0.5f - WristWorld);
 			if (HandForwardWorld.IsNearlyZero() && bHasMiddle)
 			{
-				HandForwardWorld = (MiddleMcpWorld - WristWorld).GetSafeNormal();
+				HandForwardWorld = ProjectToImagePlane(MiddleMcpWorld - WristWorld);
 			}
 
-			const FVector AcrossWorld = (IndexMcpWorld - PinkyMcpWorld).GetSafeNormal();
+			const FVector AcrossWorld = ProjectToImagePlane(IndexMcpWorld - PinkyMcpWorld);
 			if (!HandForwardWorld.IsNearlyZero() && !AcrossWorld.IsNearlyZero())
 			{
 				BasisSin = FVector::CrossProduct(HandForwardWorld, AcrossWorld).Size();
@@ -3408,7 +3999,182 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				}
 				bHasHandBasis = !HandUpWorld.IsNearlyZero();
 			}
+
+			// PALM CHIRALITY (2026-07-03 trace: the palm-up and palm-flipped branches split
+			// 408/326 across one overhead session - the up sign was a continuity coin-flip).
+			// The thumb is the one landmark that breaks a hand's mirror symmetry: its side of
+			// the measured palm plane, compared with the ref-pose thumb side
+			// (RefHandCameraThumbUpDot), resolves the capture chain's mirror parity. The parity
+			// is a PHYSICAL CONSTANT (Camo mirror x self-view mirror), so it LOCKS after 0.25 s
+			// of consistent confident thumb frames and re-flips only after 1.0 s of sustained
+			// contrary evidence - round two measured 34/26 transient flips (L/R) from per-frame
+			// re-resolution whenever the thumb crossed the palm plane during palm rotations,
+			// each one a visible 180-degree palm spin.
+			if (bMediaPipeHandRotationOnQuestLoss && bHasHandBasis)
+			{
+				int8 FrameChiralitySign = 0;
+				FVector ThumbMcpWorld = FVector::ZeroVector;
+				if (FMath::Abs(RefCameraThumbUpDot) >= 0.05f &&
+					TryGetRawHandPointWorld(HandLm_ThumbMcp, ThumbMcpWorld))
+				{
+					MeasuredThumbUpDot = FVector::DotProduct(
+						(ThumbMcpWorld - WristWorld).GetSafeNormal(), HandUpWorld);
+					if (FMath::Abs(MeasuredThumbUpDot) >= 0.2f)
+					{
+						bThumbChiralityConfident = true;
+						FrameChiralitySign =
+							((MeasuredThumbUpDot > 0.0f) == (RefCameraThumbUpDot > 0.0f)) ? 1 : -1;
+					}
+				}
+				if (RuntimeStateKey != 0)
+				{
+					const float ChiralityStepSeconds =
+						DeltaSeconds > KINDA_SMALL_NUMBER ? DeltaSeconds : (1.0f / 30.0f);
+					int8& LockedSign = QuestWristSideState.CameraHandChiralitySign;
+					int8& PendingSign = QuestWristSideState.CameraHandChiralityPendingSign;
+					float& PendingSeconds = QuestWristSideState.CameraHandChiralityPendingSeconds;
+					if (FrameChiralitySign != 0)
+					{
+						if (FrameChiralitySign == LockedSign)
+						{
+							PendingSign = LockedSign;
+							PendingSeconds = 0.0f;
+						}
+						else
+						{
+							if (PendingSign == FrameChiralitySign)
+							{
+								PendingSeconds += ChiralityStepSeconds;
+							}
+							else
+							{
+								PendingSign = FrameChiralitySign;
+								PendingSeconds = ChiralityStepSeconds;
+							}
+							const float RequiredSeconds = (LockedSign == 0) ? 0.25f : 1.0f;
+							if (PendingSeconds >= RequiredSeconds)
+							{
+								LockedSign = FrameChiralitySign;
+								PendingSign = FrameChiralitySign;
+								PendingSeconds = 0.0f;
+							}
+						}
+					}
+					CameraHandChiralityUsed = LockedSign != 0 ? LockedSign : FrameChiralitySign;
+				}
+				else
+				{
+					CameraHandChiralityUsed = FrameChiralitySign;
+				}
+				if (CameraHandChiralityUsed == -1)
+				{
+					HandUpWorld = -HandUpWorld;
+				}
+			}
+
+			// Trace-only fist metric from the raw landmarker deltas: +1 = straight fingers,
+			// near 0 or negative = curled. Answers "does MediaPipe see the clenched fist"
+			// independently of what the finger solver applies.
+			if (CameraHandTraceEnabled != 0 && SelectedMediaPipeHandWorld)
+			{
+				float CurlSum = 0.0f;
+				int32 CurlCount = 0;
+				const int32 CurlMcpIndices[4] = {HandLm_IndexMcp, HandLm_MiddleMcp, 13, HandLm_PinkyMcp};
+				for (const int32 CurlMcp : CurlMcpIndices)
+				{
+					const FMediaPipeRawHandLandmark& ProxA = SelectedMediaPipeHandWorld->Landmarks[CurlMcp];
+					const FMediaPipeRawHandLandmark& ProxB = SelectedMediaPipeHandWorld->Landmarks[CurlMcp + 1];
+					const FMediaPipeRawHandLandmark& DistA = SelectedMediaPipeHandWorld->Landmarks[CurlMcp + 2];
+					const FMediaPipeRawHandLandmark& DistB = SelectedMediaPipeHandWorld->Landmarks[CurlMcp + 3];
+					const FVector ProximalSeg = FVector(ProxB.X - ProxA.X, ProxB.Y - ProxA.Y, ProxB.Z - ProxA.Z).GetSafeNormal();
+					const FVector DistalSeg = FVector(DistB.X - DistA.X, DistB.Y - DistA.Y, DistB.Z - DistA.Z).GetSafeNormal();
+					if (!ProximalSeg.IsNearlyZero() && !DistalSeg.IsNearlyZero())
+					{
+						CurlSum += FVector::DotProduct(ProximalSeg, DistalSeg);
+						CurlCount += 1;
+					}
+				}
+				if (CurlCount > 0)
+				{
+					CameraHandCurlAvg = CurlSum / CurlCount;
+				}
+			}
 		}
+	}
+
+	// 2D/3D forward discriminator (round three, 2026-07-03): the left hand's measured 3D forward
+	// sat nearly perpendicular to the forearm all session (fwdDotForearm avg 0.19 vs 0.68 right)
+	// while arm reliability and image-space hand matching were IDENTICAL on both sides - the 3D
+	// geometry is the suspect (ultrawide edge depth distortion), not detection. fwdDot2D checks
+	// the same alignment purely in image space: high 2D agreement + low 3D agreement = the depth
+	// axis is lying for that hand.
+	float FwdDot2D = -2.0f;
+	if (SelectedMediaPipeHandNormalized &&
+		bHasPoseFrame &&
+		PoseFrame.Normalized.IsValidIndex(WristLm) &&
+		PoseFrame.Normalized.IsValidIndex(ElbowLm))
+	{
+		const FMediaPipePoseLandmark& PoseWristN = PoseFrame.Normalized.Points[WristLm];
+		const FMediaPipePoseLandmark& PoseElbowN = PoseFrame.Normalized.Points[ElbowLm];
+		const FMediaPipeRawHandLandmark& HandWristN = SelectedMediaPipeHandNormalized->Landmarks[HandLm_Wrist];
+		const FMediaPipeRawHandLandmark& HandIndexN = SelectedMediaPipeHandNormalized->Landmarks[HandLm_IndexMcp];
+		const FMediaPipeRawHandLandmark& HandPinkyN = SelectedMediaPipeHandNormalized->Landmarks[HandLm_PinkyMcp];
+		FVector2D Forearm2D(PoseWristN.X - PoseElbowN.X, PoseWristN.Y - PoseElbowN.Y);
+		FVector2D HandForward2D(
+			(HandIndexN.X + HandPinkyN.X) * 0.5f - HandWristN.X,
+			(HandIndexN.Y + HandPinkyN.Y) * 0.5f - HandWristN.Y);
+		if (Forearm2D.Normalize(KINDA_SMALL_NUMBER) && HandForward2D.Normalize(KINDA_SMALL_NUMBER))
+		{
+			FwdDot2D = FVector2D::DotProduct(Forearm2D, HandForward2D);
+		}
+	}
+	// World-space forearm alignment gate: a hand forward near-perpendicular to its forearm makes
+	// the swing/twist decomposition ill-conditioned (the round-three left-hand drift: twist
+	// target spread 97 deg vs 35 on the healthy right). Such frames HOLD instead of drive.
+	const FVector ForearmAxisWorldForGate = TargetCompTransform.TransformVectorNoScale(
+		(bHasSmoothedLowerRotCS ? SmoothedLowerRotCS.RotateVector(RefLowerDir) : PoseLowerComp).GetSafeNormal()).GetSafeNormal();
+	const float HandForwardDotForearmWorld = (bHasHandBasis && !ForearmAxisWorldForGate.IsNearlyZero())
+		? FVector::DotProduct(HandForwardWorld, ForearmAxisWorldForGate)
+		: 1.0f;
+
+	// STABILITY (2026-07-03 worn verdict: overhead hands twisted and snapped): while the camera
+	// owns the hand, ONLY the proximity-matched 21-landmark basis may drive it. The coarse pose
+	// index/pinky palm basis below uses a different geometric convention, and swapping sources
+	// at hand-landmarker detection-flicker rate read as snapping; a degenerate edge-on basis
+	// (small BasisSin - with the image-plane basis this now means a genuinely edge-on hand)
+	// holds the last smoothed rotation - the wrist POSITION keeps tracking and fingers keep
+	// their hold-pose. Round four regression lesson: do NOT gate on 3D forearm alignment here -
+	// a hard threshold between live and held rotations alternated the output at the boundary
+	// and destabilized even the healthy hand.
+	if (bMediaPipeHandRotationOnQuestLoss && (!bHasHandBasis || BasisSin < 0.15f))
+	{
+		const bool bHeldRotationApplied = ApplyHeldCameraHandRotation(CSPose);
+		if (CameraHandTraceEnabled != 0)
+		{
+			const TCHAR* HoldPhase = !bHasHandBasis
+				? TEXT("holdNoHand")
+				: TEXT("holdDegenerateBasis");
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MediaPipeCameraHandTrace: actor=%s node=%llu key=%u side=%s phase=%s held=%d basisSin=%.3f fwdDotForearmW=%.2f fwdDot2D=%.2f handSel=%s imageDist=%.3f cacheBones=%llu dt=%.4f"),
+				*TargetActorName.ToString(),
+				NodeDiagSerial,
+				RuntimeStateKey,
+				bIsLeft ? TEXT("L") : TEXT("R"),
+				HoldPhase,
+				bHeldRotationApplied ? 1 : 0,
+				BasisSin,
+				HandForwardDotForearmWorld,
+				FwdDot2D,
+				SelectedMediaPipeHandWorld ? (bSelectedMediaPipeHandIsLeftArray ? TEXT("mpLeft") : TEXT("mpRight")) : TEXT("none"),
+				SelectedMediaPipeHandImageDist,
+				CacheBonesDiagCount,
+				DeltaSeconds);
+		}
+		if (!bQuestFingersAlreadyDriven)
+		{
+			DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		}
+		return;
 	}
 
 	if (!bHasHandBasis)
@@ -3454,32 +4220,121 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	const FVector HandUpComp = TargetCompTransform.InverseTransformVectorNoScale(HandUpWorld).GetSafeNormal();
 	if (HandForwardComp.IsNearlyZero() || HandUpComp.IsNearlyZero())
 	{
+		// Degenerate frame while camera-owned: hold the last applied rotation instead of letting
+		// the hand revert to the pass-through pose for one frame (same rule as the basis hold).
+		ApplyHeldCameraHandRotation(CSPose);
+		if (bMediaPipeHandRotationOnQuestLoss && !bQuestFingersAlreadyDriven)
+		{
+			DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		}
 		return;
 	}
 
 	const FVector ForearmAxisComp = (bHasSmoothedLowerRotCS ? SmoothedLowerRotCS.RotateVector(RefLowerDir) : PoseLowerComp).GetSafeNormal();
 	if (ForearmAxisComp.IsNearlyZero())
 	{
+		ApplyHeldCameraHandRotation(CSPose);
+		if (bMediaPipeHandRotationOnQuestLoss && !bQuestFingersAlreadyDriven)
+		{
+			DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		}
 		return;
 	}
 
+	// In quest-loss camera mode the measured knuckle basis maps onto the ref-pose KNUCKLE
+	// geometry evaluated with the same formula (RefHandCameraBasisComp), so the palm side is
+	// deterministic by construction. Mapping onto the bone-axis basis (legacy path below) left
+	// the up sign unmodeled - the 2026-07-03 trace showed it settling on either palm branch.
+	const bool bHasRefCameraBasis = bIsLeft ? bHasRefHandCameraBasisL : bHasRefHandCameraBasisR;
+	const FQuat& CameraMappingRefBasisComp =
+		(bMediaPipeHandRotationOnQuestLoss && bHasRefCameraBasis)
+			? (bIsLeft ? RefHandCameraBasisCompL : RefHandCameraBasisCompR)
+			: RefHandBasisComp;
 	auto MakeTargetHandRot = [&](const FVector& ForwardC, const FVector& UpC) -> FQuat
 	{
 		const FQuat TargetBasisComp = MakeQuatFromForwardUp(ForwardC, UpC);
-		const FQuat DeltaHand = TargetBasisComp * RefHandBasisComp.Inverse();
+		const FQuat DeltaHand = TargetBasisComp * CameraMappingRefBasisComp.Inverse();
 		return (DeltaHand * RefHandComp).GetNormalized();
 	};
 
-	bool& bHasLastGoodTarget = bIsLeft ? LeftArmState.bHasLastGoodHandTarget : RightArmState.bHasLastGoodHandTarget;
-	FQuat& LastGoodTarget = bIsLeft ? LeftArmState.LastGoodHandTargetCS : RightArmState.LastGoodHandTargetCS;
-	int32& ActiveBranch = bIsLeft ? LeftArmState.ActiveHandTargetBranch : RightArmState.ActiveHandTargetBranch;
-	int32& PendingBranch = bIsLeft ? LeftArmState.PendingHandTargetBranch : RightArmState.PendingHandTargetBranch;
-	int32& PendingFrames = bIsLeft ? LeftArmState.PendingHandTargetBranchFrames : RightArmState.PendingHandTargetBranchFrames;
+	// In quest-loss camera mode the continuity state binds to the KEYED side store (survives the
+	// per-frame CacheBones reset, measured 2026-07-03); legacy camera-only mode keeps the node
+	// members so behavior there is unchanged.
+	bool& bHasLastGoodTarget = bUseKeyedCameraHandState
+		? QuestWristSideState.bHasCameraHandLastGoodTarget
+		: (bIsLeft ? LeftArmState.bHasLastGoodHandTarget : RightArmState.bHasLastGoodHandTarget);
+	FQuat& LastGoodTarget = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandLastGoodTargetCS
+		: (bIsLeft ? LeftArmState.LastGoodHandTargetCS : RightArmState.LastGoodHandTargetCS);
+	int32& ActiveBranch = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandActiveBranch
+		: (bIsLeft ? LeftArmState.ActiveHandTargetBranch : RightArmState.ActiveHandTargetBranch);
+	int32& PendingBranch = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandPendingBranch
+		: (bIsLeft ? LeftArmState.PendingHandTargetBranch : RightArmState.PendingHandTargetBranch);
+	int32& PendingFrames = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandPendingBranchFrames
+		: (bIsLeft ? LeftArmState.PendingHandTargetBranchFrames : RightArmState.PendingHandTargetBranchFrames);
 
-	bool& bHasSmoothedSwing = bIsLeft ? LeftArmState.bHasSmoothedHandSwingCS : RightArmState.bHasSmoothedHandSwingCS;
-	FQuat& SmoothedSwing = bIsLeft ? LeftArmState.SmoothedHandSwingCS : RightArmState.SmoothedHandSwingCS;
-	bool& bHasSmoothedTwist = bIsLeft ? LeftArmState.bHasSmoothedHandTwist : RightArmState.bHasSmoothedHandTwist;
-	float& SmoothedTwistDeg = bIsLeft ? LeftArmState.SmoothedHandTwistDeg : RightArmState.SmoothedHandTwistDeg;
+	bool& bHasSmoothedSwing = bUseKeyedCameraHandState
+		? QuestWristSideState.bHasCameraHandSmoothedSwing
+		: (bIsLeft ? LeftArmState.bHasSmoothedHandSwingCS : RightArmState.bHasSmoothedHandSwingCS);
+	FQuat& SmoothedSwing = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandSmoothedSwingCS
+		: (bIsLeft ? LeftArmState.SmoothedHandSwingCS : RightArmState.SmoothedHandSwingCS);
+	bool& bHasSmoothedTwist = bUseKeyedCameraHandState
+		? QuestWristSideState.bHasCameraHandSmoothedTwist
+		: (bIsLeft ? LeftArmState.bHasSmoothedHandTwist : RightArmState.bHasSmoothedHandTwist);
+	float& SmoothedTwistDeg = bUseKeyedCameraHandState
+		? QuestWristSideState.CameraHandSmoothedTwistDeg
+		: (bIsLeft ? LeftArmState.SmoothedHandTwistDeg : RightArmState.SmoothedHandTwistDeg);
+
+	// Wall-clock smoothing step for the keyed filter: DeltaSeconds can be 0 in Evaluate (the
+	// accumulate-in-Update/consume-in-Evaluate CachedDeltaTimeSeconds pattern), and the caps
+	// below multiply by it.
+	float SmoothStepSeconds = DeltaSeconds;
+	bool bSeededFromCurrentPose = false;
+	if (bUseKeyedCameraHandState)
+	{
+		const double SmoothNowSeconds = FPlatformTime::Seconds();
+		SmoothStepSeconds = QuestWristSideState.CameraHandSmoothLastStepTimeSeconds >= 0.0
+			? FMath::Clamp(static_cast<float>(SmoothNowSeconds - QuestWristSideState.CameraHandSmoothLastStepTimeSeconds), 0.0f, 0.1f)
+			: (DeltaSeconds > KINDA_SMALL_NUMBER ? DeltaSeconds : (1.0f / 30.0f));
+		QuestWristSideState.CameraHandSmoothLastStepTimeSeconds = SmoothNowSeconds;
+	}
+	if (bMediaPipeHandRotationOnQuestLoss)
+	{
+		// Smooth HANDOVER: seed the swing/twist filter from the hand bone's CURRENT pose when the
+		// Quest path owned the hand more recently OR the camera has not applied for a while, so
+		// the camera target is approached from where the hand visibly is instead of snapping.
+		// Runs BEFORE the branch chooser so the first camera frame anchors branch continuity to
+		// the current pose, not the ref pose (the ref-pose anchor let the chooser pick a flipped
+		// branch on the first frame of every takeover).
+		const double SeedNowSeconds = FPlatformTime::Seconds();
+		const double LastCameraApplySeconds = QuestWristSideState.LastMediaPipeHandRotationApplyTimeSeconds;
+		const bool bQuestOwnedHandMoreRecently =
+			QuestWristSideState.LastHandRotationApplyTimeSeconds >= 0.0 &&
+			QuestWristSideState.LastHandRotationApplyTimeSeconds > LastCameraApplySeconds;
+		const bool bCameraApplyStale =
+			LastCameraApplySeconds < 0.0 ||
+			(SeedNowSeconds - LastCameraApplySeconds) > 0.75;
+		if ((bQuestOwnedHandMoreRecently || bCameraApplyStale) && HandBone.IsValidToEvaluate())
+		{
+			const FQuat CurrentHandPoseRotCS =
+				CSPose.GetComponentSpaceTransform(HandBone.CachedCompactPoseIndex).GetRotation();
+			FQuat SeedSwing = FQuat::Identity;
+			float SeedTwistDeg = 0.0f;
+			if (DecomposeSwingTwistDegAroundAxis(CurrentHandPoseRotCS, ForearmAxisComp, SeedSwing, SeedTwistDeg))
+			{
+				SmoothedSwing = SeedSwing;
+				bHasSmoothedSwing = true;
+				SmoothedTwistDeg = SeedTwistDeg;
+				bHasSmoothedTwist = true;
+				bHasLastGoodTarget = false;
+				bSeededFromCurrentPose = true;
+			}
+		}
+	}
 
 	FQuat CurrentHandRotCS = RefHandComp;
 	if (bHasSmoothedSwing && bHasSmoothedTwist)
@@ -3500,11 +4355,32 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	};
 
 	const FQuat BranchRef = bHasLastGoodTarget ? LastGoodTarget : CurrentHandRotCS;
-	float BestScore = -1.0f;
+	// Anatomical hemisphere bound (USER FEEDBACK 2026-07-03: overhead hands folded back against
+	// the forearm into a "mantis" pose): a human wrist cannot flex the hand to point BACK along
+	// the forearm, so any branch whose forward direction opposes the forearm axis is heavily
+	// penalized. Candidates alternate the forward sign (+F,-F,+F,-F); the penalty is soft so a
+	// fully-degenerate frame still picks the continuity-best branch instead of none.
+	const float HandForwardDotForearm = FVector::DotProduct(HandForwardComp, ForearmAxisComp);
+	float CandidateScores[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+	float BestScore = -100.0f;
 	int32 BestIndex = 0;
 	for (int32 i = 0; i < 4; ++i)
 	{
-		const float Score = FMath::Abs(Candidates[i] | BranchRef);
+		float Score = FMath::Abs(Candidates[i] | BranchRef);
+		const float CandidateForwardSign = (i == 1 || i == 3) ? -1.0f : 1.0f;
+		if (CandidateForwardSign * HandForwardDotForearm < -0.15f)
+		{
+			Score -= 10.0f;
+		}
+		// With the palm parity resolved (session-locked or thumb-confident this frame), the
+		// flipped-up candidates are anatomically wrong: penalize them past the continuity margin
+		// so the chooser cannot settle on a palm-inverted branch (2026-07-03 trace: it did,
+		// roughly half the time before the parity model existed).
+		if (CameraHandChiralityUsed != 0 && i >= 2)
+		{
+			Score -= 0.35f;
+		}
+		CandidateScores[i] = Score;
 		if (Score > BestScore)
 		{
 			BestScore = Score;
@@ -3512,13 +4388,21 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 	}
 
+	// STABILITY (2026-07-03 worn verdict): a branch flip is a visible 180-degree spin, so while
+	// the camera owns the hand a switch needs BOTH a decisive score margin over the currently
+	// active branch AND twice the usual dwell. Ties at the decision boundary must never oscillate.
+	const float BranchSwitchMargin = bMediaPipeHandRotationOnQuestLoss ? 0.10f : 0.0f;
+	const int32 EffectiveFlipHysteresisFrames = bMediaPipeHandRotationOnQuestLoss
+		? FMath::Max(HandFlipHysteresisFrames, 8)
+		: HandFlipHysteresisFrames;
 	if (!bHasLastGoodTarget)
 	{
 		ActiveBranch = BestIndex;
 		PendingFrames = 0;
 		PendingBranch = BestIndex;
 	}
-	else if (BestIndex != ActiveBranch)
+	else if (BestIndex != ActiveBranch &&
+		BestScore > CandidateScores[FMath::Clamp(ActiveBranch, 0, 3)] + BranchSwitchMargin)
 	{
 		if (bTwistReliable)
 		{
@@ -3532,7 +4416,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				PendingFrames++;
 			}
 
-			if (PendingFrames >= FMath::Max(1, HandFlipHysteresisFrames))
+			if (PendingFrames >= FMath::Max(1, EffectiveFlipHysteresisFrames))
 			{
 				ActiveBranch = BestIndex;
 				PendingFrames = 0;
@@ -3557,10 +4441,30 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	float TargetTwistDeg = 0.0f;
 	if (!DecomposeSwingTwistDegAroundAxis(MeasuredTarget, ForearmAxisComp, TargetSwing, TargetTwistDeg))
 	{
+		ApplyHeldCameraHandRotation(CSPose);
+		if (bMediaPipeHandRotationOnQuestLoss && !bQuestFingersAlreadyDriven)
+		{
+			DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+		}
 		return;
 	}
 
-	const float RotAlpha = HalfLifeToAlpha(ArmIKRotationHalfLifeSeconds, DeltaSeconds);
+	float EffectiveRotationHalfLifeSeconds = ArmIKRotationHalfLifeSeconds;
+	if (bMediaPipeHandRotationOnQuestLoss)
+	{
+		// (The handover seeding moved ABOVE the branch chooser - see bSeededFromCurrentPose.)
+		// 0.12 s half-life + hard speed caps below: the camera hand basis is noisy overhead and
+		// wrist rotation reads better slightly slow than twitchy (2026-07-03 worn verdict).
+		EffectiveRotationHalfLifeSeconds = FMath::Max(EffectiveRotationHalfLifeSeconds, 0.12f);
+	}
+	const float EffectiveSwingMaxDegreesPerSecond = bMediaPipeHandRotationOnQuestLoss
+		? (HandSwingMaxDegreesPerSecond > 0.0f ? FMath::Min(HandSwingMaxDegreesPerSecond, 360.0f) : 360.0f)
+		: HandSwingMaxDegreesPerSecond;
+	const float EffectiveTwistMaxDegreesPerSecond = bMediaPipeHandRotationOnQuestLoss
+		? (HandTwistMaxDegreesPerSecond > 0.0f ? FMath::Min(HandTwistMaxDegreesPerSecond, 270.0f) : 270.0f)
+		: HandTwistMaxDegreesPerSecond;
+	const float RotAlpha = HalfLifeToAlpha(EffectiveRotationHalfLifeSeconds, SmoothStepSeconds);
+	float SwingToTargetDeg = 0.0f;
 	if (!bHasSmoothedSwing)
 	{
 		SmoothedSwing = TargetSwing;
@@ -3570,7 +4474,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	{
 		float AlphaSwing = RotAlpha;
 		const float SwingAngleDeg = FMath::RadiansToDegrees(SmoothedSwing.AngularDistance(TargetSwing));
-		const float MaxSwingStepDeg = HandSwingMaxDegreesPerSecond * DeltaSeconds;
+		SwingToTargetDeg = SwingAngleDeg;
+		const float MaxSwingStepDeg = EffectiveSwingMaxDegreesPerSecond * SmoothStepSeconds;
 		if (MaxSwingStepDeg > 0.0f && SwingAngleDeg > KINDA_SMALL_NUMBER)
 		{
 			AlphaSwing = FMath::Min(AlphaSwing, MaxSwingStepDeg / SwingAngleDeg);
@@ -3592,7 +4497,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	else if (bTwistReliable)
 	{
 		float DeltaTwistDeg = FMath::FindDeltaAngleDegrees(SmoothedTwistDeg, DesiredTwistDeg);
-		const float MaxTwistStepDeg = HandTwistMaxDegreesPerSecond * DeltaSeconds;
+		const float MaxTwistStepDeg = EffectiveTwistMaxDegreesPerSecond * SmoothStepSeconds;
 		if (MaxTwistStepDeg > 0.0f)
 		{
 			DeltaTwistDeg = FMath::Clamp(DeltaTwistDeg, -MaxTwistStepDeg, MaxTwistStepDeg);
@@ -3610,6 +4515,53 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 
 	const FQuat TwistQ(ForearmAxisComp, FMath::DegreesToRadians(SmoothedTwistDeg));
 	const FQuat TargetHandRotCS = (SmoothedSwing * TwistQ).GetNormalized();
+	// The user-visible frame-to-frame jump: distance from the previous camera-applied rotation.
+	const float AppliedDeltaDeg = (bUseKeyedCameraHandState && QuestWristSideState.bHasCameraHandLastApplied)
+		? FMath::RadiansToDegrees(QuestWristSideState.CameraHandLastAppliedRotCS.AngularDistance(TargetHandRotCS))
+		: -1.0f;
 	ApplyRotationCS(CSPose, HandBone, TargetHandRotCS);
-	DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestHands, DeltaSeconds);
+	if (RuntimeStateKey != 0)
+	{
+		QuestWristSideState.LastMediaPipeHandRotationApplyTimeSeconds = FPlatformTime::Seconds();
+		QuestWristSideState.CameraHandLastAppliedRotCS = TargetHandRotCS;
+		QuestWristSideState.bHasCameraHandLastApplied = true;
+	}
+	if (CameraHandTraceEnabled != 0 && bMediaPipeHandRotationOnQuestLoss)
+	{
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.MediaPipeCameraHandTrace: actor=%s node=%llu key=%u side=%s phase=apply appliedDeltaDeg=%.1f seeded=%d branch(act=%d best=%d pend=%d frames=%d) scores=[%.3f %.3f %.3f %.3f] twistReliable=%d basisSin=%.3f fwdDotForearm=%.2f fwdDot2D=%.2f chir=%d thumbConf=%d thumbDot=%.2f refThumbDot=%.2f curlAvg=%.2f twistTgt=%.1f twistSm=%.1f swingToTgtDeg=%.1f handSel=%s imageDist=%.3f sticky=%d dt=%.4f stepS=%.4f cacheBones=%llu"),
+			*TargetActorName.ToString(),
+			NodeDiagSerial,
+			RuntimeStateKey,
+			bIsLeft ? TEXT("L") : TEXT("R"),
+			AppliedDeltaDeg,
+			bSeededFromCurrentPose ? 1 : 0,
+			ActiveBranch,
+			BestIndex,
+			PendingBranch,
+			PendingFrames,
+			CandidateScores[0], CandidateScores[1], CandidateScores[2], CandidateScores[3],
+			bTwistReliable ? 1 : 0,
+			BasisSin,
+			HandForwardDotForearm,
+			FwdDot2D,
+			CameraHandChiralityUsed,
+			bThumbChiralityConfident ? 1 : 0,
+			MeasuredThumbUpDot,
+			RefCameraThumbUpDot,
+			CameraHandCurlAvg,
+			TargetTwistDeg,
+			SmoothedTwistDeg,
+			SwingToTargetDeg,
+			SelectedMediaPipeHandWorld ? (bSelectedMediaPipeHandIsLeftArray ? TEXT("mpLeft") : TEXT("mpRight")) : TEXT("none"),
+			SelectedMediaPipeHandImageDist,
+			QuestWristSideState.MediaPipeHandStickyArraySide,
+			DeltaSeconds,
+			SmoothStepSeconds,
+			CacheBonesDiagCount);
+	}
+	if (!bQuestFingersAlreadyDriven)
+	{
+		DriveQuestFingerBonesCS(CSPose, bIsLeft, QuestLossFingerSnapshot, DeltaSeconds);
+	}
 }

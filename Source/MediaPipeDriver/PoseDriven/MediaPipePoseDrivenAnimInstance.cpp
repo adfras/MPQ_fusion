@@ -47,6 +47,10 @@ namespace
 {
 FCriticalSection GMediaPipePoseDrivenSignalSnapshotsCritical;
 TMap<uint32, FMediaPipePoseDrivenSignalSnapshot> GMediaPipePoseDrivenSignalSnapshotsByRuntimeKey;
+// Monotonic identity for pose-driven node instances (mp.PoseNodeReset diagnostics): a serial
+// that changes between rows for the same component proves the anim instance (and with it every
+// node member: rescue dwell, smoothing, throttles) was recreated rather than reset in place.
+std::atomic<uint64> GMediaPipePoseNodeDiagSerialCounter{0};
 }
 #include "HAL/IConsoleManager.h"
 #include "HeadMountedDisplayTypes.h"
@@ -57,6 +61,57 @@ TMap<uint32, FMediaPipePoseDrivenSignalSnapshot> GMediaPipePoseDrivenSignalSnaps
 #endif
 
 #include "MediaPipePoseDrivenAnimInstanceShared.h"
+
+// Single process-wide keyed runtime-state stores (declared in the shared solver header). The
+// lock guards the map STRUCTURE only: concurrent FindOrAdd from parallel anim-evaluation worker
+// threads rehashed the old per-TU TMaps mid-read (2026-07-03 live crash). Values are
+// heap-allocated so handed-out references survive map growth; entries are never removed, and
+// per-key mutation stays single-threaded by the anim update/evaluate ordering per component.
+namespace
+{
+template <typename StateType>
+StateType& FindOrAddKeyedRuntimeState(
+	FCriticalSection& Lock,
+	TMap<uint32, TUniquePtr<StateType>>& Store,
+	const uint32 Key)
+{
+	FScopeLock ScopeLock(&Lock);
+	TUniquePtr<StateType>& Entry = Store.FindOrAdd(Key);
+	if (!Entry)
+	{
+		Entry = MakeUnique<StateType>();
+	}
+	return *Entry;
+}
+} // namespace
+
+FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FPoseYawAlignRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
+
+FQuestWristRuntimeState& GetQuestWristRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FQuestWristRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
+
+FDerivedSignalRuntimeState& GetDerivedSignalRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FDerivedSignalRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
+
+FMediaPipeFootContactRuntimeState& GetFootContactRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FMediaPipeFootContactRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
 
 namespace
 {
@@ -184,6 +239,11 @@ void FAnimNode_MediaPipePoseDriven::CacheBones_AnyThread(const FAnimationCacheBo
 {
 	FAnimNode_Base::CacheBones_AnyThread(Context);
 
+	// BuildReferencePoseCache below mass-resets node-member solver state; this counter measures
+	// how often that actually happens (2026-07-03: every frame in live VR). Cross-frame solver
+	// state must live in the keyed runtime stores, never in node members.
+	CacheBonesDiagCount += 1;
+
 	const FBoneContainer& RequiredBones = Context.AnimInstanceProxy->GetRequiredBones();
 
 	Root.Initialize(RequiredBones);
@@ -277,6 +337,10 @@ void FAnimNode_MediaPipePoseDriven::Update_AnyThread(const FAnimationUpdateConte
 
 void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstance)
 {
+	if (NodeDiagSerial == 0)
+	{
+		NodeDiagSerial = ++GMediaPipePoseNodeDiagSerialCounter;
+	}
 	TargetActorName = NAME_None;
 	TargetEmbodimentProfile = FMediaPipeAvatarEmbodimentProfile();
 	bHasTargetEmbodimentProfile = false;
@@ -326,6 +390,28 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 
 	if (bResetPoseStateNextUpdate)
 	{
+		// Every reset wipes the arm-rescue dwell, the diagnostics throttles, and the component's
+		// keyed wrist runtime state (arm-length calibration included). If these rows repeat at
+		// frame rate, the trigger named in reasonMask is ping-ponging a node setting per tick and
+		// no cross-frame arm state can ever survive (measured symptom 2026-07-02: the overhead
+		// rescue never latched). Reason bits: 1=SetSourceActor 2=ResetRetargetState
+		// 4=TimestampRewind; bits 8+ = ApplyRetargetQualitySettings field index (see
+		// ApplyRetargetQualitySettings for the field order).
+		PoseStateResetCount += 1;
+		const double ResetLogNowSeconds = FPlatformTime::Seconds();
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(ResetLogNowSeconds, 0.25, LastPoseStateResetLogTimeSeconds))
+		{
+			UE_LOG(
+				LogMediaPipePose,
+				Log,
+				TEXT("mp.PoseNodeReset: actor=%s key=%u node=%llu count=%u reasonMask=0x%08x"),
+				*TargetActorName.ToString(),
+				RuntimeStateKey,
+				NodeDiagSerial,
+				PoseStateResetCount,
+				PoseStateResetReasonMask);
+		}
+		PoseStateResetReasonMask = 0;
 		BodyState.bHasReferenceHipHeight = false;
 		BodyState.ReferenceHipHeightCm = 0.0f;
 		BodyState.bHasSmoothedPelvisOffset = false;
@@ -354,6 +440,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 		ResetFootPlantState();
 		ResetPoseYawAlignRuntimeState(SkelComp);
 		ResetQuestWristRuntimeState(SkelComp);
+		ResetFootContactRuntimeState(SkelComp);
 		ResetRotationSmoothing();
 		if (bResetDerivedSignalReferencesNextUpdate)
 		{
@@ -2247,9 +2334,11 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 			ResetFootPlantState();
 			ResetPoseYawAlignRuntimeState(RuntimeStateKey);
 			ResetQuestWristRuntimeState(RuntimeStateKey);
+			ResetFootContactRuntimeState(RuntimeStateKey);
 			ResetDerivedSignalRuntimeState(RuntimeStateKey);
 			ResetRotationSmoothing();
 			BodyState.ResetDerivedSignalReferences();
+			PoseStateResetReasonMask |= 0x4;
 			UE_LOG(
 				LogMediaPipePose,
 				Warning,
@@ -2401,6 +2490,7 @@ void UMediaPipePoseDrivenAnimInstance::SetSourceActor(AActor* InSource)
 		Proxy.PoseNode.SourceActor = InSource;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
 		Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x1;
 	}
 }
 
@@ -2423,6 +2513,7 @@ void UMediaPipePoseDrivenAnimInstance::ResetRetargetState()
 	FMediaPipePoseDrivenAnimInstanceProxy& Proxy = GetProxyOnGameThread<FMediaPipePoseDrivenAnimInstanceProxy>();
 	Proxy.PoseNode.bResetPoseStateNextUpdate = true;
 	Proxy.PoseNode.bResetDerivedSignalReferencesNextUpdate = true;
+	Proxy.PoseNode.PoseStateResetReasonMask |= 0x2;
 }
 
 bool UMediaPipePoseDrivenAnimInstance::GetLatestSignalSnapshot(FMediaPipePoseDrivenSignalSnapshot& OutSnapshot)
@@ -2490,29 +2581,39 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	const float NewHeadRotationMaxStepDegrees = FMath::Max(0.0f, CVarMediaPipeHeadRotationMaxStepDegrees.GetValueOnGameThread());
 	const float NewHeadRotationMaxSpeedDegreesPerSecond = FMath::Max(0.0f, CVarMediaPipeHeadRotationMaxSpeedDegreesPerSecond.GetValueOnGameThread());
 
-	const bool bChanged =
-		PoseNode.bDriveClavicles != bNewDriveClavicles ||
-		PoseNode.bDriveSpine != bNewDriveSpine ||
-		PoseNode.bDrivePelvisTranslation != bNewDrivePelvisTranslation ||
-		PoseNode.bDriveLegs != bNewDriveLegs ||
-		PoseNode.bUseArmIK != bNewUseArmIK ||
-		PoseNode.bUseLegIK != bNewUseLegIK ||
-		PoseNode.bUseLegIKFootPlant != bNewUseLegIKFootPlant ||
-		PoseNode.bUseFkRootGrounding != bNewUseFkRootGrounding ||
-		PoseNode.bDriveHandRotation != bNewDriveHandRotation ||
-		PoseNode.bUseQuestHandTracking != bNewUseQuestHandTracking ||
-		PoseNode.bDriveQuestFingerBones != bNewDriveQuestFingerBones ||
-		!FMath::IsNearlyEqual(PoseNode.QuestHandRotationBlend, NewQuestHandRotationBlend, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.QuestFingerRotationHalfLifeSeconds, NewQuestFingerRotationHalfLifeSeconds, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.ArmIKTargetHalfLifeSeconds, NewArmTargetHalfLifeSeconds, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.ArmIKRotationHalfLifeSeconds, NewArmRotationHalfLifeSeconds, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.SpineRotationHalfLifeSeconds, NewSpineRotationHalfLifeSeconds, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadRotationHalfLifeSeconds, NewHeadRotationHalfLifeSeconds, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadTwistWeight, NewHeadTwistWeight, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadFaceBlend, NewHeadFaceBlend, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadPitchScale, NewHeadPitchScale, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadRotationMaxStepDegrees, NewHeadRotationMaxStepDegrees, 0.001f) ||
-		!FMath::IsNearlyEqual(PoseNode.HeadRotationMaxSpeedDegreesPerSecond, NewHeadRotationMaxSpeedDegreesPerSecond, 0.001f);
+	// Field-indexed change mask (bit 8<<i) so mp.PoseNodeReset rows can name WHICH setting is
+	// ping-ponging when the reset repeats at frame rate.
+	uint32 ChangedFieldMask = 0;
+	auto MarkChanged = [&ChangedFieldMask](const int32 FieldIndex, const bool bFieldChanged)
+	{
+		if (bFieldChanged)
+		{
+			ChangedFieldMask |= (0x100u << FieldIndex);
+		}
+	};
+	MarkChanged(0, PoseNode.bDriveClavicles != bNewDriveClavicles);
+	MarkChanged(1, PoseNode.bDriveSpine != bNewDriveSpine);
+	MarkChanged(2, PoseNode.bDrivePelvisTranslation != bNewDrivePelvisTranslation);
+	MarkChanged(3, PoseNode.bDriveLegs != bNewDriveLegs);
+	MarkChanged(4, PoseNode.bUseArmIK != bNewUseArmIK);
+	MarkChanged(5, PoseNode.bUseLegIK != bNewUseLegIK);
+	MarkChanged(6, PoseNode.bUseLegIKFootPlant != bNewUseLegIKFootPlant);
+	MarkChanged(7, PoseNode.bUseFkRootGrounding != bNewUseFkRootGrounding);
+	MarkChanged(8, PoseNode.bDriveHandRotation != bNewDriveHandRotation);
+	MarkChanged(9, PoseNode.bUseQuestHandTracking != bNewUseQuestHandTracking);
+	MarkChanged(10, PoseNode.bDriveQuestFingerBones != bNewDriveQuestFingerBones);
+	MarkChanged(11, !FMath::IsNearlyEqual(PoseNode.QuestHandRotationBlend, NewQuestHandRotationBlend, 0.001f));
+	MarkChanged(12, !FMath::IsNearlyEqual(PoseNode.QuestFingerRotationHalfLifeSeconds, NewQuestFingerRotationHalfLifeSeconds, 0.001f));
+	MarkChanged(13, !FMath::IsNearlyEqual(PoseNode.ArmIKTargetHalfLifeSeconds, NewArmTargetHalfLifeSeconds, 0.001f));
+	MarkChanged(14, !FMath::IsNearlyEqual(PoseNode.ArmIKRotationHalfLifeSeconds, NewArmRotationHalfLifeSeconds, 0.001f));
+	MarkChanged(15, !FMath::IsNearlyEqual(PoseNode.SpineRotationHalfLifeSeconds, NewSpineRotationHalfLifeSeconds, 0.001f));
+	MarkChanged(16, !FMath::IsNearlyEqual(PoseNode.HeadRotationHalfLifeSeconds, NewHeadRotationHalfLifeSeconds, 0.001f));
+	MarkChanged(17, !FMath::IsNearlyEqual(PoseNode.HeadTwistWeight, NewHeadTwistWeight, 0.001f));
+	MarkChanged(18, !FMath::IsNearlyEqual(PoseNode.HeadFaceBlend, NewHeadFaceBlend, 0.001f));
+	MarkChanged(19, !FMath::IsNearlyEqual(PoseNode.HeadPitchScale, NewHeadPitchScale, 0.001f));
+	MarkChanged(20, !FMath::IsNearlyEqual(PoseNode.HeadRotationMaxStepDegrees, NewHeadRotationMaxStepDegrees, 0.001f));
+	MarkChanged(21, !FMath::IsNearlyEqual(PoseNode.HeadRotationMaxSpeedDegreesPerSecond, NewHeadRotationMaxSpeedDegreesPerSecond, 0.001f));
+	const bool bChanged = ChangedFieldMask != 0;
 
 	PoseNode.bDriveClavicles = bNewDriveClavicles;
 	PoseNode.bDriveSpine = bNewDriveSpine;
@@ -2540,6 +2641,7 @@ void UMediaPipePoseDrivenAnimInstance::ApplyRetargetQualitySettings()
 	if (bChanged)
 	{
 		PoseNode.bResetPoseStateNextUpdate = true;
+		PoseNode.PoseStateResetReasonMask |= ChangedFieldMask;
 	}
 }
 
@@ -2550,6 +2652,7 @@ void UMediaPipePoseDrivenAnimInstance::SetDriveClavicles(bool bInDriveClavicles)
 	{
 		Proxy.PoseNode.bDriveClavicles = bInDriveClavicles;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x108u;
 	}
 }
 
@@ -2560,6 +2663,7 @@ void UMediaPipePoseDrivenAnimInstance::SetDriveSpine(bool bInDriveSpine)
 	{
 		Proxy.PoseNode.bDriveSpine = bInDriveSpine;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x208u;
 	}
 }
 
@@ -2570,6 +2674,7 @@ void UMediaPipePoseDrivenAnimInstance::SetDrivePelvisTranslation(bool bInDrivePe
 	{
 		Proxy.PoseNode.bDrivePelvisTranslation = bInDrivePelvisTranslation;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x408u;
 	}
 }
 
@@ -2580,6 +2685,7 @@ void UMediaPipePoseDrivenAnimInstance::SetDriveLegs(bool bInDriveLegs)
 	{
 		Proxy.PoseNode.bDriveLegs = bInDriveLegs;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x808u;
 	}
 }
 
@@ -2590,6 +2696,7 @@ void UMediaPipePoseDrivenAnimInstance::SetUseArmIK(bool bInUseArmIK)
 	{
 		Proxy.PoseNode.bUseArmIK = bInUseArmIK;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x1008u;
 	}
 }
 
@@ -2600,6 +2707,7 @@ void UMediaPipePoseDrivenAnimInstance::SetUseLegIK(bool bInUseLegIK)
 	{
 		Proxy.PoseNode.bUseLegIK = bInUseLegIK;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x2008u;
 	}
 }
 
@@ -2610,6 +2718,7 @@ void UMediaPipePoseDrivenAnimInstance::SetUseFkRootGrounding(bool bInUseFkRootGr
 	{
 		Proxy.PoseNode.bUseFkRootGrounding = bInUseFkRootGrounding;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x8008u;
 	}
 }
 
@@ -2620,6 +2729,7 @@ void UMediaPipePoseDrivenAnimInstance::SetDriveHandRotation(bool bInDriveHandRot
 	{
 		Proxy.PoseNode.bDriveHandRotation = bInDriveHandRotation;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x10008u;
 	}
 }
 
@@ -2630,6 +2740,7 @@ void UMediaPipePoseDrivenAnimInstance::SetUseQuestHandTracking(bool bInUseQuestH
 	{
 		Proxy.PoseNode.bUseQuestHandTracking = bInUseQuestHandTracking;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x20008u;
 	}
 }
 
@@ -2640,5 +2751,6 @@ void UMediaPipePoseDrivenAnimInstance::SetDriveQuestFingerBones(bool bInDriveQue
 	{
 		Proxy.PoseNode.bDriveQuestFingerBones = bInDriveQuestFingerBones;
 		Proxy.PoseNode.bResetPoseStateNextUpdate = true;
+		Proxy.PoseNode.PoseStateResetReasonMask |= 0x40008u;
 	}
 }

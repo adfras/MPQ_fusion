@@ -173,6 +173,22 @@ public:
 	// Reset pose-derived signal baselines only when the tracking source or clip changes.
 	bool bResetDerivedSignalReferencesNextUpdate = false;
 
+	// --- Pose-state reset diagnostics (mp.PoseNodeReset rows) ---
+	// The overhead-arm investigation (2026-07-03) measured the rescue dwell and the diagnostics
+	// throttles behaving as if node member state did not survive frames, while the global keyed
+	// runtime state did. These fields identify the node instance across frames (serial stays 0
+	// until the first game-thread PreUpdate, so serial=0 in a row means "evaluated before any
+	// PreUpdate") and name which trigger requested each pose-state reset.
+	uint64 NodeDiagSerial = 0;
+	uint32 PoseStateResetReasonMask = 0;
+	uint32 PoseStateResetCount = 0;
+	double LastPoseStateResetLogTimeSeconds = -1.0;
+	// Counts CacheBones_AnyThread calls for this node instance. Never reset: measured 2026-07-03,
+	// CacheBones (whose BuildReferencePoseCache calls ResetRotationSmoothing) ran every frame in
+	// live VR sessions, which is WHY node-member solver state does not survive frames there.
+	// Reported by the mp.MediaPipeCameraHandTrace rows so live sessions can confirm the rate.
+	uint64 CacheBonesDiagCount = 0;
+
 	// --- What to drive ---
 	UPROPERTY(EditAnywhere, Category="MediaPipe")
 	bool bDriveSpine = true;
@@ -489,6 +505,16 @@ private:
 	FQuat RefLowerArmSurfaceBasisCompL = FQuat::Identity;
 	FQuat RefHandBasisCompL = FQuat::Identity;
 	FQuat RefHandVisualPalmBasisCompL = FQuat::Identity;
+	// Camera-hand mapping reference: the ref-pose knuckle geometry evaluated with the EXACT
+	// formula the live 21-landmark measurement uses (forward=wrist->mid(index01,pinky01),
+	// up=raw cross with across=index01-pinky01; no bone-axis or side flips). Mapping the
+	// measured basis onto a bone-axis reference left the palm side unmodeled - the 2026-07-03
+	// trace showed the branch chooser splitting ~50/50 between the palm-up and palm-flipped
+	// branches over one overhead session. ThumbUpDot is the ref thumb_01 direction's dot with
+	// that up vector: its sign is the chirality cue the live thumb landmark is compared against.
+	bool bHasRefHandCameraBasisL = false;
+	FQuat RefHandCameraBasisCompL = FQuat::Identity;
+	float RefHandCameraThumbUpDotL = 0.0f;
 	FVector RefUpperDirCompL = FVector::ForwardVector;
 	FVector RefLowerDirCompL = FVector::ForwardVector;
 	FVector RefPoleDirCompL = FVector::UpVector;
@@ -518,6 +544,9 @@ private:
 	FQuat RefLowerArmSurfaceBasisCompR = FQuat::Identity;
 	FQuat RefHandBasisCompR = FQuat::Identity;
 	FQuat RefHandVisualPalmBasisCompR = FQuat::Identity;
+	bool bHasRefHandCameraBasisR = false;
+	FQuat RefHandCameraBasisCompR = FQuat::Identity;
+	float RefHandCameraThumbUpDotR = 0.0f;
 	FVector RefUpperDirCompR = FVector::ForwardVector;
 	FVector RefLowerDirCompR = FVector::ForwardVector;
 	FVector RefPoleDirCompR = FVector::UpVector;

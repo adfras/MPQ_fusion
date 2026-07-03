@@ -372,6 +372,10 @@ struct FMediaPipeLegSolverState
 
 struct FMediaPipeArmSolverState
 {
+	// NOTE: the overhead MediaPipe rescue dwell/latch used to live here and never worked - node
+	// member state does not reliably survive pose-state resets, so the dwell was wiped before it
+	// could latch (root-caused 2026-07-03). It now lives in FQuestWristSideRuntimeState (keyed
+	// global store). Do not add cross-frame arm authority state to this struct.
 	bool bHasSmoothedArmIK = false;
 	FVector SmoothedWristTargetComp = FVector::ZeroVector;
 	FVector SmoothedPoleDirComp = FVector::UpVector;
@@ -473,6 +477,46 @@ struct FMediaPipeArmSolverState
 			bHasSmoothedMetaHumanArmHelperCS[Index] = false;
 			SmoothedMetaHumanArmHelperCS[Index] = FTransform::Identity;
 		}
+	}
+};
+
+// Keyed (per-component) foot contact runtime state. Lives in the process-wide keyed store, NOT
+// in FMediaPipeLegSolverState node members: measured 2026-07-03, CacheBones_AnyThread runs every
+// frame in live VR and mass-resets node members, so the observed source floor re-seeded to the
+// CURRENT foot sample each frame - liftCm pinned at 0.0 across every live session's scaffold
+// rows, grounded/plantLock never latched, and the HMD flexion correction straightened RAISED
+// legs because they always counted "near floor" ("half a knee" verdict). Gated by
+// mp.MediaPipeFootContactKeyedState (live trial only) so replay evaluation stays byte-stable.
+struct FMediaPipeFootContactSideRuntimeState
+{
+	bool bHasPrevFootSample = false;
+	FVector PrevAnkleWorld = FVector::ZeroVector;
+	FVector PrevHeelWorld = FVector::ZeroVector;
+	FVector PrevToeWorld = FVector::ZeroVector;
+	// Wall-clock sample time: DeltaSeconds can be 0 in Evaluate (accumulate/consume pattern) and
+	// foot velocities divide by the step.
+	double PrevFootSampleTimeSeconds = -1.0;
+	bool bHasObservedSourceFloor = false;
+	float ObservedSourceFloorZ = 0.0f;
+	bool bFootPlantLocked = false;
+	int32 FootPlantCandidateFrames = 0;
+	FVector LockedAnkleWorld = FVector::ZeroVector;
+
+	void Reset()
+	{
+		*this = FMediaPipeFootContactSideRuntimeState();
+	}
+};
+
+struct FMediaPipeFootContactRuntimeState
+{
+	FMediaPipeFootContactSideRuntimeState Left;
+	FMediaPipeFootContactSideRuntimeState Right;
+
+	void Reset()
+	{
+		Left.Reset();
+		Right.Reset();
 	}
 };
 
@@ -598,6 +642,10 @@ struct FMediaPipeDiagnosticsState
 	double LastQuestFingerSolveLogTimeSecondsR = -1.0;
 	double LastQuestFingerJoFallbackLogTimeSecondsL = -1.0;
 	double LastQuestFingerJoFallbackLogTimeSecondsR = -1.0;
+	double LastArmRescueLogTimeSecondsL = -1.0;
+	double LastArmRescueLogTimeSecondsR = -1.0;
+	double LastMediaPipeHandTakeoverLogTimeSecondsL = -1.0;
+	double LastMediaPipeHandTakeoverLogTimeSecondsR = -1.0;
 	double LastTorsoDiagnosticLogTimeSeconds = -1.0;
 	double LastHeadDiagnosticLogTimeSeconds = -1.0;
 	double LastClavicleDiagnosticLogTimeSecondsL = -1.0;
@@ -630,6 +678,10 @@ struct FMediaPipeDiagnosticsState
 		LastQuestFingerSolveLogTimeSecondsR = -1.0;
 		LastQuestFingerJoFallbackLogTimeSecondsL = -1.0;
 		LastQuestFingerJoFallbackLogTimeSecondsR = -1.0;
+		LastArmRescueLogTimeSecondsL = -1.0;
+		LastArmRescueLogTimeSecondsR = -1.0;
+		LastMediaPipeHandTakeoverLogTimeSecondsL = -1.0;
+		LastMediaPipeHandTakeoverLogTimeSecondsR = -1.0;
 		LastTorsoDiagnosticLogTimeSeconds = -1.0;
 		LastHeadDiagnosticLogTimeSeconds = -1.0;
 		LastClavicleDiagnosticLogTimeSecondsL = -1.0;

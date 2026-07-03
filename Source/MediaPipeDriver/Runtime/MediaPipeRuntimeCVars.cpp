@@ -47,6 +47,31 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, drive Manny wrist/hand rotation from MediaPipe hand or pose hand landmarks. Default is off because current hand basis can twist badly."));
 
+	TAutoConsoleVariable<int32> CVarMediaPipeHandRotationOnQuestLoss(
+		TEXT("mp.MediaPipeHandRotationOnQuestLoss"),
+		0,
+		TEXT("When non-zero, the MediaPipe hand-landmark basis drives wrist/hand rotation for a side WHILE that Quest hand is untracked (and only then) - overhead the Quest hand freezes at its last rotation and snaps on reacquire (observed 2026-07-03). Needs mp.AutoQuestWebcamHandLandmarker for the 21-landmark basis; falls back to pose index/pinky landmarks otherwise. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFingersOnQuestLoss(
+		TEXT("mp.MediaPipeFingersOnQuestLoss"),
+		0,
+		TEXT("When non-zero, the camera's 21-landmark hand drives FINGERS for a side while that Quest hand is untracked: the image-space proximity-matched MediaPipe hand is mapped onto a synthetic OpenXR-layout snapshot and fed through the existing segment-direction finger solver. Needs mp.AutoQuestWebcamHandLandmarker. Without a camera hand the untracked side keeps the validated hold-pose. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeHandOwnershipHandbackSeconds(
+		TEXT("mp.MediaPipeHandOwnershipHandbackSeconds"),
+		0.5f,
+		TEXT("Seconds the Quest hand must stay continuously tracked (with no arm rescue) before a camera-latched hand pose is handed back to the Quest hand-rotation path. Only used while mp.MediaPipeHandRotationOnQuestLoss/mp.MediaPipeFingersOnQuestLoss are active; recomputing ownership per frame from the raw tracked flag alternated camera/Quest owners at flicker rate (2026-07-03 log evidence)."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeFootContactKeyedState(
+		TEXT("mp.MediaPipeFootContactKeyedState"),
+		0,
+		TEXT("When non-zero, foot contact/floor/plant state (previous foot samples, observed source floor, plant lock) lives in the keyed per-component runtime store instead of anim-node members. Live VR runs CacheBones every frame, wiping node members, so the observed floor re-seeded to the current foot each frame - foot lift always read 0 and the HMD flexion correction straightened raised legs (2026-07-03 half-height knee raises). Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeCameraHandTrace(
+		TEXT("mp.MediaPipeCameraHandTrace"),
+		0,
+		TEXT("When non-zero, logs one mp.MediaPipeCameraHandTrace row per side per evaluated frame while the camera-hand features are enabled: ownership latch state, hand basis quality, branch chooser state, smoothing steps, the applied rotation delta, and the CacheBones call counter. Diagnostic only; default off. Set AFTER PIE starts (the live profile re-applies defaults at PIE start)."));
+
 	TAutoConsoleVariable<int32> CVarQuestHandTracking(
 		TEXT("mp.QuestHandTracking"),
 		1,
@@ -1282,6 +1307,36 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeLegAdductionMaxDeg"),
 		10.0f,
 		TEXT("Maximum thigh adduction (degrees past vertical toward the midline) allowed by mp.MediaPipeLegAdductionClamp."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeKneeMedialBowClamp(
+		TEXT("mp.MediaPipeKneeMedialBowClamp"),
+		0,
+		TEXT("When non-zero, clamp each knee's MEDIAL (toward-midline) bow past the hip->ankle line. Monocular depth noise bows the knee vertex inward - the knock-kneed look - even when the thigh direction is within its adduction bound (observed live 2026-07-02). Real knees essentially never cave medially past the line; outward bowing stays free. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeKneeMedialBowMaxDeg(
+		TEXT("mp.MediaPipeKneeMedialBowMaxDeg"),
+		5.0f,
+		TEXT("Maximum medial knee bow (degrees past the hip->ankle line) allowed by mp.MediaPipeKneeMedialBowClamp."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeArmOverheadRescue(
+		TEXT("mp.MediaPipeArmOverheadRescue"),
+		0,
+		TEXT("When non-zero, the camera takes an arm whose Quest hand is untracked while MediaPipe reliably sees the wrist above the shoulder. Overhead hands leave the headset cameras' view; Quest body tracking keeps SYNTHESIZING a guess that sags the arms down even though the phone measures them (observed live 2026-07-02). Dwell-time hysteresis prevents source flapping. Default off to keep replay evaluation byte-stable; the live lower-body trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueMinReliability(
+		TEXT("mp.MediaPipeArmOverheadRescueMinReliability"),
+		0.35f,
+		TEXT("Minimum MediaPipe shoulder/elbow/wrist landmark reliability required before the overhead arm rescue may take an arm the Quest still partially tracks. Overhead landmarks at the top of frame measure 0.2-0.4 (2026-07-02); when the Quest side is FULLY gone this floor does not apply."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueWristAboveShoulderCm(
+		TEXT("mp.MediaPipeArmOverheadRescueWristAboveShoulderCm"),
+		10.0f,
+		TEXT("How far above the shoulder (cm) the MediaPipe wrist must be for the overhead arm rescue - it only fires in the region where the headset genuinely cannot see the hands."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueDivergenceCm(
+		TEXT("mp.MediaPipeArmOverheadRescueDivergenceCm"),
+		30.0f,
+		TEXT("Vertical divergence (MediaPipe wrist ABOVE the Quest chain's wrist, cm) that fires the overhead arm rescue even while the Quest still claims the hand is tracked. Measured 2026-07-02: overhead hands sag on the Quest side with questTracked=1 throughout - the tracked flag cannot be trusted; the divergence measures the error directly."));
 
 	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldAsymmetricFlexion(
 		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),

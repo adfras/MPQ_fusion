@@ -114,6 +114,11 @@ TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandsInputMaxDimension(
 	512,
 	TEXT("Maximum webcam frame dimension for the automatic Quest webcam mirror profile. Default 512 keeps live pose tracking responsive on the webcam path."));
 
+TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandLandmarker(
+	TEXT("mp.AutoQuestWebcamHandLandmarker"),
+	0,
+	TEXT("When non-zero, the live webcam MediaPipe source also runs the 21-landmark hand landmarker so the camera can supply hand pose while a Quest hand is untracked (overhead, the Quest hand freezes and snaps on reacquire; observed 2026-07-03). Read when the webcam source spawns - set it before PIE (the live lower-body trial layer enables it). Default off keeps the baseline webcam load and replay evaluation unchanged."));
+
 TAutoConsoleVariable<FString> CVarPlacedEmbodiedVideoFile(
 	TEXT("mp.PlacedEmbodiedVideoFile"),
 	TEXT(""),
@@ -652,15 +657,41 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"), 1),
 		// Sagittal re-pitch: depth inflation made raised knees read low (observed 2026-07-02).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegSagittalRepitch"), 1),
+		// Keyed foot contact state (2026-07-03): live VR runs CacheBones every frame, wiping the
+		// node-member floor/plant/velocity state - foot lift always read 0, every leg counted
+		// "near floor", and the HMD flexion correction straightened RAISED legs to half-height
+		// knee raises. The keyed store survives; lifted legs get their exemption back.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootContactKeyedState"), 1),
 		// Anatomical adduction bound: with the stabilizer off, drift walked the knees into
 		// each other (observed 2026-07-02).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegAdductionClamp"), 1),
-		// Finger overlap mitigations tried 2026-06-12 (splay clamps, pairwise separation, pose
-		// gate) are all DISABLED here after worn-headset testing: the separation metric is
-		// blind to lateral convergence between fingers at different curls, and the pose gate's
-		// rate threshold rejected real fist closes (visible twitching). The CVars remain for
-		// experiments; fingers run the accepted segment-direction defaults until a researched
-		// fix lands.
+		// Frontal-plane knee bow bound: the residual knock-kneed look is the knee VERTEX bowing
+		// medially past the hip->ankle line (observed 2026-07-02).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeKneeMedialBowClamp"), 1),
+		// Finger overlap mitigations tried 2026-06-12 (splay clamps, pairwise separation) stay
+		// DISABLED after worn-headset testing: the separation metric is blind to lateral
+		// convergence between fingers at different curls. Fingers run the accepted
+		// segment-direction defaults.
+		// Overhead arms (2026-07-02): the camera takes an arm whose Quest hand is untracked
+		// while MediaPipe sees the wrist above the shoulder (Quest body tracking sags a
+		// synthesized guess), and the hand pose gate holds fingers ONLY on untracked frames
+		// (the rate threshold that twitched real fist closes is neutralized).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmOverheadRescue"), 1),
+		// USER FEEDBACK (2026-07-03): with the rescue keeping the arm on the camera, the HAND
+		// froze at its last Quest rotation and snapped on reacquire. Run the 21-landmark hand
+		// landmarker on the live webcam source (read at source spawn) and let its basis drive
+		// wrist rotation while (and only while) that Quest hand is untracked.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.AutoQuestWebcamHandLandmarker"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeHandRotationOnQuestLoss"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFingersOnQuestLoss"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.QuestFingerPoseGate"), 1),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestFingerPoseGateMaxCurlRatePerSec"), 1000.0f),
+		// USER RULE (2026-07-02): never force the arms down while the camera sees them. The
+		// arm reliability gate lerps low-confidence samples back to the LAST RELIABLE target -
+		// overhead, MediaPipe reliability drops to 0.2-0.4 and that target is the lowered arm,
+		// which pinned raised arms down. Off by user acceptance: full motion over holds, same
+		// trade-off as the leg stabilizer.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmReliabilityGate"), 0),
 	};
 	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
 }

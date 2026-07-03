@@ -23,8 +23,20 @@ Run sheet:
 5. `mp.StopLiveLowerBodyTrial` restores the stable-body live defaults.
 
 What the trial layer enables (CVar policy layer `LiveLowerBodyTrial`, priority CaptureScope,
-re-asserted after every live profile apply so the stable-body defaults cannot stomp it; an
-ACTIVE dataset replay still outranks it, and a stale finished-replay layer is dropped):
+41 settings, re-asserted after every live profile apply so the stable-body defaults cannot
+stomp it; an ACTIVE dataset replay still outranks it, and a stale finished-replay layer is
+dropped). 2026-07-03 additions: the overhead arm rescue (`mp.MediaPipeArmOverheadRescue`, arm
+reliability gate off per user rule), the live webcam hand landmarker
+(`mp.AutoQuestWebcamHandLandmarker`), camera hand rotation + fingers while a Quest hand is
+untracked (`mp.MediaPipeHandRotationOnQuestLoss`, `mp.MediaPipeFingersOnQuestLoss`; the camera
+hand is matched to the arm by image-space proximity with a wrong-hand veto, oriented from the
+landmarks projected onto the camera image plane with a thumb-resolved session-locked palm
+parity, and hand-pose ownership is a keyed latch with a solid-tracking handback dwell), and
+keyed foot contact state (`mp.MediaPipeFootContactKeyedState`: live VR runs CacheBones every
+frame and wipes node-member floor/plant state, which pinned foot lift at 0 and let the HMD
+flexion correction straighten raised legs to half-height knee raises; the keyed store restores
+the lifted-leg exemption).
+Older list:
 legs/pelvis drive with FK root grounding and foot rotation (no leg IK), knee-pole
 suppression 0.6, grounded world-up feet, flat-foot pitch clamp, HMD squat scaffold
 (HmdWeight 1.0, FlexionWeight 0.8, MaxAdjust 40 deg), bend redistribution 0.8, scaffold

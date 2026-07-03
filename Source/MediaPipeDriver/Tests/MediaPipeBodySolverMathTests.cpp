@@ -996,6 +996,23 @@ bool FMediaPipeBodySolverMathBodyYawHeadingAutomationTest::RunTest(const FString
 	TestTrue(TEXT("Abduction is never limited"),
 		ClampDirectionAdduction(Abducted, Outward, 10.0f).Equals(Abducted, 0.001f));
 
+	// ClampKneeMedialBow: medial bow past the hip->ankle line clamps; outward bow passes.
+	const FVector BowHip(0.0f, 0.0f, 90.0f);
+	const FVector BowAnkle(0.0f, 0.0f, 10.0f);
+	const FVector BowOutward(0.0f, 1.0f, 0.0f);
+	const FVector KneeInward(0.0f, -6.0f, 50.0f);
+	const FVector KneeClamped = ClampKneeMedialBow(BowHip, KneeInward, BowAnkle, BowOutward, 5.0f);
+	const float HipToKneeLen = (KneeInward - BowHip).Size();
+	const float AllowedMedialCm = FMath::Sin(FMath::DegreesToRadians(5.0f)) * HipToKneeLen;
+	TestTrue(TEXT("A medially bowed knee clamps to the angular limit"),
+		FMath::IsNearlyEqual(-KneeClamped.Y, AllowedMedialCm, 0.1f));
+	const FVector KneeOutwardBow(0.0f, 8.0f, 50.0f);
+	TestTrue(TEXT("Outward knee bow is never limited"),
+		ClampKneeMedialBow(BowHip, KneeOutwardBow, BowAnkle, BowOutward, 5.0f).Equals(KneeOutwardBow, 0.001f));
+	const FVector KneeOnLine(0.0f, 0.0f, 50.0f);
+	TestTrue(TEXT("A knee on the line is untouched"),
+		ClampKneeMedialBow(BowHip, KneeOnLine, BowAnkle, BowOutward, 5.0f).Equals(KneeOnLine, 0.001f));
+
 	// ApproachAngleDeg: rate-limited, converging, and wrap-aware.
 	const float Step = ApproachAngleDeg(0.0f, 90.0f, 0.1f, 0.2f, 120.0f);
 	TestTrue(TEXT("A large target step is rate limited"), Step <= 12.0f + KINDA_SMALL_NUMBER);

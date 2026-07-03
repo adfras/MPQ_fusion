@@ -466,6 +466,68 @@ namespace
 		DrawPreviewDisc(Bgra, Size, Point, Radius, Color);
 	}
 
+	bool TryGetPreviewHandPoint(
+		const FMediaPipeRawHandLandmarks& Hand,
+		const int32 LandmarkIndex,
+		const FIntPoint PreviewSize,
+		FIntPoint& OutPoint)
+	{
+		if (LandmarkIndex < 0 || LandmarkIndex >= MediaPipeHandLandmarkCount || PreviewSize.X <= 0 || PreviewSize.Y <= 0)
+		{
+			return false;
+		}
+		const FMediaPipeRawHandLandmark& Landmark = Hand.Landmarks[LandmarkIndex];
+		if (!FMath::IsFinite(Landmark.X) || !FMath::IsFinite(Landmark.Y))
+		{
+			return false;
+		}
+		if (Landmark.X < -0.25f || Landmark.X > 1.25f || Landmark.Y < -0.25f || Landmark.Y > 1.25f)
+		{
+			return false;
+		}
+		OutPoint = FIntPoint(
+			FMath::Clamp(FMath::RoundToInt(Landmark.X * static_cast<float>(PreviewSize.X - 1)), 0, PreviewSize.X - 1),
+			FMath::Clamp(FMath::RoundToInt(Landmark.Y * static_cast<float>(PreviewSize.Y - 1)), 0, PreviewSize.Y - 1));
+		return true;
+	}
+
+	// Full 21-landmark hand skeleton from the hand landmarker (wrist, palm, all finger bones) so
+	// the wearer can see exactly what hand pose the camera model is producing. Drawn per detected
+	// hand whenever the body skeleton overlay is on and the hand landmarker publishes hands.
+	void DrawHandSkeletonOverlay(TArray<uint8>& Bgra, const FIntPoint Size, const FMediaPipeRawHandLandmarks& Hand, const FColor BoneColor, const FColor TipColor)
+	{
+		static const int32 HandConnections[][2] = {
+			{0, 1}, {1, 2}, {2, 3}, {3, 4},        // thumb
+			{0, 5}, {5, 6}, {6, 7}, {7, 8},        // index
+			{5, 9}, {9, 10}, {10, 11}, {11, 12},   // middle
+			{9, 13}, {13, 14}, {14, 15}, {15, 16}, // ring
+			{13, 17}, {0, 17}, {17, 18}, {18, 19}, {19, 20} // pinky + palm edge
+		};
+		for (const auto& Connection : HandConnections)
+		{
+			FIntPoint A;
+			FIntPoint B;
+			if (TryGetPreviewHandPoint(Hand, Connection[0], Size, A) &&
+				TryGetPreviewHandPoint(Hand, Connection[1], Size, B))
+			{
+				DrawPreviewLine(Bgra, Size, A, B, 2, FColor(0, 0, 0, 255));
+				DrawPreviewLine(Bgra, Size, A, B, 1, BoneColor);
+			}
+		}
+		for (int32 LandmarkIndex = 0; LandmarkIndex < MediaPipeHandLandmarkCount; ++LandmarkIndex)
+		{
+			FIntPoint Point;
+			if (TryGetPreviewHandPoint(Hand, LandmarkIndex, Size, Point))
+			{
+				const bool bFingerTip =
+					LandmarkIndex == 4 || LandmarkIndex == 8 || LandmarkIndex == 12 || LandmarkIndex == 16 || LandmarkIndex == 20;
+				const bool bWrist = LandmarkIndex == 0;
+				DrawPreviewDisc(Bgra, Size, Point, bWrist ? 4 : 2, FColor(0, 0, 0, 255));
+				DrawPreviewDisc(Bgra, Size, Point, bWrist ? 3 : 1, bFingerTip ? TipColor : BoneColor);
+			}
+		}
+	}
+
 	void DrawDenseFaceHeadOverlay(TArray<uint8>& Bgra, const FIntPoint Size, const FMediaPipePoseFrame& Frame)
 	{
 		FIntPoint LeftEye;
@@ -589,6 +651,18 @@ namespace
 			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightHeel, FootColor, 3);
 			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::LeftFootIndex, FootColor, 3);
 			DrawPreviewLandmark(Bgra, Size, Frame, EMediaPipePoseLandmark::RightFootIndex, FootColor, 3);
+
+			// Hand landmarker skeletons (21 landmarks per hand: wrist, palm, every finger bone)
+			// so the wearer can see exactly which hand pose the camera model produces. A missing
+			// hand draws nothing - visibly absent, same rule as the body bones.
+			if (Frame.Hands.bHasLeft != 0)
+			{
+				DrawHandSkeletonOverlay(Bgra, Size, Frame.Hands.LeftNormalized, FColor(80, 220, 255, 255), FColor(255, 255, 255, 255));
+			}
+			if (Frame.Hands.bHasRight != 0)
+			{
+				DrawHandSkeletonOverlay(Bgra, Size, Frame.Hands.RightNormalized, FColor(255, 170, 60, 255), FColor(255, 255, 255, 255));
+			}
 		}
 
 		DrawDenseFaceHeadOverlay(Bgra, Size, Frame);
@@ -1217,7 +1291,18 @@ void AMediaPipeQuestWebcamSourceActor::ConfigureLowLoadDefaults(float MaxHz, con
 	{
 		PoseTracker->MaxProcessRateHz = MaxHz;
 		PoseTracker->ConfigPath = ModelPath;
-		PoseTracker->bEnableHandLandmarker = false;
+		// USER FEEDBACK (2026-07-03): overhead, the camera keeps the arm but the hand pose froze
+		// at the last Quest rotation. The live trial enables the 21-landmark hand landmarker so
+		// the camera can supply a hand basis while a Quest hand is untracked
+		// (mp.MediaPipeHandRotationOnQuestLoss); default stays off so the baseline webcam load
+		// and replay evaluation are unchanged. Read at source spawn - set it before PIE.
+		bool bWantsHandLandmarker = false;
+		if (IConsoleVariable* HandLandmarkerCVar =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("mp.AutoQuestWebcamHandLandmarker")))
+		{
+			bWantsHandLandmarker = HandLandmarkerCVar->GetInt() != 0;
+		}
+		PoseTracker->bEnableHandLandmarker = bWantsHandLandmarker;
 		PoseTracker->bEnableHolisticLandmarker = true;
 		PoseTracker->MinPoseDetectionConfidence = 0.25f;
 		PoseTracker->MinPosePresenceConfidence = 0.25f;

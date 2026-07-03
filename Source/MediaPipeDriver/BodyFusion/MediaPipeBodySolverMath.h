@@ -516,6 +516,19 @@ namespace MediaPipeBodySolverMath
 		const FVector& OutwardDir,
 		float MaxAdductionDeg);
 
+	// Frontal-plane knee bow bound: returns a knee position whose MEDIAL (toward-midline)
+	// deviation from the hip->ankle line is clamped to the angular limit. Monocular depth noise
+	// bows the knee vertex inward - thigh in, calf out, the knock-kneed look - even when the
+	// thigh direction itself is within its adduction bound (observed live 2026-07-02). A real
+	// knee essentially never caves medially past the hip-ankle line; outward (varus) bowing is
+	// left free. Correcting the VERTEX squares up thigh and calf together.
+	MEDIAPIPEDRIVER_API FVector ClampKneeMedialBow(
+		const FVector& HipWorld,
+		const FVector& KneeWorld,
+		const FVector& AnkleWorld,
+		const FVector& OutwardDir,
+		float MaxMedialBowDeg);
+
 	MEDIAPIPEDRIVER_API FVector LerpNormalized(const FVector& A, const FVector& B, float Alpha);
 	MEDIAPIPEDRIVER_API FQuat MakeQuatFromForwardUp(const FVector& Forward, const FVector& Up);
 	MEDIAPIPEDRIVER_API FQuat MakeSemanticBodyBasis(const FMediaPipeSemanticBodyBasisInput& Input);

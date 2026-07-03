@@ -55,13 +55,15 @@ using namespace MediaPipeRuntimeCVars;
 using namespace MediaPipeBodySolverMath;
 using namespace MediaPipeQuestFingerSolver;
 
-namespace
-{
-	using namespace MediaPipeRuntimeCVars;
-	using namespace MediaPipeBodySolverMath;
-	using namespace MediaPipeQuestFingerSolver;
-
-	struct FPoseYawAlignRuntimeState
+// Cross-frame keyed runtime state: the state TYPES and their store ACCESSORS must have external
+// linkage with exactly one process-wide definition (accessors are defined in
+// MediaPipePoseDrivenAnimInstance.cpp behind a lock). They used to live inside this header's
+// anonymous namespace, which hands every including TU its own copy of both the type and the
+// TMap store: under ADAPTIVE UNITY builds a recently-edited solver TU compiles alone and
+// silently FORKS the "shared" state, and the unsynchronized TMap raced across parallel
+// anim-evaluation worker threads (2026-07-03 live crash: EXCEPTION_ACCESS_VIOLATION inside
+// GetQuestWristRuntimeState during a concurrent FindOrAdd rehash).
+struct FPoseYawAlignRuntimeState
 	{
 		bool bWasEnabled = false;
 		bool bHasState = false;
@@ -82,11 +84,22 @@ namespace
 		}
 	};
 
-	TMap<uint32, FPoseYawAlignRuntimeState> GPoseYawAlignRuntimeStates;
+// Single process-wide, lock-guarded stores (defined once in MediaPipePoseDrivenAnimInstance.cpp).
+// Returned references stay valid across map growth because entries are heap-allocated and never
+// removed for the lifetime of the process.
+FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeStateForKey(uint32 Key);
+FQuestWristRuntimeState& GetQuestWristRuntimeStateForKey(uint32 Key);
+FMediaPipeFootContactRuntimeState& GetFootContactRuntimeStateForKey(uint32 Key);
+
+namespace
+{
+	using namespace MediaPipeRuntimeCVars;
+	using namespace MediaPipeBodySolverMath;
+	using namespace MediaPipeQuestFingerSolver;
 
 	FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeState(uint32 Key)
 	{
-		return GPoseYawAlignRuntimeStates.FindOrAdd(Key);
+		return GetPoseYawAlignRuntimeStateForKey(Key);
 	}
 
 	FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeState(const UObject* KeyObject)
@@ -116,11 +129,9 @@ namespace
 		return FRotator::NormalizeAxis(FMath::RadiansToDegrees(FMath::Atan2(FlatForward.Y, FlatForward.X)));
 	}
 
-	TMap<uint32, FQuestWristRuntimeState> GQuestWristRuntimeStates;
-
 	FQuestWristRuntimeState& GetQuestWristRuntimeState(uint32 Key)
 	{
-		return GQuestWristRuntimeStates.FindOrAdd(Key);
+		return GetQuestWristRuntimeStateForKey(Key);
 	}
 
 	void ResetQuestWristRuntimeState(uint32 Key)
@@ -132,6 +143,22 @@ namespace
 	{
 		const uint32 Key = IsValid(KeyObject) ? KeyObject->GetUniqueID() : 0u;
 		ResetQuestWristRuntimeState(Key);
+	}
+
+	FMediaPipeFootContactRuntimeState& GetFootContactRuntimeState(uint32 Key)
+	{
+		return GetFootContactRuntimeStateForKey(Key);
+	}
+
+	void ResetFootContactRuntimeState(uint32 Key)
+	{
+		GetFootContactRuntimeState(Key).Reset();
+	}
+
+	void ResetFootContactRuntimeState(const UObject* KeyObject)
+	{
+		const uint32 Key = IsValid(KeyObject) ? KeyObject->GetUniqueID() : 0u;
+		ResetFootContactRuntimeState(Key);
 	}
 
 	void SetReplayFullArmJointFromLocation(
@@ -277,7 +304,10 @@ namespace
 		return true;
 	}
 
-	struct FDerivedSignalRuntimeState
+} // close anonymous namespace: FDerivedSignalRuntimeState and its store accessor need external
+// linkage (see the keyed-runtime-state comment above FPoseYawAlignRuntimeState).
+
+struct FDerivedSignalRuntimeState
 	{
 		bool bHasHeadScreenReference = false;
 		FVector2D HeadScreenCenterReference = FVector2D::ZeroVector;
@@ -355,11 +385,17 @@ namespace
 		}
 	};
 
-	TMap<uint32, FDerivedSignalRuntimeState> GDerivedSignalRuntimeStates;
+FDerivedSignalRuntimeState& GetDerivedSignalRuntimeStateForKey(uint32 Key);
+
+namespace
+{
+	using namespace MediaPipeRuntimeCVars;
+	using namespace MediaPipeBodySolverMath;
+	using namespace MediaPipeQuestFingerSolver;
 
 	FDerivedSignalRuntimeState& GetDerivedSignalRuntimeState(uint32 Key)
 	{
-		return GDerivedSignalRuntimeStates.FindOrAdd(Key);
+		return GetDerivedSignalRuntimeStateForKey(Key);
 	}
 
 	void ResetDerivedSignalRuntimeState(uint32 Key)
@@ -374,6 +410,7 @@ namespace
 	}
 
 	constexpr int32 HandLm_Wrist = 0;
+	constexpr int32 HandLm_ThumbMcp = 2;
 	constexpr int32 HandLm_IndexMcp = 5;
 	constexpr int32 HandLm_MiddleMcp = 9;
 	constexpr int32 HandLm_PinkyMcp = 17;

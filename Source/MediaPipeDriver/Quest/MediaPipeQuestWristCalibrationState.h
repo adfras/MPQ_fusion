@@ -107,10 +107,71 @@ struct FQuestWristSideRuntimeState
 	FVector DropoutDownFallbackWristWorld = FVector::ZeroVector;
 	FVector DropoutDownFallbackElbowWorld = FVector::ZeroVector;
 	double DropoutDownFallbackLastUpdateTimeSeconds = -1.0;
+	// Overhead MediaPipe arm rescue (mp.MediaPipeArmOverheadRescue) dwell/latch. Lives HERE in
+	// the keyed runtime state, not in anim-node members: measured 2026-07-02/03, the node-member
+	// dwell was reset before ever reaching the 0.15 s latch threshold (enterS pinned at 0.00
+	// across 6,600+ diagnostic rows over two sessions), so the rescue never activated once.
+	// Accumulation is wall-clock (LastUpdate delta) so zero-delta evaluations cannot stall it.
+	// Deliberately NOT cleared by Reset(): pose-state resets must not un-latch an arm the camera
+	// is actively driving; the exit dwell self-clears within 0.3 s when conditions end.
+	bool bArmRescueActive = false;
+	float ArmRescueEnterSeconds = 0.0f;
+	float ArmRescueExitSeconds = 0.0f;
+	double ArmRescueLastUpdateTimeSeconds = -1.0;
 	double DropoutReacquireReachScaleSuppressUntilTimeSeconds = -1.0;
 	float PositionAuthorityAlpha = 0.0f;
 	double PositionAuthorityLastTimeSeconds = -1.0;
 	double LastHandRotationApplyTimeSeconds = -1.0;
+	// Last time the MediaPipe quest-loss hand-rotation path applied for this side; compared with
+	// LastHandRotationApplyTimeSeconds to detect the first camera frame after Quest ownership so
+	// the swing/twist filter can be seeded from the current pose (smooth handover, no snap).
+	double LastMediaPipeHandRotationApplyTimeSeconds = -1.0;
+	// Sticky image-space hand match for this arm (0=MediaPipe left array, 1=right array,
+	// 255=none): the proximity match must not alternate between detected hands at frame rate
+	// when both hover near each other overhead (2026-07-03 worn verdict: twist/snap).
+	uint8 MediaPipeHandStickyArraySide = 255;
+	// Camera-owned hand rotation continuity (mp.MediaPipeHandRotationOnQuestLoss). Lives HERE
+	// in the keyed runtime state, not in FMediaPipeArmSolverState node members: measured
+	// 2026-07-03 (live session log), CacheBones_AnyThread -> BuildReferencePoseCache ->
+	// ResetRotationSmoothing runs EVERY FRAME in live VR (the 1 Hz node-member takeover-log
+	// throttle emitted at frame rate with a stable node serial and resets=1), so the smoothing
+	// floor, swing/twist speed caps, and branch dwell added for the overhead takeover never
+	// engaged - the branch chooser re-anchored to the ref pose each frame and flipped freely.
+	// Smoothing fields ARE cleared by Reset() (they re-seed from the current pose next frame).
+	bool bHasCameraHandSmoothedSwing = false;
+	FQuat CameraHandSmoothedSwingCS = FQuat::Identity;
+	bool bHasCameraHandSmoothedTwist = false;
+	float CameraHandSmoothedTwistDeg = 0.0f;
+	bool bHasCameraHandLastGoodTarget = false;
+	FQuat CameraHandLastGoodTargetCS = FQuat::Identity;
+	int32 CameraHandActiveBranch = 0;
+	int32 CameraHandPendingBranch = 0;
+	int32 CameraHandPendingBranchFrames = 0;
+	double CameraHandSmoothLastStepTimeSeconds = -1.0;
+	// Last rotation the camera path applied: re-applied on degenerate/missing-basis frames so
+	// "hold last rotation" actually holds (2026-07-03: the hold path returned without applying,
+	// snapping the hand to the pass-through pose for one frame on every handSel=none frame).
+	bool bHasCameraHandLastApplied = false;
+	FQuat CameraHandLastAppliedRotCS = FQuat::Identity;
+	// Resolved palm chirality for the camera hand (mirror parity of the whole capture chain):
+	// +1 = measured up sign agrees with the ref thumb cue, -1 = inverted, 0 = undecided. The
+	// parity is a PHYSICAL CONSTANT of the capture chain, so it locks after 0.25 s of consistent
+	// confident thumb frames and only re-flips after 1.0 s of sustained contrary evidence -
+	// per-frame re-resolution flipped the palm 34/26 times (L/R) across the 2026-07-03 round-two
+	// session whenever the thumb crossed the palm plane during palm rotations.
+	int8 CameraHandChiralitySign = 0;
+	int8 CameraHandChiralityPendingSign = 0;
+	float CameraHandChiralityPendingSeconds = 0.0f;
+	// Camera hand-pose ownership LATCH. Recomputing ownership per frame from the raw Quest
+	// tracked flag alternated camera/Quest hand owners at tracked-flag flicker rate (2026-07-03
+	// log: camera owned only ~68%/47% of frames L/R across the measured overhead window; 21 of
+	// 30 sampled mp.QuestWristSolve rows showed the Quest path applying mid-takeover). Latched
+	// like bArmRescueActive: deliberately NOT cleared by Reset(); releases only after the Quest
+	// side stays solidly tracked for the handback dwell
+	// (mp.MediaPipeHandOwnershipHandbackSeconds) or the camera-hand features turn off.
+	bool bCameraHandOwnershipLatched = false;
+	float CameraHandQuestSolidSeconds = 0.0f;
+	double CameraHandOwnershipLastUpdateTimeSeconds = -1.0;
 
 	void ResetRotationCalibration();
 	void ResetPositionContinuity(bool bResetArmLengthCalibration = true);

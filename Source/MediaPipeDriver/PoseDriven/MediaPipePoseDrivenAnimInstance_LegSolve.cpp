@@ -211,6 +211,21 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		KneeWorld = MediaPipeBodySolverMath::SuppressBackwardKneePole(KneePoleInput);
 	}
 
+	// Frontal-plane knee bow bound: correct the knee VERTEX before deriving the segment
+	// directions, so thigh and calf square up together. Monocular depth noise bows the knee
+	// inward past the hip->ankle line - the knock-kneed look - even when the thigh direction is
+	// within its adduction bound (observed live 2026-07-02). Live-trial gated.
+	if (CVarMediaPipeKneeMedialBowClamp.GetValueOnAnyThread() != 0 &&
+		!OutwardWorldSeed.IsNearlyZero())
+	{
+		KneeWorld = MediaPipeBodySolverMath::ClampKneeMedialBow(
+			HipWorld,
+			KneeWorld,
+			AnkleWorld,
+			OutwardWorldSeed,
+			CVarMediaPipeKneeMedialBowMaxDeg.GetValueOnAnyThread());
+	}
+
 	// Monocular MediaPipe leg intent: these segment directions own knee bend timing, foot lift
 	// timing, left/right phase, lateral swing, and relative amplitude. Their flexion magnitude is
 	// corrected against the Quest/HMD metric scaffold below (grounded legs only) before they are
@@ -321,22 +336,66 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	FQuat& SmoothedFootRotCS = bIsLeft ? LeftLegState.SmoothedFootRotCS : RightLegState.SmoothedFootRotCS;
 	bool& bHasSmoothedLegPlane = bIsLeft ? LeftLegState.bHasSmoothedLegPlane : RightLegState.bHasSmoothedLegPlane;
 	FVector& SmoothedLegPlaneComp = bIsLeft ? LeftLegState.SmoothedLegPlaneComp : RightLegState.SmoothedLegPlaneComp;
-	bool& bHasPrevFootSample = bIsLeft ? LeftLegState.bHasPrevFootSample : RightLegState.bHasPrevFootSample;
-	FVector& PrevAnkleWorld = bIsLeft ? LeftLegState.PrevAnkleWorld : RightLegState.PrevAnkleWorld;
-	FVector& PrevHeelWorld = bIsLeft ? LeftLegState.PrevHeelWorld : RightLegState.PrevHeelWorld;
-	FVector& PrevToeWorld = bIsLeft ? LeftLegState.PrevToeWorld : RightLegState.PrevToeWorld;
-	bool& bFootPlantLocked = bIsLeft ? LeftLegState.bFootPlantLocked : RightLegState.bFootPlantLocked;
-	int32& FootPlantCandidateFrames = bIsLeft ? LeftLegState.FootPlantCandidateFrames : RightLegState.FootPlantCandidateFrames;
-	FVector& LockedAnkleWorld = bIsLeft ? LeftLegState.LockedAnkleWorld : RightLegState.LockedAnkleWorld;
-	bool& bHasObservedSourceFloor = bIsLeft ? LeftLegState.bHasObservedSourceFloor : RightLegState.bHasObservedSourceFloor;
-	float& ObservedSourceFloorZ = bIsLeft ? LeftLegState.ObservedSourceFloorZ : RightLegState.ObservedSourceFloorZ;
+	// Foot contact/floor/plant state binds to the KEYED per-component store in live mode
+	// (mp.MediaPipeFootContactKeyedState): measured 2026-07-03, live VR runs CacheBones every
+	// frame and wipes these node members, so the observed floor re-seeded to the CURRENT foot
+	// sample each frame - liftCm pinned at 0.0 in every live session's scaffold rows, grounded
+	// and plantLock never latched, and the HMD flexion correction straightened RAISED legs
+	// because they always counted "near floor" (half-height knee raises, user verdict). Replay
+	// keeps the node members (CVar default 0) so replay evaluation stays byte-stable.
+	const bool bUseKeyedFootContactState =
+		CVarMediaPipeFootContactKeyedState.GetValueOnAnyThread() != 0 && RuntimeStateKey != 0;
+	FMediaPipeFootContactRuntimeState& FootContactRuntimeState = GetFootContactRuntimeState(RuntimeStateKey);
+	FMediaPipeFootContactSideRuntimeState& FootContactSideState =
+		bIsLeft ? FootContactRuntimeState.Left : FootContactRuntimeState.Right;
+	bool& bHasPrevFootSample = bUseKeyedFootContactState
+		? FootContactSideState.bHasPrevFootSample
+		: (bIsLeft ? LeftLegState.bHasPrevFootSample : RightLegState.bHasPrevFootSample);
+	FVector& PrevAnkleWorld = bUseKeyedFootContactState
+		? FootContactSideState.PrevAnkleWorld
+		: (bIsLeft ? LeftLegState.PrevAnkleWorld : RightLegState.PrevAnkleWorld);
+	FVector& PrevHeelWorld = bUseKeyedFootContactState
+		? FootContactSideState.PrevHeelWorld
+		: (bIsLeft ? LeftLegState.PrevHeelWorld : RightLegState.PrevHeelWorld);
+	FVector& PrevToeWorld = bUseKeyedFootContactState
+		? FootContactSideState.PrevToeWorld
+		: (bIsLeft ? LeftLegState.PrevToeWorld : RightLegState.PrevToeWorld);
+	bool& bFootPlantLocked = bUseKeyedFootContactState
+		? FootContactSideState.bFootPlantLocked
+		: (bIsLeft ? LeftLegState.bFootPlantLocked : RightLegState.bFootPlantLocked);
+	int32& FootPlantCandidateFrames = bUseKeyedFootContactState
+		? FootContactSideState.FootPlantCandidateFrames
+		: (bIsLeft ? LeftLegState.FootPlantCandidateFrames : RightLegState.FootPlantCandidateFrames);
+	FVector& LockedAnkleWorld = bUseKeyedFootContactState
+		? FootContactSideState.LockedAnkleWorld
+		: (bIsLeft ? LeftLegState.LockedAnkleWorld : RightLegState.LockedAnkleWorld);
+	bool& bHasObservedSourceFloor = bUseKeyedFootContactState
+		? FootContactSideState.bHasObservedSourceFloor
+		: (bIsLeft ? LeftLegState.bHasObservedSourceFloor : RightLegState.bHasObservedSourceFloor);
+	float& ObservedSourceFloorZ = bUseKeyedFootContactState
+		? FootContactSideState.ObservedSourceFloorZ
+		: (bIsLeft ? LeftLegState.ObservedSourceFloorZ : RightLegState.ObservedSourceFloorZ);
 	bool& bCurrentSourceFootGrounded = bIsLeft ? LeftLegState.bCurrentSourceFootGrounded : RightLegState.bCurrentSourceFootGrounded;
 	bool& bCurrentSourceFootNearFloor = bIsLeft ? LeftLegState.bCurrentSourceFootNearFloor : RightLegState.bCurrentSourceFootNearFloor;
 	const FVector& RefAnklePosComp = bIsLeft ? RefAnklePosCompL : RefAnklePosCompR;
 	const FVector& RefBallPosComp = bIsLeft ? RefBallPosCompL : RefBallPosCompR;
 
 	const bool bHadPrevFootSample = bHasPrevFootSample;
-	const float SampleDt = FMath::Max(DeltaSeconds, 1.0f / 120.0f);
+	// Wall-clock foot-sample step in keyed mode: DeltaSeconds can be 0 in Evaluate (the
+	// accumulate/consume CachedDeltaTimeSeconds pattern) and the foot velocities divide by it.
+	float SampleDt = FMath::Max(DeltaSeconds, 1.0f / 120.0f);
+	if (bUseKeyedFootContactState)
+	{
+		const double FootSampleNowSeconds = FPlatformTime::Seconds();
+		if (FootContactSideState.PrevFootSampleTimeSeconds >= 0.0)
+		{
+			SampleDt = FMath::Clamp(
+				static_cast<float>(FootSampleNowSeconds - FootContactSideState.PrevFootSampleTimeSeconds),
+				1.0f / 120.0f,
+				0.1f);
+		}
+		FootContactSideState.PrevFootSampleTimeSeconds = FootSampleNowSeconds;
+	}
 	const FVector AnkleVelWorld = bHadPrevFootSample ? ((AnkleWorld - PrevAnkleWorld) / SampleDt) : FVector::ZeroVector;
 	const FVector HeelVelWorld = bHadPrevFootSample ? ((HeelWorld - PrevHeelWorld) / SampleDt) : FVector::ZeroVector;
 	const FVector ToeVelWorld = bHadPrevFootSample ? ((ToeWorld - PrevToeWorld) / SampleDt) : FVector::ZeroVector;

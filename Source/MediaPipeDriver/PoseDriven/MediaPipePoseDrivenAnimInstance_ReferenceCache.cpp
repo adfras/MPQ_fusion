@@ -123,6 +123,12 @@ bool FAnimNode_MediaPipePoseDriven::BuildReferencePoseCache(const FBoneContainer
 	}
 	RefHandVisualPalmBasisCompL = FQuat::Identity;
 	RefHandVisualPalmBasisCompR = FQuat::Identity;
+	bHasRefHandCameraBasisL = false;
+	bHasRefHandCameraBasisR = false;
+	RefHandCameraBasisCompL = FQuat::Identity;
+	RefHandCameraBasisCompR = FQuat::Identity;
+	RefHandCameraThumbUpDotL = 0.0f;
+	RefHandCameraThumbUpDotR = 0.0f;
 	RefNeckPosComp = FVector::ZeroVector;
 	RefNeck02PosComp = FVector::ZeroVector;
 	RefHeadPosComp = FVector::ZeroVector;
@@ -710,6 +716,44 @@ bool FAnimNode_MediaPipePoseDriven::BuildReferencePoseCache(const FBoneContainer
 
 	RefHandVisualPalmBasisCompL = BuildVisualPalmBasisRef(HandL, FingerBonesL, true, RefHandBasisCompL);
 	RefHandVisualPalmBasisCompR = BuildVisualPalmBasisRef(HandR, FingerBonesR, false, RefHandBasisCompR);
+
+	// Camera-hand mapping reference: SAME formula as the live 21-landmark basis (raw geometric
+	// cross, no bone-axis reference and no side flips - unlike BuildVisualPalmBasisRef above),
+	// so the measured->ref delta cancels the formula's chirality convention by construction.
+	// The palm side then stops being a continuity coin-flip (2026-07-03 trace: palm-up vs
+	// palm-flipped branches split 408/326 across one overhead session). ThumbUpDot records the
+	// ref thumb_01 side of the palm plane as the chirality cue for the live thumb landmark.
+	auto BuildCameraHandBasisRef = [&](const FBoneReference& HandBone, const FBoneReference* FingerBones,
+		bool& bOutHas, FQuat& OutBasis, float& OutThumbUpDot)
+	{
+		bOutHas = false;
+		OutBasis = FQuat::Identity;
+		OutThumbUpDot = 0.0f;
+		FTransform HandCS;
+		FTransform IndexCS;
+		FTransform PinkyCS;
+		FTransform ThumbCS;
+		if (!GetCS(HandBone, HandCS) ||
+			!GetCS(FingerBones[QuestFingerBoneIndex(1, 0)], IndexCS) ||
+			!GetCS(FingerBones[QuestFingerBoneIndex(4, 0)], PinkyCS) ||
+			!GetCS(FingerBones[QuestFingerBoneIndex(0, 0)], ThumbCS))
+		{
+			return;
+		}
+		const FVector HandPos = HandCS.GetTranslation();
+		const FVector Forward = ((IndexCS.GetTranslation() + PinkyCS.GetTranslation()) * 0.5f - HandPos).GetSafeNormal();
+		const FVector Across = (IndexCS.GetTranslation() - PinkyCS.GetTranslation()).GetSafeNormal();
+		const FVector Up = FVector::CrossProduct(Forward, Across).GetSafeNormal();
+		if (Forward.IsNearlyZero() || Across.IsNearlyZero() || Up.IsNearlyZero())
+		{
+			return;
+		}
+		OutBasis = MakeQuatFromForwardUp(Forward, Up);
+		OutThumbUpDot = FVector::DotProduct((ThumbCS.GetTranslation() - HandPos).GetSafeNormal(), Up);
+		bOutHas = !OutBasis.IsIdentity();
+	};
+	BuildCameraHandBasisRef(HandL, FingerBonesL, bHasRefHandCameraBasisL, RefHandCameraBasisCompL, RefHandCameraThumbUpDotL);
+	BuildCameraHandBasisRef(HandR, FingerBonesR, bHasRefHandCameraBasisR, RefHandCameraBasisCompR, RefHandCameraThumbUpDotR);
 
 	if (CVarQuestHandDebug.GetValueOnAnyThread() != 0)
 	{
