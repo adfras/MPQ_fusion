@@ -68,12 +68,40 @@ Then the human protocol, in order:
 
 ## Step 2 — offline solve
 
-In the editor (MetaHuman Animator workflow):
+**Fully scripted** (`Content/Python/mha_offline_solve.py`) and executed for
+Take 1 on 2026-07-03:
 
-1. Create a Capture Source pointing at the recorded video; ingest the take.
-2. Create a body performance from the take and process it (offline solve —
-   minutes, not real-time).
-3. Export the result as an Anim Sequence on the MetaHuman skeleton.
+```text
+import mha_offline_solve
+mha_offline_solve.run()      # ingest (reuses saved ingest if present) + solve
+mha_offline_solve.status()   # poll; pipeline stages log as LogMetaHumanPipeline Run start/end
+mha_offline_solve.export()   # face export (hollow for body takes - see below)
+```
+
+Take 1 results: video ingested to
+`/Game/CaptureManager/Imports/mha_groundtruth_1/CD_mha_groundtruth_1`; solve
+ran ~25 min in 5+ pipeline stages; body animation exported to
+`/Game/MHAGroundTruth/AS_MHA_Body_Take1` (62.8 s on `metahuman_base_skel`,
+motion verified by bone sampling).
+
+Hard-won operational notes:
+
+- **GPU TDR hazard:** the solve's long GPU kernels crashed the editor
+  (D3D device removed, SharedPointer-clean — VRAM was fine at 6.6/15 GB)
+  while the editor rendered normally. Fix that worked: cap editor rendering
+  with `t.MaxFPS 10` before `run()`. If it ever recurs, the escalation is
+  the Windows `TdrDelay` registry bump + reboot.
+- **Body export needs explicit settings:** default
+  `MetaHumanPerformanceExportAnimationSettings` exports FACE only → a hollow
+  AnimSequence with no skeleton. Set `export_body=True`, `export_face=False`,
+  and `target_skeleton_or_skeletal_mesh` to the MetaHuman body skeleton.
+  `performance.contains_animation_data()` is also face-only; use
+  `contains_animation_data_type(unreal.FrameAnimationDataType.BODY)`.
+- `run()` schedules everything on a one-shot slate post-tick so the
+  triggering MCP request closes first (crash rule 1 in
+  UNREAL_MCP_OPERATIONS.md); solve runs non-blocking, poll `status()`.
+- Ingest results are saved to disk and survive editor crashes; `run()`
+  reuses them.
 
 ## Step 3 — compare
 
