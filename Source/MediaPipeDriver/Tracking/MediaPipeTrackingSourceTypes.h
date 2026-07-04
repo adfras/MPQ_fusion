@@ -71,6 +71,23 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrame
 	FMediaPipeBodyFusionSourceStatus LeftArmChainStatus;
 	FMediaPipeBodyFusionSourceStatus RightArmChainStatus;
 
+	// Quest body-tracking hips pose (schema v3, 2026-07-04): source signal for the live
+	// body-yaw path, recorded so full-turn following can be replayed and scored.
+	bool bHasBodyHips = false;
+	FVector BodyHipsLocationWorld = FVector::ZeroVector;
+	FQuat BodyHipsRotationWorld = FQuat::Identity;
+	uint8 bBodyHipsOrientationValid = 0;
+	double BodyHipsTimestampSeconds = -1.0;
+	float BodyHipsConfidence = 0.0f;
+	FMediaPipeBodyFusionSourceStatus BodyHipsStatus;
+
+	// Webcam 21-landmark hand pair (schema v3, 2026-07-04): image-plane + hand-metric
+	// landmarks with visibility/presence, both sides. Source signal for the overhead
+	// chain-vs-camera discriminator and the camera-hand rotation path.
+	bool bHasCameraHands = false;
+	double CameraHandsTimestampSeconds = -1.0;
+	FMediaPipeRawHandPair CameraHands;
+
 	bool bHasBodyPose = false;
 	double BodyPoseTimestampSeconds = -1.0;
 	float BodyPoseConfidence = 0.0f;

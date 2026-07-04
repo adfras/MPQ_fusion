@@ -91,6 +91,12 @@ struct MEDIAPIPEDRIVER_API FEmbodiedFusionSourceObservations
 	FMediaPipeTrackingHandSourceSnapshot Hands;
 	FMediaPipeTrackingArmChainSourceSnapshot ArmChain;
 	FMediaPipeTrackingBodyPoseSnapshot BodyPose;
+	// Webcam 21-landmark hand pair (schema v3, 2026-07-04): rides the same MediaPipe pose
+	// frame as BodyPose. Recorded so the overhead chain-vs-camera discriminator and the
+	// camera-hand rotation path can be replayed and scored.
+	bool bHasCameraHands = false;
+	double CameraHandsTimestampSeconds = -1.0;
+	FMediaPipeRawHandPair CameraHands;
 	bool bOverrideArmChainMaxAgeSeconds = false;
 	float ArmChainMaxAgeSeconds = 0.25f;
 };

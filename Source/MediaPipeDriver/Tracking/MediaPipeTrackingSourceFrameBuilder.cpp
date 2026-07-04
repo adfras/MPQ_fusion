@@ -136,6 +136,12 @@ void FMediaPipeTrackingArmChainSourceSnapshot::Reset()
 {
 	Left = FMediaPipeTrackingArmChainSideSnapshot();
 	Right = FMediaPipeTrackingArmChainSideSnapshot();
+	bHasHips = false;
+	HipsLocationWorld = FVector::ZeroVector;
+	HipsRotationWorld = FQuat::Identity;
+	bHipsOrientationValid = 0;
+	HipsTimestampSeconds = -1.0;
+	HipsConfidence = 0.0f;
 }
 
 FMediaPipeTrackingBodyPoseSnapshot::FMediaPipeTrackingBodyPoseSnapshot()
@@ -191,6 +197,15 @@ void FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 
 	PopulateHands(OutFrame, Input.Hands, Input.NowSeconds);
 	PopulateArmChain(OutFrame, Input.ArmChain);
+
+	OutFrame.bHasCameraHands = Input.bHasCameraHands;
+	if (Input.bHasCameraHands)
+	{
+		OutFrame.CameraHands = Input.CameraHands;
+		OutFrame.CameraHandsTimestampSeconds =
+			ResolveTimestampSeconds(Input.CameraHandsTimestampSeconds, Input.NowSeconds);
+	}
+
 	PopulateBodyPose(
 		OutFrame,
 		Input.BodyPose.TimestampSeconds,
@@ -246,6 +261,16 @@ void FMediaPipeTrackingSourceFrameBuilder::PopulateArmChain(
 {
 	PopulateArmChainSide(InOutFrame, Snapshot, true);
 	PopulateArmChainSide(InOutFrame, Snapshot, false);
+
+	InOutFrame.bHasBodyHips = Snapshot.bHasHips;
+	if (Snapshot.bHasHips)
+	{
+		InOutFrame.BodyHipsLocationWorld = Snapshot.HipsLocationWorld;
+		InOutFrame.BodyHipsRotationWorld = Snapshot.HipsRotationWorld;
+		InOutFrame.bBodyHipsOrientationValid = Snapshot.bHipsOrientationValid;
+		InOutFrame.BodyHipsTimestampSeconds = Snapshot.HipsTimestampSeconds;
+		InOutFrame.BodyHipsConfidence = Snapshot.HipsConfidence;
+	}
 }
 
 void FMediaPipeTrackingSourceFrameBuilder::PopulateBodyPose(

@@ -90,6 +90,18 @@ FMediaPipeTrackingArmChainSourceSnapshot ConvertFullArmChainToGenericArmChain(
 
 	ConvertSide(true, Generic.Left);
 	ConvertSide(false, Generic.Right);
+
+	// Schema v3: carry the Quest body-tracking hips pose (the OpenXR snapshot always had
+	// it; datasets never recorded it, so the live body-yaw path could not be replayed).
+	if (Snapshot.bActive != 0 && Snapshot.Hips.bValid != 0 && Snapshot.Hips.bPositionValid != 0)
+	{
+		Generic.bHasHips = true;
+		Generic.HipsLocationWorld = Snapshot.Hips.WorldTransform.GetLocation();
+		Generic.HipsRotationWorld = Snapshot.Hips.WorldTransform.GetRotation();
+		Generic.bHipsOrientationValid = Snapshot.Hips.bOrientationValid;
+		Generic.HipsTimestampSeconds = Snapshot.TimestampSeconds;
+		Generic.HipsConfidence = Snapshot.Confidence;
+	}
 	return Generic;
 }
 
@@ -683,6 +695,11 @@ void UEmbodiedFusionComponent::UpdateBodyPoseObservation_GameThread(
 	const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid)
 {
 	SourceObservations.NowSeconds = TimestampSeconds;
+	SourceObservations.bHasCameraHands = Frame.bHasHands;
+	SourceObservations.CameraHands = Frame.Hands;
+	SourceObservations.CameraHandsTimestampSeconds = Frame.PublishWallSeconds >= 0.0
+		? Frame.PublishWallSeconds
+		: TimestampSeconds;
 	SourceObservations.BodyPose.Reset();
 	SourceObservations.BodyPose.TimestampSeconds = Frame.PublishWallSeconds >= 0.0
 		? Frame.PublishWallSeconds
@@ -737,6 +754,9 @@ bool UEmbodiedFusionComponent::UpdateFusion_GameThread(const FEmbodiedFusionUpda
 	SourceFrameInput.Hands = SourceObservations.Hands;
 	SourceFrameInput.ArmChain = SourceObservations.ArmChain;
 	SourceFrameInput.BodyPose = SourceObservations.BodyPose;
+	SourceFrameInput.bHasCameraHands = SourceObservations.bHasCameraHands;
+	SourceFrameInput.CameraHands = SourceObservations.CameraHands;
+	SourceFrameInput.CameraHandsTimestampSeconds = SourceObservations.CameraHandsTimestampSeconds;
 	SourceFrameInput.bOverrideArmChainMaxAgeSeconds =
 		Input.bOverrideArmChainMaxAgeSeconds;
 	SourceFrameInput.ArmChainMaxAgeSeconds =
@@ -861,6 +881,9 @@ void UEmbodiedFusionComponent::UpdateMovementReplicaPose_GameThread(
 	SourceFrameInput.Hands = SourceObservations.Hands;
 	SourceFrameInput.ArmChain = SourceObservations.ArmChain;
 	SourceFrameInput.BodyPose = SourceObservations.BodyPose;
+	SourceFrameInput.bHasCameraHands = SourceObservations.bHasCameraHands;
+	SourceFrameInput.CameraHands = SourceObservations.CameraHands;
+	SourceFrameInput.CameraHandsTimestampSeconds = SourceObservations.CameraHandsTimestampSeconds;
 	FMediaPipeTrackingSourceFrameBuilder::BuildSourceFrame(
 		SourceFrameInput,
 		LatestFrame.SourceFrame,

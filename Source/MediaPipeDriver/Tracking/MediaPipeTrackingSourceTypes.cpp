@@ -81,6 +81,18 @@ void FMediaPipeTrackingSourceFrame::Reset()
 	LeftArmChainStatus = FMediaPipeBodyFusionSourceStatus();
 	RightArmChainStatus = FMediaPipeBodyFusionSourceStatus();
 
+	bHasBodyHips = false;
+	BodyHipsLocationWorld = FVector::ZeroVector;
+	BodyHipsRotationWorld = FQuat::Identity;
+	bBodyHipsOrientationValid = 0;
+	BodyHipsTimestampSeconds = -1.0;
+	BodyHipsConfidence = 0.0f;
+	BodyHipsStatus = FMediaPipeBodyFusionSourceStatus();
+
+	bHasCameraHands = false;
+	CameraHandsTimestampSeconds = -1.0;
+	CameraHands = FMediaPipeRawHandPair();
+
 	bHasBodyPose = false;
 	BodyPoseTimestampSeconds = -1.0;
 	BodyPoseConfidence = 0.0f;
@@ -186,6 +198,15 @@ void FMediaPipeTrackingSourceFrame::UpdateFreshness(const FMediaPipeBodyFusionFr
 		FrameTimeSeconds,
 		Thresholds.ArmChainMaxAgeSeconds,
 		RightArmChainConfidence,
+		Thresholds.MinDeviceConfidence);
+
+	BodyHipsStatus = ClassifySource(
+		bHasBodyHips,
+		IsFiniteVector(BodyHipsLocationWorld) && !BodyHipsRotationWorld.ContainsNaN(),
+		BodyHipsTimestampSeconds,
+		FrameTimeSeconds,
+		Thresholds.ArmChainMaxAgeSeconds,
+		BodyHipsConfidence,
 		Thresholds.MinDeviceConfidence);
 
 	bool bAnyValidBodyLandmark = false;

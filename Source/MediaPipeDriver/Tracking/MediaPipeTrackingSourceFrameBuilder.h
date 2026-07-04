@@ -59,6 +59,16 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingArmChainSourceSnapshot
 	FMediaPipeTrackingArmChainSideSnapshot Left;
 	FMediaPipeTrackingArmChainSideSnapshot Right;
 
+	// Quest body-tracking hips pose (schema v3, 2026-07-04). The OpenXR body snapshot has
+	// always carried the hips joint; recording it unblocks full-turn body-yaw work - the
+	// live hip-yaw path could never be replayed because datasets lacked this signal.
+	bool bHasHips = false;
+	FVector HipsLocationWorld = FVector::ZeroVector;
+	FQuat HipsRotationWorld = FQuat::Identity;
+	uint8 bHipsOrientationValid = 0;
+	double HipsTimestampSeconds = -1.0;
+	float HipsConfidence = 0.0f;
+
 	void Reset();
 };
 
@@ -87,6 +97,11 @@ struct MEDIAPIPEDRIVER_API FMediaPipeTrackingSourceFrameBuilderInput
 	FMediaPipeTrackingHandSourceSnapshot Hands;
 	FMediaPipeTrackingArmChainSourceSnapshot ArmChain;
 	FMediaPipeTrackingBodyPoseSnapshot BodyPose;
+
+	// Webcam 21-landmark hand pair (schema v3).
+	bool bHasCameraHands = false;
+	double CameraHandsTimestampSeconds = -1.0;
+	FMediaPipeRawHandPair CameraHands;
 
 	bool bOverrideArmChainMaxAgeSeconds = false;
 	float ArmChainMaxAgeSeconds = 0.25f;

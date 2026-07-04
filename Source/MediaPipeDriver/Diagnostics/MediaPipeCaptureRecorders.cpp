@@ -1362,6 +1362,60 @@ TSharedRef<FJsonObject> JsonTrackingSourceFrame(const FMediaPipeTrackingSourceFr
 	SetArmChain(TEXT("left_arm_chain"), Frame.bHasLeftArmChain, Frame.LeftArmShoulderWorld, Frame.LeftArmElbowWorld, Frame.LeftArmWristWorld, Frame.LeftArmChainTimestampSeconds, Frame.LeftArmChainConfidence, Frame.LeftArmChainStatus);
 	SetArmChain(TEXT("right_arm_chain"), Frame.bHasRightArmChain, Frame.RightArmShoulderWorld, Frame.RightArmElbowWorld, Frame.RightArmWristWorld, Frame.RightArmChainTimestampSeconds, Frame.RightArmChainConfidence, Frame.RightArmChainStatus);
 
+	// Schema v3 (2026-07-04): Quest body-tracking hips pose. Absent from older captures;
+	// readers must treat a missing "body_hips" field as has_hips=false.
+	TSharedRef<FJsonObject> BodyHips = MakeShared<FJsonObject>();
+	BodyHips->SetBoolField(TEXT("has_hips"), Frame.bHasBodyHips);
+	BodyHips->SetObjectField(TEXT("status"), JsonSourceStatus(Frame.BodyHipsStatus));
+	BodyHips->SetArrayField(TEXT("loc"), JsonVector(Frame.BodyHipsLocationWorld));
+	BodyHips->SetArrayField(TEXT("quat"), JsonQuat(Frame.BodyHipsRotationWorld));
+	BodyHips->SetBoolField(TEXT("orientation_valid"), Frame.bBodyHipsOrientationValid != 0);
+	BodyHips->SetNumberField(TEXT("timestamp_seconds"), Frame.BodyHipsTimestampSeconds);
+	BodyHips->SetNumberField(TEXT("confidence"), Frame.BodyHipsConfidence);
+	Result->SetObjectField(TEXT("body_hips"), BodyHips);
+
+	// Schema v3 (2026-07-04): webcam 21-landmark hand pair, image-plane (normalized) and
+	// hand-metric (world) spaces per side. Absent from older captures; readers must treat
+	// a missing "camera_hands" field as has_hands=false.
+	TSharedRef<FJsonObject> CameraHands = MakeShared<FJsonObject>();
+	CameraHands->SetBoolField(TEXT("has_hands"), Frame.bHasCameraHands);
+	CameraHands->SetNumberField(TEXT("timestamp_seconds"), Frame.CameraHandsTimestampSeconds);
+	if (Frame.bHasCameraHands)
+	{
+		auto JsonHandLandmarks = [](const FMediaPipeRawHandLandmarks& Landmarks)
+		{
+			TArray<TSharedPtr<FJsonValue>> Entries;
+			Entries.Reserve(MediaPipeHandLandmarkCount);
+			for (int32 Index = 0; Index < MediaPipeHandLandmarkCount; ++Index)
+			{
+				const FMediaPipeRawHandLandmark& Landmark = Landmarks.Landmarks[Index];
+				TArray<TSharedPtr<FJsonValue>> Entry;
+				Entry.Add(MakeShared<FJsonValueNumber>(Landmark.X));
+				Entry.Add(MakeShared<FJsonValueNumber>(Landmark.Y));
+				Entry.Add(MakeShared<FJsonValueNumber>(Landmark.Z));
+				Entry.Add(MakeShared<FJsonValueNumber>(Landmark.Visibility));
+				Entry.Add(MakeShared<FJsonValueNumber>(Landmark.Presence));
+				Entries.Add(MakeShared<FJsonValueArray>(Entry));
+			}
+			return Entries;
+		};
+		CameraHands->SetBoolField(TEXT("has_left"), Frame.CameraHands.bHasLeft != 0);
+		CameraHands->SetBoolField(TEXT("has_right"), Frame.CameraHands.bHasRight != 0);
+		CameraHands->SetNumberField(TEXT("left_score"), Frame.CameraHands.LeftScore);
+		CameraHands->SetNumberField(TEXT("right_score"), Frame.CameraHands.RightScore);
+		if (Frame.CameraHands.bHasLeft != 0)
+		{
+			CameraHands->SetArrayField(TEXT("left_normalized"), JsonHandLandmarks(Frame.CameraHands.LeftNormalized));
+			CameraHands->SetArrayField(TEXT("left_world"), JsonHandLandmarks(Frame.CameraHands.LeftWorld));
+		}
+		if (Frame.CameraHands.bHasRight != 0)
+		{
+			CameraHands->SetArrayField(TEXT("right_normalized"), JsonHandLandmarks(Frame.CameraHands.RightNormalized));
+			CameraHands->SetArrayField(TEXT("right_world"), JsonHandLandmarks(Frame.CameraHands.RightWorld));
+		}
+	}
+	Result->SetObjectField(TEXT("camera_hands"), CameraHands);
+
 	TSharedRef<FJsonObject> BodyPose = MakeShared<FJsonObject>();
 	BodyPose->SetBoolField(TEXT("has_body_pose"), Frame.bHasBodyPose);
 	BodyPose->SetObjectField(TEXT("status"), JsonSourceStatus(Frame.BodyPoseStatus));
