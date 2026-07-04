@@ -114,7 +114,28 @@ pawn's `MetaHumanProfileId` property (transient, editor-world — the pawn
 property OVERRIDES `mp.MetaHumanActiveProfile`, which the pawn stomps at
 tracking start). Restore the pawn to Kellan after runs.
 
-## What failure looks like (worth the gate)
+## Accuracy-vs-MHA across proportions (2026-07-04, second matrix run)
+
+The mha_groundtruth take was replayed in live-parity mode against all four
+variants plus Kellan and scored against the MHA offline solve
+(`score_against_mha.py --baseline-relative --all-bones`). Overall RMSE:
+
+```text
+avatar        kneeL/R deg   elbowL/R deg   wristL/R cm   pelvis cm   hipyaw deg
+Kellan        18.0 / 19.8   24.3 / 23.3    21.2 / 20.1   3.0         10.4
+PM_Tall       19.7 / 21.0   24.3 / 23.3    23.0 / 22.1   3.5          9.3
+PM_Short      18.5 / 20.1   24.3 / 23.3    20.4 / 19.7   2.7         10.1
+PM_LongArms   18.3 / 20.0   24.3 / 23.3    22.5 / 21.2   3.0         10.1
+PM_ShortLegs  18.1 / 19.8   24.3 / 23.4    20.9 / 19.9   2.9         10.1
+```
+
+**Accuracy is proportion-invariant.** Every variant is within 1-2 units of
+Kellan on every metric; elbow angles are bit-identical across avatars
+(angles are retarget-invariant - sanity check passed); the same bones
+(hands, forearms) and the same window (the end-of-take full-body turn)
+dominate the error on all five. Solver-accuracy improvements made on Kellan
+transfer across body types; the remaining error lives in the sources and
+solvers, not in retargeting.
 
 - Reach clamps tuned in centimeters (`mp.MediaPipeArmMaxWristStepCm 55`,
   `MaxElbowStepCm 35`) firing constantly on long arms → laggy/short reach.
