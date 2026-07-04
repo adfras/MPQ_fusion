@@ -115,12 +115,28 @@ def best_offset(a, b, key, hz, max_shift_s=15.0):
     return best
 
 
-def score(a, b, shift, hz, window_s):
+def score(a, b, shift, hz, window_s, baseline_relative=False):
     keys = ["knee_l", "knee_r", "elbow_l", "elbow_r",
             "wrist_h_l", "wrist_h_r", "pelvis_z"]
     # pelvis_z compared as delta from its own median (squat depth, frame-free)
     med_a = sorted(r["pelvis_z"] for r in a)[len(a) // 2]
     med_b = sorted(r["pelvis_z"] for r in b)[len(b) // 2]
+
+    # Baseline-relative mode: subtract each stream's own median from every
+    # signal, so constant offsets (different export skeletons place joints
+    # differently -> systematic angle bias) cancel and the comparison
+    # measures MOTION fidelity (amplitude + timing) rather than absolute
+    # pose. Use when the two streams come from different skeletons.
+    baselines_a, baselines_b = {}, {}
+    if baseline_relative:
+        for k in keys:
+            if k == "pelvis_z":
+                continue
+            va = sorted(r[k] for r in a if r.get(k) is not None)
+            vb = sorted(r[k] for r in b if r.get(k) is not None)
+            if va and vb:
+                baselines_a[k] = va[len(va) // 2]
+                baselines_b[k] = vb[len(vb) // 2]
 
     windows = {}
     for i in range(len(a)):
@@ -135,6 +151,8 @@ def score(a, b, shift, hz, window_s):
                 continue
             if k == "pelvis_z":
                 bucket[k].append(((va - med_a) - (vb - med_b)))
+            elif baseline_relative and k in baselines_a:
+                bucket[k].append((va - baselines_a[k]) - (vb - baselines_b[k]))
             else:
                 bucket[k].append(va - vb)
 
@@ -166,6 +184,9 @@ def main():
     ap.add_argument("--align-signal", default="pelvis_z")
     ap.add_argument("--hz", type=float, default=30.0)
     ap.add_argument("--window-seconds", type=float, default=5.0)
+    ap.add_argument("--baseline-relative", action="store_true",
+                    help="subtract each stream's own median per signal "
+                         "(cross-skeleton comparison)")
     args = ap.parse_args()
 
     _, rows_a = load_series(args.mha)
@@ -177,7 +198,8 @@ def main():
           f"on {args.align_signal} ({len(a)} vs {len(b)} samples)\n")
     if corr < 0.5:
         print("WARNING: weak alignment correlation - check takes match / signal choice")
-    score(a, b, shift, args.hz, args.window_seconds)
+    score(a, b, shift, args.hz, args.window_seconds,
+          baseline_relative=args.baseline_relative)
     return 0
 
 
