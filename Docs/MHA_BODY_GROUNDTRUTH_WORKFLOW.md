@@ -103,7 +103,44 @@ Hard-won operational notes:
 - Ingest results are saved to disk and survive editor crashes; `run()`
   reuses them.
 
-## Step 3 — compare
+## Step 3 — compare (harness ready, first run pending)
+
+Status 2026-07-03 midnight: all tooling exists and is smoke-tested; the two
+measurement runs remain (editor was closed for the night). Next session:
+
+1. Sample Epic's solve (editor, ~1 min):
+   `Tools/sample_anim_sequence.py` with OUTPUT_LABEL="mhaSolveTake1"
+   (module-load pattern in its docstring).
+2. Fused replay of the take (editor, ~2 min): replay cache already built
+   (`..._mha_groundtruth_..._replay_source_manifest.json` — made by
+   `BuildTrackingFusionReplayCache.py`). Point the replay-map replay actor's
+   `ReplayManifestPath` at it (transient property, same pattern as the pawn
+   swap; restore after), pre-set the trial-only arm CVars
+   (`mp.MediaPipeArmOverheadRescue 1`, `mp.MediaPipeHandRotationOnQuestLoss 1`,
+   `mp.MediaPipeFingersOnQuestLoss 1`, `mp.MediaPipeArmReliabilityGate 0`,
+   `mp.MediaPipeFootContactKeyedState 1` + the other trial-only entries in
+   `ApplyLiveLowerBodyTrialPolicyLayer`), PIE, run the PIE sampler with
+   SEEK_OFFSET_SECONDS=2 CAPTURE_SECONDS=56, label "fusedTake1".
+   NOTE: the active ReplayEvaluation policy layer outranks live layers and
+   already carries the lower-body scaffold at trial values; it forces
+   MediaPipeAuthority=2 and DriveSpine=1, so the replayed ARMS are not the
+   exact live Quest-authority path — lower-body comparison is rigorous,
+   arm comparison is approximate. Verify effective CVars mid-PIE via
+   get_cvar before believing arm numbers.
+3. Score (no editor):
+   `python Tools/score_against_mha.py <MHA json> <fused json>` — aligns
+   clocks by pelvis-height cross-correlation, compares pelvis-relative
+   heights and joint angles per 5 s window (RMSE + peak). Smoke-tested on
+   Kellan-vs-PM_Tall replay measurements (aligned +0.43 s, corr 0.930).
+
+Scoring doctrine (agreed 2026-07-03): correlation alone is NOT the tuning
+objective — it is amplitude-blind (a half-height knee raise correlates
+perfectly). Drive down RMSE/peak in degrees and cm. Trust map: MHA is the
+reference for camera-owned regions (arms, hands, shoulders, overhead
+windows); it must NOT override HMD metric authority (squat depth, height) —
+both are monocular-blind on the depth axis. Hold out part of the take from
+tuning; the replay gate and worn-headset verdicts remain the other two
+judges.
 
 1. Sample bone trajectories from the exported Anim Sequence
    (`Tools/kellan_replay_bone_sampler.py` is the pattern — a sibling sampler
