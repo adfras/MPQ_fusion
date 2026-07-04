@@ -683,6 +683,12 @@ TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
 		// synthesized guess), and the hand pose gate holds fingers ONLY on untracked frames
 		// (the rate threshold that twitched real fist closes is neutralized).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmOverheadRescue"), 1),
+		// mp.MediaPipeArmOverheadRescueChainAboveVetoCm stays OUT of the trial layer: measured
+		// against the MHA reference 2026-07-04, the 30cm veto fixed the early-take camera-low
+		// latch (52->16cm) but suppressed correct rescues elsewhere (30s window 13->26cm) - when
+		// the hand flag drops, chain-above-camera does NOT discriminate which source is right
+		// (chain was right early-take, camera was right mid-take at identical height ordering).
+		// The CVar remains available (default 0) pending a better discriminator.
 		// USER FEEDBACK (2026-07-03): with the rescue keeping the arm on the camera, the HAND
 		// froze at its last Quest rotation and snapped on reacquire. Run the 21-landmark hand
 		// landmarker on the live webcam source (read at source spawn) and let its basis drive

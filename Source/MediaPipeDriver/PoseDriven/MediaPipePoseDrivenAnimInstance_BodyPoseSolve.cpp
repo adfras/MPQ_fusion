@@ -653,7 +653,12 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 	{
 		return;
 	}
-	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+	// Parity-aware replay gate (2026-07-04): live-parity scoring replays run the live
+	// neutral-settling/lean/twist/head paths (user-observed: hips never turned in parity
+	// replays; MHA hip-yaw RMSE 95-170 deg in turn windows). The byte-stable evaluation
+	// policy still suppresses them.
+	if ((FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+			!FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled()) ||
 		ShouldUseBodyFusionPoseForEvaluation())
 	{
 		return;
@@ -960,7 +965,12 @@ void FAnimNode_MediaPipePoseDriven::DriveHmdHeadCS(FCSPose<FCompactPose>& CSPose
 	{
 		return;
 	}
-	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+	// Parity-aware replay gate (2026-07-04): live-parity scoring replays run the live
+	// neutral-settling/lean/twist/head paths (user-observed: hips never turned in parity
+	// replays; MHA hip-yaw RMSE 95-170 deg in turn windows). The byte-stable evaluation
+	// policy still suppresses them.
+	if ((FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+			!FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled()) ||
 		ShouldUseBodyFusionPoseForEvaluation())
 	{
 		return;

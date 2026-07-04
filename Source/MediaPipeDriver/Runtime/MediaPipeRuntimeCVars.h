@@ -275,6 +275,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueMinReliability;
 	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueWristAboveShoulderCm;
 	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueDivergenceCm;
+	extern TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueChainAboveVetoCm;
 	extern TAutoConsoleVariable<int32> CVarQuestVrTrackingPanel;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeDriveHmdHead;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeHmdHeadMirror;

@@ -1338,6 +1338,11 @@ namespace MediaPipeRuntimeCVars
 		30.0f,
 		TEXT("Vertical divergence (MediaPipe wrist ABOVE the Quest chain's wrist, cm) that fires the overhead arm rescue even while the Quest still claims the hand is tracked. Measured 2026-07-02: overhead hands sag on the Quest side with questTracked=1 throughout - the tracked flag cannot be trusted; the divergence measures the error directly."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueChainAboveVetoCm(
+		TEXT("mp.MediaPipeArmOverheadRescueChainAboveVetoCm"),
+		0.0f,
+		TEXT("When > 0: veto overhead-rescue latch ENTRY on the hand-untracked clause while the Quest arm chain is still FRESH and its wrist sits at least this many cm ABOVE the MediaPipe wrist. MHA-referee forensics 2026-07-04 (Take 1, early-take windows): the hand flag dropped while the fresh chain was 34-57 cm above the camera wrist, the rescue trusted the camera, and the camera was the wrong one (left wrist 25->52 cm vs the offline solve). Does not touch the divergence trigger (camera ABOVE chain) or the fully-gone path (requires a stale chain). 0 disables (byte-stable default); the live trial layer sets it. AWAITING WORN-HEADSET VERDICT."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldAsymmetricFlexion(
 		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),
 		0,

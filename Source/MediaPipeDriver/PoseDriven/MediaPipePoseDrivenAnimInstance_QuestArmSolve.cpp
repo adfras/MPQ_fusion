@@ -336,8 +336,19 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				: (bHasRecentTrackedQuestWristForDivergence
 					? (MediaPipeSourceWristWorld.Z - QuestWristSideState.LastTrackedQuestArmWristWorld.Z)
 					: 0.0f);
+		// Chain-above veto (2026-07-04, MHA-referee forensics): a dropped hand flag with a FRESH
+		// chain sitting far ABOVE the camera wrist means the camera is the low/wrong one - taking
+		// the arm there dragged it 25->52 cm off the offline reference in the early-take windows.
+		// Entry-only veto on the untracked clause; the divergence trigger (camera above chain) and
+		// the fully-gone path (chain stale) are untouched, so a camera-seen RAISED arm still wins.
+		const float RescueChainAboveVetoCm =
+			CVarMediaPipeArmOverheadRescueChainAboveVetoCm.GetValueOnAnyThread();
+		const bool bChainAboveVeto =
+			RescueChainAboveVetoCm > 0.0f &&
+			bMetaHumanFullArmChainFresh &&
+			RescueQuestDivergenceCm <= -RescueChainAboveVetoCm;
 		const bool bQuestArmWrongOrLost =
-			!bQuestSideTrackedForArm ||
+			(!bQuestSideTrackedForArm && !bChainAboveVeto) ||
 			((bMetaHumanFullArmChainFresh || bHasRecentTrackedQuestWristForDivergence) &&
 				RescueQuestDivergenceCm >= CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread());
 		// USER RULE (2026-07-02): never hold an arm against the camera. When the Quest side is

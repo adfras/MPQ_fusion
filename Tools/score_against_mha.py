@@ -56,6 +56,13 @@ def load_series(path):
         if not pelvis:
             continue
         row = {"t": s.get("wall_time", s.get("game_time", 0.0)), "pelvis_z": pelvis[2]}
+        thigh_l, thigh_r = bones.get("thigh_l"), bones.get("thigh_r")
+        if thigh_l and thigh_r:
+            # Hip-line yaw in the world XY plane. Compared baseline-relative (own
+            # median) so the two streams' different world frames cancel; measures
+            # whether hip TURNS are reproduced (user-observed gap 2026-07-04).
+            row["hip_yaw"] = math.degrees(
+                math.atan2(thigh_r[1] - thigh_l[1], thigh_r[0] - thigh_l[0]))
         for side in ("l", "r"):
             for joint, (a, b, c) in {
                 f"knee_{side}": (f"thigh_{side}", f"calf_{side}", f"foot_{side}"),
@@ -117,7 +124,7 @@ def best_offset(a, b, key, hz, max_shift_s=15.0):
 
 def score(a, b, shift, hz, window_s, baseline_relative=False):
     keys = ["knee_l", "knee_r", "elbow_l", "elbow_r",
-            "wrist_h_l", "wrist_h_r", "pelvis_z"]
+            "wrist_h_l", "wrist_h_r", "pelvis_z", "hip_yaw"]
     # pelvis_z compared as delta from its own median (squat depth, frame-free)
     med_a = sorted(r["pelvis_z"] for r in a)[len(a) // 2]
     med_b = sorted(r["pelvis_z"] for r in b)[len(b) // 2]
@@ -152,7 +159,12 @@ def score(a, b, shift, hz, window_s, baseline_relative=False):
             if k == "pelvis_z":
                 bucket[k].append(((va - med_a) - (vb - med_b)))
             elif baseline_relative and k in baselines_a:
-                bucket[k].append((va - baselines_a[k]) - (vb - baselines_b[k]))
+                delta = (va - baselines_a[k]) - (vb - baselines_b[k])
+                if k == "hip_yaw":
+                    # circular: wrap to [-180, 180] so crossing the atan2 seam
+                    # does not register as a 350-degree error
+                    delta = (delta + 180.0) % 360.0 - 180.0
+                bucket[k].append(delta)
             else:
                 bucket[k].append(va - vb)
 
@@ -177,6 +189,63 @@ def score(a, b, shift, hz, window_s, baseline_relative=False):
     print("\nunits: knee/elbow deg; wrist_h/pelvis_z cm. peak = worst sample in window.")
 
 
+def score_all_bones(a_data, b_data, a, b, shift, hz, window_s):
+    """Per-bone motion-trajectory error: for EVERY bone present in both streams,
+    compare its displacement from its own median position (cancels world frame
+    and skeleton proportions). Coverage guard: no curated subset - a gap like
+    the hips (2026-07-04) cannot hide."""
+    def bone_series(data):
+        series = {}
+        for s in data["samples"]:
+            t = s.get("wall_time", s.get("game_time", 0.0))
+            for bone, pos in s.get("bones", {}).items():
+                series.setdefault(bone, []).append((t, pos))
+        return series
+    sa, sb = bone_series(a_data), bone_series(b_data)
+    common = sorted(set(sa) & set(sb))
+    print(f"\n=== all-bones motion error ({len(common)} bones common to both) ===")
+    missing_a = sorted(set(sb) - set(sa)); missing_b = sorted(set(sa) - set(sb))
+    if missing_a: print("only in fused:", ", ".join(missing_a))
+    if missing_b: print("only in MHA:", ", ".join(missing_b))
+
+    def resample_bone(entries):
+        if not entries: return []
+        t0, t1 = entries[0][0], entries[-1][0]
+        out, idx, t = [], 0, t0
+        while t <= t1:
+            while idx + 1 < len(entries) and abs(entries[idx+1][0]-t) <= abs(entries[idx][0]-t):
+                idx += 1
+            out.append(entries[idx][1]); t += 1.0/hz
+        return out
+
+    def median_pos(pts):
+        return [sorted(p[i] for p in pts)[len(pts)//2] for i in range(3)]
+
+    rows_out = []
+    for bone in common:
+        pa, pb = resample_bone(sa[bone]), resample_bone(sb[bone])
+        if len(pa) < hz * 5 or len(pb) < hz * 5: continue
+        ma, mb = median_pos(pa), median_pos(pb)
+        errs, win_err = [], {}
+        for i in range(len(pa)):
+            j = i + shift
+            if not (0 <= j < len(pb)): continue
+            da = [pa[i][k]-ma[k] for k in range(3)]
+            db = [pb[j][k]-mb[k] for k in range(3)]
+            e = math.sqrt(sum((da[k]-db[k])**2 for k in range(3)))
+            errs.append(e)
+            win_err.setdefault(int((i/hz)//window_s)*int(window_s), []).append(e)
+        if not errs: continue
+        rmse = math.sqrt(sum(e*e for e in errs)/len(errs))
+        worst_w = max(win_err, key=lambda w: sum(x*x for x in win_err[w])/len(win_err[w]))
+        worst_rmse = math.sqrt(sum(x*x for x in win_err[worst_w])/len(win_err[worst_w]))
+        rows_out.append((rmse, max(errs), worst_w, worst_rmse, bone))
+    rows_out.sort(reverse=True)
+    print(f"{'bone':<14}{'RMSE cm':>9}{'peak cm':>9}{'worst window':>14}")
+    for rmse, peak, ww, wr, bone in rows_out:
+        print(f"{bone:<14}{rmse:9.1f}{peak:9.1f}{('%ds (%.1f)' % (ww, wr)):>14}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mha")
@@ -187,10 +256,13 @@ def main():
     ap.add_argument("--baseline-relative", action="store_true",
                     help="subtract each stream's own median per signal "
                          "(cross-skeleton comparison)")
+    ap.add_argument("--all-bones", action="store_true",
+                    help="also report per-bone motion-trajectory error for "
+                         "every bone present in both streams")
     args = ap.parse_args()
 
-    _, rows_a = load_series(args.mha)
-    _, rows_b = load_series(args.fused)
+    data_a, rows_a = load_series(args.mha)
+    data_b, rows_b = load_series(args.fused)
     a = resample(rows_a, args.hz)
     b = resample(rows_b, args.hz)
     shift, corr = best_offset(a, b, args.align_signal, args.hz)
@@ -200,6 +272,8 @@ def main():
         print("WARNING: weak alignment correlation - check takes match / signal choice")
     score(a, b, shift, args.hz, args.window_seconds,
           baseline_relative=args.baseline_relative)
+    if args.all_bones:
+        score_all_bones(data_a, data_b, a, b, shift, args.hz, args.window_seconds)
     return 0
 
 
