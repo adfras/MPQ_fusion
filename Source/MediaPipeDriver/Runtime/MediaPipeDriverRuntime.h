@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
+#include "MediaPipeCVarPolicy.h"
 
 class AActor;
 class APawn;
@@ -34,6 +35,12 @@ extern const FName PlacedEmbodiedAvatarPawnTag;
 extern const FName CommandOnlyEmbodiedStartTag;
 extern const FName LocalFirstPersonBodyProxyComponentName;
 extern const FName LocalFirstPersonBodyProxyUpdaterComponentName;
+
+// The live lower-body trial settings (the corrective stack accepted in worn-headset
+// sessions). Shared between the LiveLowerBodyTrial policy layer and the replay
+// live-parity mode (mp.TrackingFusionDatasetReplayLiveParity) so scoring replays run
+// the same configuration the user feels live.
+MEDIAPIPEDRIVER_API TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings();
 
 extern bool bHasAutoQuestMirrorYawCalibration;
 extern float AutoQuestMirrorYawCalibrationDeg;

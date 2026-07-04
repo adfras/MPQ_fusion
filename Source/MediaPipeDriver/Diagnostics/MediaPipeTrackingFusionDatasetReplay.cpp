@@ -4,6 +4,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "MediaPipeCVarPolicy.h"
+#include "MediaPipeDriverRuntime.h"
 #include "MediaPipePoseLog.h"
 #include "MediaPipeTrackingFusionDataset.h"
 #include "Misc/FileHelper.h"
@@ -38,6 +39,11 @@ TAutoConsoleVariable<int32> CVarTrackingFusionDatasetReplayAllowTrackingFusionCa
 	TEXT("mp.TrackingFusionDatasetReplayAllowTrackingFusionCapture"),
 	0,
 	TEXT("When non-zero, the replay startup actor will not clear mp.RecordTrackingFusionDatasetOnPlay. Used for deterministic replay-output avatar captures without live hardware."));
+
+TAutoConsoleVariable<int32> CVarTrackingFusionDatasetReplayLiveParity(
+	TEXT("mp.TrackingFusionDatasetReplayLiveParity"),
+	0,
+	TEXT("Replay policy live-parity mode for accuracy scoring against external references (MHA offline solves). 0 (default) = the verified byte-stable replay evaluation policy. 1 = replace the fusion-authority entries with the live defaults (MediaPipeAuthority=0, FullBodyMediaPipeAuthority=0, DriveSpine=0) and fold the live lower-body trial settings into the ReplayEvaluation layer so live profile re-applies cannot stomp them. NOT byte-stable; never enable for the replay regression gate."));
 
 bool TryGetObjectField(
 	const TSharedPtr<FJsonObject>& Object,
@@ -901,6 +907,38 @@ void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThre
 		// evaluation is active.
 		FMediaPipeCVarSetting::MakeInt(TEXT("r.HairStrands.Simulation"), 0),
 	};
+
+	if (CVarTrackingFusionDatasetReplayLiveParity.GetValueOnGameThread() != 0)
+	{
+		// Live-parity scoring mode (2026-07-04): replay the dataset under the SAME corrective
+		// stack the user runs live, so external-reference scoring (MHA offline solves) measures
+		// the system the user actually feels. Folding the trial settings into this layer (rather
+		// than raw-setting them) closes the stomp hole observed 2026-07-04: a live profile apply
+		// during PIE startup re-asserted mp.MediaPipeArmReliabilityGate=1 over a pre-PIE raw set.
+		auto ReplaceOrAdd = [&Layer](const FMediaPipeCVarSetting& NewSetting)
+		{
+			for (FMediaPipeCVarSetting& Existing : Layer.Settings)
+			{
+				if (Existing.Name == NewSetting.Name)
+				{
+					Existing = NewSetting;
+					return;
+				}
+			}
+			Layer.Settings.Add(NewSetting);
+		};
+		for (const FMediaPipeCVarSetting& TrialSetting :
+			MediaPipeDriverRuntime::GetLiveLowerBodyTrialSettings())
+		{
+			ReplaceOrAdd(TrialSetting);
+		}
+		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.MediaPipeAuthority"), 0));
+		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"), 0));
+		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveSpine"), 0));
+		UE_LOG(LogMediaPipePose, Warning,
+			TEXT("Replay policy: LIVE-PARITY mode active (mp.TrackingFusionDatasetReplayLiveParity=1). Not byte-stable; scoring use only."));
+	}
+
 	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
 }
 

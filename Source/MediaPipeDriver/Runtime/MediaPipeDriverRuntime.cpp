@@ -603,11 +603,17 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 	FMediaPipeCVarPolicyLayer Layer;
 	Layer.PolicyId = LiveLowerBodyTrialPolicyId;
 	Layer.Priority = EMediaPipeCVarPolicyPriority::CaptureScope;
+	Layer.Settings = GetLiveLowerBodyTrialSettings();
+	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
+}
+
+TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
+{
 	// Deliberately does NOT touch mp.MediaPipeDriveSpine: the live stable-body profile keeps
 	// spine retargeting off so the Quest arm solve and upper body stay on their proven path
 	// (the 2026-06-12 worn-headset trial showed spine-on stiffens arms/head live). The head
 	// follows the live HMD through mp.MediaPipeDriveHmdHead instead.
-	Layer.Settings = {
+	return {
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdHead"), 1),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdLean"), 1),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeHmdLeanMaxDeg"), 55.0f),
@@ -693,7 +699,6 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 		// trade-off as the leg stabilizer.
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmReliabilityGate"), 0),
 	};
-	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
 }
 
 void ReassertLiveLowerBodyTrialIfArmed(const TCHAR* ProfileName)
