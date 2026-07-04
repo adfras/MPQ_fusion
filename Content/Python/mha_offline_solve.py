@@ -37,7 +37,9 @@ def _do_run(_delta):
         unreal.unregister_slate_post_tick_callback(_tick_handle)
         _tick_handle = None
 
-    existing_cd = "/Game/CaptureManager/Imports/mha_groundtruth_1/CD_mha_groundtruth_1"
+    # Reuse path derives from SLATE (the hardcoded take-1 path here silently re-solved
+    # take 1's video when take 2 ran - caught 2026-07-04 by the 62.83s length giveaway).
+    existing_cd = f"/Game/CaptureManager/Imports/{SLATE}_1/CD_{SLATE}_1"
     if unreal.EditorAssetLibrary.does_asset_exist(existing_cd):
         footage = unreal.load_asset(existing_cd)
         _log(f"reusing saved ingest -> {footage.get_path_name()}")
@@ -54,9 +56,12 @@ def _do_run(_delta):
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     perf_path = f"{PERF_DIR}/{PERF_NAME}"
     if unreal.EditorAssetLibrary.does_asset_exist(perf_path):
-        performance = unreal.load_asset(perf_path)
-        _log("performance asset exists, reusing")
-    else:
+        # NEVER reuse: a reused performance keeps its previous processing range - the
+        # 2026-07-04 take-2 rerun silently solved only the first 62.83s of a 210s video
+        # because the polluted asset retained take 1's range. Fresh asset every run.
+        unreal.EditorAssetLibrary.delete_asset(perf_path)
+        _log("stale performance asset deleted")
+    if True:
         performance = asset_tools.create_asset(
             asset_name=PERF_NAME,
             package_path=PERF_DIR,
