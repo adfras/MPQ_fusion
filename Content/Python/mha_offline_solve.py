@@ -15,11 +15,13 @@ request that triggers it closes before anything can pump the engine loop
 
 import unreal
 
-VIDEO = r"C:\Users\Alan\Videos\Camo Studio Recording 2026-07-03 21-28-41.mp4"
-SLATE = "mha_groundtruth"
-PERF_DIR = "/Game/MHAGroundTruth"
-PERF_NAME = "PF_MHA_GroundTruth_Take1"
-EXPORT_DIR = "/Game/MHAGroundTruth"
+# Module globals - override before run() for new takes:
+#   mod.VIDEO = r"C:\...\take.mp4"; mod.SLATE = "mha_groundtruth_take2"; mod.PERF_NAME = "PF_..._Take2"
+VIDEO = globals().get("VIDEO", r"C:\Users\Alan\Videos\Camo Studio Recording 2026-07-03 21-28-41.mp4")
+SLATE = globals().get("SLATE", "mha_groundtruth")
+PERF_DIR = globals().get("PERF_DIR", "/Game/MHAGroundTruth")
+PERF_NAME = globals().get("PERF_NAME", "PF_MHA_GroundTruth_Take1")
+EXPORT_DIR = globals().get("EXPORT_DIR", "/Game/MHAGroundTruth")
 
 _tick_handle = None
 _performance = None

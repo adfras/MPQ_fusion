@@ -38,6 +38,11 @@ def prepare() -> None:
         return
     # Clear session-scoped matrix overrides so the live pawn's own profile rules.
     unreal.SystemLibrary.execute_console_command(None, "mp.MetaHumanActiveProfile Kellan")
+    # Enable the webcam hand landmarker for the capture: it is normally a trial-layer
+    # feature, and capture sessions run the calibration policy instead - take 2
+    # (2026-07-04) recorded camera_hands 0% because nothing turned the sensor on. Must
+    # be set BEFORE VR Preview (the landmarker is read at webcam source spawn).
+    unreal.SystemLibrary.execute_console_command(None, "mp.AutoQuestWebcamHandLandmarker 1")
     unreal.SystemLibrary.execute_console_command(None, ARM_COMMAND)
     unreal.log("=" * 60)
     unreal.log("MHA GROUND-TRUTH SESSION READY")
@@ -45,6 +50,11 @@ def prepare() -> None:
     unreal.log(f"  armed: {ARM_COMMAND}")
     unreal.log("  YOU: Camo on -> raw video recording on -> VR Preview ->")
     unreal.log("       sync clap -> follow the seven green phase prompts")
+    unreal.log("")
+    unreal.log("  !! THE AVATAR WILL LOOK WRONG DURING THE CAPTURE - THIS IS")
+    unreal.log("  !! BY DESIGN (raw calibration policy, none of the tuned")
+    unreal.log("  !! corrections). Your live tracking is NOT broken. The")
+    unreal.log("  !! referee scores the recording afterwards; ignore the look.")
     unreal.log("=" * 60)
 
 
