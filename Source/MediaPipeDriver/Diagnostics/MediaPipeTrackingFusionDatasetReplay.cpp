@@ -935,11 +935,21 @@ void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThre
 		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.MediaPipeAuthority"), 0));
 		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.FullBodyMediaPipeAuthority"), 0));
 		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveSpine"), 0));
+		// WritePose=1 is the replay-evaluation output path; LIVE runs WritePose=0 with the anim
+		// node driving bones directly, and the arm solve gates live-only features (overhead
+		// rescue, camera hand ownership) on !WritePose. Parity must match live here or those
+		// paths stay dead in scoring replays.
+		ReplaceOrAdd(FMediaPipeCVarSetting::MakeInt(TEXT("mp.BodyFusion.WritePose"), 0));
 		UE_LOG(LogMediaPipePose, Warning,
 			TEXT("Replay policy: LIVE-PARITY mode active (mp.TrackingFusionDatasetReplayLiveParity=1). Not byte-stable; scoring use only."));
 	}
 
 	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
+}
+
+bool FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled()
+{
+	return CVarTrackingFusionDatasetReplayLiveParity.GetValueOnAnyThread() != 0;
 }
 
 void FMediaPipeTrackingFusionDatasetReplayRuntime::Start(const double NowSeconds)

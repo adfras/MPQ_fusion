@@ -197,7 +197,14 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		bMetaHumanFullArmChainRequested &&
 		FullArmChainResult.bFresh;
 	const bool bBodyFusionPoseWriteActive = ShouldUseBodyFusionPoseForEvaluation();
-	const bool bTrackingFusionReplayActive = FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive();
+	// Live-parity replays must run the live solver paths: the rescue/camera-hand/direct-chain
+	// gates below all treat "replay active" as "suppress live behavior", which is correct for
+	// the byte-stable evaluation policy but defeats the point of parity scoring (2026-07-04:
+	// the overhead rescue never fired in a parity replay because of this flag; the recorded
+	// Quest hands stayed "fresh" through the entire overhead window while synthesizing).
+	const bool bTrackingFusionReplayActive =
+		FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+		!FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled();
 	bool bMetaHumanFullArmChainDirectFresh =
 		bMetaHumanFullArmChainFresh &&
 		(!bBodyFusionPoseWriteActive || bTrackingFusionReplayActive);

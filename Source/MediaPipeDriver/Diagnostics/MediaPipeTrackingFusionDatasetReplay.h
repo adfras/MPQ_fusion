@@ -22,6 +22,12 @@ class MEDIAPIPEDRIVER_API FMediaPipeTrackingFusionDatasetReplayRuntime
 public:
 	static FMediaPipeTrackingFusionDatasetReplayRuntime& Get();
 
+	// True when mp.TrackingFusionDatasetReplayLiveParity is enabled: scoring replays run the
+	// live corrective stack, so live-only solver paths gated on "replay is active" (overhead
+	// arm rescue, camera hand ownership, direct arm-chain freshness) must treat the replay
+	// as a live session. See ApplyReplayPoseCVars_GameThread.
+	static bool IsLiveParityEnabled();
+
 	bool LoadFromPath(const FString& RawPath, FString& OutError);
 	bool LoadAndStartFromPath(const FString& RawPath, double NowSeconds, FString& OutError);
 	static void ApplyReplayPoseCVars_GameThread();
