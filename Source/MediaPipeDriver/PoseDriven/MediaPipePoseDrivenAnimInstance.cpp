@@ -428,6 +428,8 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 			BodyState.PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
 			BodyState.PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
 			BodyState.BodyYawCameraCorrectionDeg = 0.0f;
+			BodyState.bHasBodyYawCamAnchor = false;
+			BodyState.BodyYawCamAnchorDeg = 0.0f;
 		}
 		PoseStateResetReasonMask = 0;
 		BodyState.bHasReferenceHipHeight = false;

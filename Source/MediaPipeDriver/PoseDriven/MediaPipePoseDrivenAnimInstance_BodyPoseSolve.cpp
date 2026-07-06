@@ -1074,46 +1074,71 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 		HalfLifeToAlpha(SpineRotationHalfLifeSeconds, DeltaSeconds));
 	ApplyRotationCS(CSPose, Pelvis, BodyState.SmoothedPelvisRotCS);
 
-	// Camera yaw anchor error update (see the correction feed above). Runs AFTER the
-	// pelvis write so the posed upperarm positions (arms follow the pelvis chain with
-	// ref-pose locals at this point in the eval order) reflect this frame's applied yaw.
+	// Camera yaw anchor error update (REDESIGNED 2026-07-06 night). The first attempt read
+	// the converted landmark frame, which is HIP-YAW-NORMALIZED - absolute facing is removed
+	// by construction and the loop measured a constant 0 (trace-proven). The RAW MediaPipe
+	// world landmarks (PoseFrame.World: hip-origin camera-space meters, x image-right,
+	// y vertical, z depth) DO carry the wearer's facing relative to the fixed room camera:
+	// shoulder-line yaw in the camera's horizontal (x-z) plane. The camera-to-avatar frame
+	// offset is latched ONCE at live-neutral settle (both systems define their zero there);
+	// afterwards the closed loop erases accumulated yaw drift while Quest owns fast turns.
+	// Adaptation freezes when the shoulder line is too foreshortened to condition the yaw
+	// (profile views) or landmarks are unreliable.
 	if (CVarMediaPipeBodyYawFromCamera.GetValueOnAnyThread() != 0 &&
-		UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate() && DeltaSeconds > 0.0f)
+		bHasPoseFrame && DeltaSeconds > 0.0f)
 	{
-		FVector CamHipRightWorld = FVector::RightVector;
-		FVector CamShoulderRightWorld = FVector::RightVector;
-		FVector CamUpWorld = FVector::UpVector;
-		FVector CamForwardWorld = FVector::ForwardVector;
-		if (TryGetTorsoBasisWorld(CamHipRightWorld, CamShoulderRightWorld, CamUpWorld, CamForwardWorld))
+		const int32 LsIdx = (int32)EMediaPipePoseLandmark::LeftShoulder;
+		const int32 RsIdx = (int32)EMediaPipePoseLandmark::RightShoulder;
+		if (PoseFrame.World.IsValidIndex(LsIdx) && PoseFrame.World.IsValidIndex(RsIdx) &&
+			GetLandmarkReliability(LsIdx) >= 0.3f && GetLandmarkReliability(RsIdx) >= 0.3f)
 		{
-			const FVector AvatarShoulderLineComp =
-				CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation() -
-				CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation();
-			const FVector CamShoulderLineComp =
-				TargetCompTransform.InverseTransformVectorNoScale(CamShoulderRightWorld * -1.0f);
-			const float AvatarYawDeg = FMath::RadiansToDegrees(
-				FMath::Atan2(AvatarShoulderLineComp.Y, AvatarShoulderLineComp.X));
-			const float CamYawDeg = FMath::RadiansToDegrees(
-				FMath::Atan2(CamShoulderLineComp.Y, CamShoulderLineComp.X));
-			const float ErrDeg = FMath::FindDeltaAngleDegrees(AvatarYawDeg, CamYawDeg);
-			const float YawAlpha = HalfLifeToAlpha(
-				FMath::Max(CVarMediaPipeBodyYawFromCameraHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
-				DeltaSeconds);
-			const float MaxCorrDeg = FMath::Max(CVarMediaPipeBodyYawFromCameraMaxDeg.GetValueOnAnyThread(), 0.0f);
-			BodyState.BodyYawCameraCorrectionDeg = FMath::Clamp(
-				BodyState.BodyYawCameraCorrectionDeg + YawAlpha * ErrDeg,
-				-MaxCorrDeg, MaxCorrDeg);
-			// Diagnostic (round-4 leak hunt 2026-07-06): the referee sees +6-9deg fused-vs-Epic
-			// yaw error but the correction barely engages - log what this loop actually measures.
-			static double LastYawAnchorLogSeconds = 0.0;
-			const double NowSeconds = FPlatformTime::Seconds();
-			if (NowSeconds - LastYawAnchorLogSeconds > 1.0)
+			const FMediaPipePoseLandmark& Ls = PoseFrame.World.Points[LsIdx];
+			const FMediaPipePoseLandmark& Rs = PoseFrame.World.Points[RsIdx];
+			const float Dx = Ls.X - Rs.X;
+			const float Dz = Ls.Z - Rs.Z;
+			const float PlanarLenM = FMath::Sqrt(Dx * Dx + Dz * Dz);
+			// Below ~18cm of planar shoulder extent the yaw is ill-conditioned (turned away
+			// or heavy occlusion): hold the correction, do not adapt.
+			if (FMath::IsFinite(PlanarLenM) && PlanarLenM > 0.18f)
 			{
-				LastYawAnchorLogSeconds = NowSeconds;
-				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.BodyYawAnchor: cam=%.1f avatar=%.1f err=%.1f corr=%.1f twist=%.1f camLineComp=(%.2f,%.2f,%.2f)"),
-					CamYawDeg, AvatarYawDeg, ErrDeg, BodyState.BodyYawCameraCorrectionDeg,
-					TwistYawDeg, CamShoulderLineComp.X, CamShoulderLineComp.Y, CamShoulderLineComp.Z);
+				float CamYawDeg = FMath::RadiansToDegrees(FMath::Atan2(Dz, Dx));
+				const bool bMirrorYaw = CVarMediaPipeLivePoseMirror.GetValueOnAnyThread() != 0;
+				if (bMirrorYaw)
+				{
+					CamYawDeg = -CamYawDeg;
+				}
+				if (!BodyState.bHasBodyYawCamAnchor)
+				{
+					if (BodyState.bLiveNeutralsReady)
+					{
+						BodyState.BodyYawCamAnchorDeg =
+							FMath::FindDeltaAngleDegrees(TwistYawDeg, CamYawDeg);
+						BodyState.BodyYawCameraCorrectionDeg = 0.0f;
+						BodyState.bHasBodyYawCamAnchor = true;
+					}
+				}
+				else
+				{
+					const float ErrDeg = FMath::FindDeltaAngleDegrees(
+						TwistYawDeg, CamYawDeg - BodyState.BodyYawCamAnchorDeg);
+					const float YawAlpha = HalfLifeToAlpha(
+						FMath::Max(CVarMediaPipeBodyYawFromCameraHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
+						DeltaSeconds);
+					const float MaxCorrDeg = FMath::Max(CVarMediaPipeBodyYawFromCameraMaxDeg.GetValueOnAnyThread(), 0.0f);
+					BodyState.BodyYawCameraCorrectionDeg = FMath::Clamp(
+						BodyState.BodyYawCameraCorrectionDeg + YawAlpha * ErrDeg,
+						-MaxCorrDeg, MaxCorrDeg);
+					static double LastYawAnchorLogSeconds = 0.0;
+					const double NowSeconds = FPlatformTime::Seconds();
+					if (NowSeconds - LastYawAnchorLogSeconds > 1.0)
+					{
+						LastYawAnchorLogSeconds = NowSeconds;
+						UE_LOG(LogMediaPipePose, Log,
+							TEXT("mp.BodyYawAnchor: camRaw=%.1f anchor=%.1f err=%.1f corr=%.1f twist=%.1f planarM=%.2f mirror=%d"),
+							CamYawDeg, BodyState.BodyYawCamAnchorDeg, ErrDeg,
+							BodyState.BodyYawCameraCorrectionDeg, TwistYawDeg, PlanarLenM, bMirrorYaw ? 1 : 0);
+					}
+				}
 			}
 		}
 	}

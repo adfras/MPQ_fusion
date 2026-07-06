@@ -56,8 +56,12 @@ struct FMediaPipeBodySolverState
 	FVector2D PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
 	FVector2D PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
 	// Camera yaw anchor (mp.MediaPipeBodyYawFromCamera, 2026-07-06): low-passed closed-loop
-	// correction pulling the applied body yaw onto the camera's observed shoulder line.
+	// correction pulling the applied body yaw onto the RAW camera-space shoulder-line yaw
+	// (PoseFrame.World carries absolute facing; the converted frame is hip-yaw-normalized
+	// and blind). The camera-to-avatar frame offset latches once at live-neutral settle.
 	float BodyYawCameraCorrectionDeg = 0.0f;
+	bool bHasBodyYawCamAnchor = false;
+	float BodyYawCamAnchorDeg = 0.0f;
 	// Body yaw reference: the head-yaw neutral at session start. The slow neutral component of
 	// the HMD yaw is the wearer's body facing; its drift from this initial value turns the
 	// pelvis while the fast remainder stays head glance.
@@ -218,6 +222,8 @@ struct FMediaPipeBodySolverState
 		PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
 		PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
 		BodyYawCameraCorrectionDeg = 0.0f;
+		bHasBodyYawCamAnchor = false;
+		BodyYawCamAnchorDeg = 0.0f;
 		bHasInitialBodyYawNeutral = false;
 		InitialBodyYawNeutralDeg = 0.0f;
 		bBodyTrackingYawLatched = false;
