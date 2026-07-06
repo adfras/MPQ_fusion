@@ -49,6 +49,15 @@ struct FMediaPipeBodySolverState
 	MediaPipeBodySolverMath::FMediaPipeHipYawEstimatorState HipYawEstimator;
 	bool bHasHmdLeanNeutral = false;
 	FVector2D HmdLeanNeutralXY = FVector2D::ZeroVector;
+	// HMD pelvis anchor (mp.MediaPipePelvisHmdAnchor, 2026-07-06): planar pelvis<->HMD offset
+	// latched at live-neutral settle, plus the slow drift correction built against it. Erases
+	// sustained lateral camera drift (the torso-tilt source) while Quest SLAM stays the anchor.
+	bool bHasPelvisHmdAnchor = false;
+	FVector2D PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
+	FVector2D PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
+	// Camera yaw anchor (mp.MediaPipeBodyYawFromCamera, 2026-07-06): low-passed closed-loop
+	// correction pulling the applied body yaw onto the camera's observed shoulder line.
+	float BodyYawCameraCorrectionDeg = 0.0f;
 	// Body yaw reference: the head-yaw neutral at session start. The slow neutral component of
 	// the HMD yaw is the wearer's body facing; its drift from this initial value turns the
 	// pelvis while the fast remainder stays head glance.
@@ -67,6 +76,11 @@ struct FMediaPipeBodySolverState
 	float BodyTrackingHipsStableSeconds = 0.0f;
 	double LastBodyTrackingHipsSampleSeconds = 0.0;
 	float LastBodyTrackingYawDeg = 0.0f;
+	// Delta-accumulated yaw baseline (2026-07-04 full-turn fix): the previous raw hips
+	// heading, so per-sample deltas accumulate into LastBodyTrackingYawDeg and full turns
+	// keep counting past the +/-180 wrap instead of folding back.
+	float LastBodyTrackingHeadingDeg = 0.0f;
+	bool bHasLastBodyTrackingHeading = false;
 	// Slow drift recenter: when the measured yaw stays small for a sustained stretch the wearer
 	// is facing forward, so the neutral heading may creep toward the current heading to absorb
 	// IOBT tracking-space drift. Held twists (large yaw) never qualify.
@@ -200,6 +214,10 @@ struct FMediaPipeBodySolverState
 		HipYawEstimator.Reset();
 		bHasHmdLeanNeutral = false;
 		HmdLeanNeutralXY = FVector2D::ZeroVector;
+		bHasPelvisHmdAnchor = false;
+		PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
+		PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
+		BodyYawCameraCorrectionDeg = 0.0f;
 		bHasInitialBodyYawNeutral = false;
 		InitialBodyYawNeutralDeg = 0.0f;
 		bBodyTrackingYawLatched = false;
@@ -210,6 +228,8 @@ struct FMediaPipeBodySolverState
 		BodyTrackingHipsStableSeconds = 0.0f;
 		LastBodyTrackingHipsSampleSeconds = 0.0;
 		LastBodyTrackingYawDeg = 0.0f;
+		LastBodyTrackingHeadingDeg = 0.0f;
+		bHasLastBodyTrackingHeading = false;
 		BodyYawRecenterStillSeconds = 0.0f;
 		bHasBodyTrackingHipsNeutralPos = false;
 		BodyTrackingHipsNeutralPosWorld = FVector::ZeroVector;
@@ -501,6 +521,18 @@ struct FMediaPipeFootContactSideRuntimeState
 	bool bFootPlantLocked = false;
 	int32 FootPlantCandidateFrames = 0;
 	FVector LockedAnkleWorld = FVector::ZeroVector;
+
+	// Sliding-window floor buckets (mp.MediaPipeFootFloorWindowSeconds > 0): the legacy
+	// running-min floor is monotonically corrupted by a single downward depth-noise spike -
+	// after one bad sample the standing feet read "lifted" forever, grounded/plantLock never
+	// latch again, and the un-anchored feet snap and slide (MHA-referee forensics 2026-07-05,
+	// take 3: liftCm 3.6-6.4 with grounded=0 on both feet while the wearer stood still).
+	// Bucketed minima learn downward instantly but let outliers age out of the window.
+	static constexpr int32 FloorBucketCount = 8;
+	float FloorBucketMinZ[FloorBucketCount] = {};
+	double FloorBucketStartTimeSeconds = -1.0;
+	int32 FloorBucketIndex = 0;
+	bool bFloorBucketsInit = false;
 
 	void Reset()
 	{

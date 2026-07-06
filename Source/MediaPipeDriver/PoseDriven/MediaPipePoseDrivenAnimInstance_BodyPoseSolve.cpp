@@ -233,8 +233,29 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 				return true;
 			};
 
-			ConsiderFootFloor(bGotLeft, bGotLeftToe, LAnkleWorld, LToeWorld, LeftLegState.bHasObservedSourceFloor, LeftLegState.ObservedSourceFloorZ);
-			ConsiderFootFloor(bGotRight, bGotRightToe, RAnkleWorld, RToeWorld, RightLegState.bHasObservedSourceFloor, RightLegState.ObservedSourceFloorZ);
+			// Floor state must come from the SAME store the leg solve maintains: with the keyed
+			// foot-contact state active (live trial + parity), the node-state copies read here
+			// were never written - the pelvis stabilizer anchored to a stale/empty floor and the
+			// root wandered (take-3 clean baseline 2026-07-05: fore-aft pelvis wander 5.1cm vs
+			// the referee's 1.8; lateral had already recovered via the windowed floor).
+			const bool bBodyUseKeyedFootFloor =
+				CVarMediaPipeFootContactKeyedState.GetValueOnAnyThread() != 0 && RuntimeStateKey != 0;
+			FMediaPipeFootContactRuntimeState& BodyFootContactState =
+				GetFootContactRuntimeState(RuntimeStateKey);
+			const bool bLeftFloorKnown = bBodyUseKeyedFootFloor
+				? BodyFootContactState.Left.bHasObservedSourceFloor
+				: LeftLegState.bHasObservedSourceFloor;
+			const float LeftFloorZ = bBodyUseKeyedFootFloor
+				? BodyFootContactState.Left.ObservedSourceFloorZ
+				: LeftLegState.ObservedSourceFloorZ;
+			const bool bRightFloorKnown = bBodyUseKeyedFootFloor
+				? BodyFootContactState.Right.bHasObservedSourceFloor
+				: RightLegState.bHasObservedSourceFloor;
+			const float RightFloorZ = bBodyUseKeyedFootFloor
+				? BodyFootContactState.Right.ObservedSourceFloorZ
+				: RightLegState.ObservedSourceFloorZ;
+			ConsiderFootFloor(bGotLeft, bGotLeftToe, LAnkleWorld, LToeWorld, bLeftFloorKnown, LeftFloorZ);
+			ConsiderFootFloor(bGotRight, bGotRightToe, RAnkleWorld, RToeWorld, bRightFloorKnown, RightFloorZ);
 			if (bHasStableFootFloor)
 			{
 				const float CurrentHipHeightCm = HipWorld.Z - StableFootFloorZ;
@@ -321,7 +342,8 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 				const bool bLiveSwayEligible =
 					BodyState.bLiveNeutralGateArmed &&
 					BodyState.bLiveNeutralsReady &&
-					!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+					(!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+						FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled()) &&
 					!ShouldUseBodyFusionPoseForEvaluation() &&
 					BodyState.ReferenceRigHipHeightCm > KINDA_SMALL_NUMBER &&
 					PelvisPlanarMaxOffsetRatio > KINDA_SMALL_NUMBER;
@@ -332,7 +354,8 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 						? NowSeconds - FullArmChain.TimestampSeconds
 						: -1.0;
 					const bool bHipsPosFresh =
-						FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking &&
+						(FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking ||
+							FullArmChain.Source == EMediaPipeFullArmChainSource::TrackingFusionReplay) &&
 						FullArmChain.bActive != 0 &&
 						FullArmChain.Hips.bPositionValid != 0 &&
 						ChainAgeSeconds >= 0.0 &&
@@ -411,8 +434,10 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 
 					FVector LSupportWorld = FVector::ZeroVector;
 					FVector RSupportWorld = FVector::ZeroVector;
-					const bool bGotLeftSupport = TryGetSupportPointWorld(bGotLeft, bGotLeftHeel, bGotLeftToe, LAnkleWorld, LHeelWorld, LToeWorld, LeftLegState.bHasObservedSourceFloor, LeftLegState.ObservedSourceFloorZ, LSupportWorld);
-					const bool bGotRightSupport = TryGetSupportPointWorld(bGotRight, bGotRightHeel, bGotRightToe, RAnkleWorld, RHeelWorld, RToeWorld, RightLegState.bHasObservedSourceFloor, RightLegState.ObservedSourceFloorZ, RSupportWorld);
+					// Same keyed-floor routing as above: node-state floor is stale when the keyed
+					// store is active (the pelvis-wander source, 2026-07-05).
+					const bool bGotLeftSupport = TryGetSupportPointWorld(bGotLeft, bGotLeftHeel, bGotLeftToe, LAnkleWorld, LHeelWorld, LToeWorld, bLeftFloorKnown, LeftFloorZ, LSupportWorld);
+					const bool bGotRightSupport = TryGetSupportPointWorld(bGotRight, bGotRightHeel, bGotRightToe, RAnkleWorld, RHeelWorld, RToeWorld, bRightFloorKnown, RightFloorZ, RSupportWorld);
 
 					if (bHasTorsoBasis && (bGotLeftSupport || bGotRightSupport))
 					{
@@ -464,6 +489,58 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 							PlanarOffsetInput.CompForward = CompForward;
 							TargetPelvisOffset += ComputePelvisPlanarOffset(PlanarOffsetInput) * PlanarWeight;
 						}
+					}
+				}
+
+				// HMD pelvis anchor (2026-07-06): the camera's planar hip estimate drifts
+				// (take-4 referee: +5cm lateral at settle growing to +7cm over 200s vs the
+				// Epic solve's 0.8cm), and the closed-loop HMD lean then tilts the torso to
+				// keep the head under the drift-free HMD - the wearer sees a leaning avatar.
+				// Quest SLAM owns the low-frequency planar anchor: latch the pelvis<->HMD
+				// planar offset once at live-neutral settle, then slow-correct the pelvis
+				// target toward (HMD + offset). High-frequency camera motion passes through;
+				// adaptation freezes while the wearer is not upright so genuine bends are
+				// never corrected away.
+				if (CVarMediaPipePelvisHmdAnchor.GetValueOnAnyThread() != 0 && bHasCachedQuestHmdPose)
+				{
+					const FVector PelvisWorldRaw =
+						TargetCompTransform.TransformPosition(RefPelvisTranslationComp + TargetPelvisOffset);
+					const FVector2D PelvisXY(PelvisWorldRaw.X, PelvisWorldRaw.Y);
+					const FVector2D HmdXY(CachedQuestHmdWorld.X, CachedQuestHmdWorld.Y);
+					const float UprightMaxCm =
+						FMath::Max(CVarMediaPipePelvisHmdAnchorUprightMaxCm.GetValueOnAnyThread(), 1.0f);
+					const bool bUpright = (HmdXY - PelvisXY).Size() < UprightMaxCm;
+					if (!BodyState.bHasPelvisHmdAnchor)
+					{
+						if (BodyState.bLiveNeutralsReady && bUpright)
+						{
+							BodyState.PelvisHmdAnchorOffsetXY = PelvisXY - HmdXY;
+							BodyState.PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
+							BodyState.bHasPelvisHmdAnchor = true;
+						}
+					}
+					else
+					{
+						if (bUpright && DeltaSeconds > 0.0f)
+						{
+							const FVector2D DriftErrXY =
+								(HmdXY + BodyState.PelvisHmdAnchorOffsetXY) - PelvisXY;
+							const float AnchorAlpha = HalfLifeToAlpha(
+								FMath::Max(CVarMediaPipePelvisHmdAnchorHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
+								DeltaSeconds);
+							BodyState.PelvisHmdAnchorCorrectionXY =
+								FMath::Lerp(BodyState.PelvisHmdAnchorCorrectionXY, DriftErrXY, AnchorAlpha);
+							const float MaxCorrectionCm =
+								FMath::Max(CVarMediaPipePelvisHmdAnchorMaxCm.GetValueOnAnyThread(), 0.0f);
+							const float CorrectionSize = BodyState.PelvisHmdAnchorCorrectionXY.Size();
+							if (CorrectionSize > MaxCorrectionCm && CorrectionSize > KINDA_SMALL_NUMBER)
+							{
+								BodyState.PelvisHmdAnchorCorrectionXY *= MaxCorrectionCm / CorrectionSize;
+							}
+						}
+						const FVector CorrectionComp = TargetCompTransform.InverseTransformVectorNoScale(
+							FVector(BodyState.PelvisHmdAnchorCorrectionXY, 0.0f));
+						TargetPelvisOffset += CorrectionComp - FVector::DotProduct(CorrectionComp, CompUp) * CompUp;
 					}
 				}
 
@@ -575,10 +652,16 @@ void FAnimNode_MediaPipePoseDriven::UpdateLiveNeutralGate(float DeltaSeconds)
 	{
 		return;
 	}
-	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() ||
+	if ((FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive() &&
+			!FMediaPipeTrackingFusionDatasetReplayRuntime::IsLiveParityEnabled()) ||
 		ShouldUseBodyFusionPoseForEvaluation())
 	{
-		// Replay and fused-pose evaluation carry verified observations from frame one.
+		// Byte-stable replay evaluation and fused-pose evaluation carry verified observations
+		// from frame one. LIVE-PARITY replays fall through to the real donning gate instead:
+		// frame-one latching anchored "forward" to the recording's unsettled first pose and
+		// left the whole avatar rotated +36 deg vs the offline referee for the entire take
+		// (take-3 forensics 2026-07-05). The recording carries the same HMD signals the gate
+		// needs, so parity settles and re-zeros exactly like the live session it mirrors.
 		BodyState.bLiveNeutralsReady = true;
 		return;
 	}
@@ -689,8 +772,11 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 		const double FullArmChainAgeSeconds = FullArmChain.TimestampSeconds >= 0.0
 			? NowSeconds - FullArmChain.TimestampSeconds
 			: -1.0;
+		// TrackingFusionReplay carries the RECORDED OpenXR hips (schema v3), so replayed
+		// takes exercise the same yaw path the live wearer gets.
 		const bool bBodyTrackingHipsFresh =
-			FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking &&
+			(FullArmChain.Source == EMediaPipeFullArmChainSource::OpenXRBodyTracking ||
+				FullArmChain.Source == EMediaPipeFullArmChainSource::TrackingFusionReplay) &&
 			FullArmChain.bActive != 0 &&
 			FullArmChain.Hips.bOrientationValid != 0 &&
 			FullArmChainAgeSeconds >= 0.0 &&
@@ -705,6 +791,9 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 				// neutral has to be re-latched (relative to the applied yaw, so no step).
 				BodyState.bBodyTrackingYawLatched = false;
 				BodyState.bHasBodyTrackingCandidate = false;
+				// Accumulation baseline must re-seed after the gap or the first post-gap
+				// sample would register the whole gap as one giant yaw step.
+				BodyState.bHasLastBodyTrackingHeading = false;
 			}
 			BodyState.LastBodyTrackingHipsSampleSeconds = NowSeconds;
 
@@ -736,6 +825,11 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 								HeadingDeg -
 								(BodyState.bHasSmoothedBodyYaw ? BodyState.SmoothedBodyYawDeg : 0.0f));
 							BodyState.bBodyTrackingYawLatched = true;
+							// Seed the accumulated yaw at the currently applied value so the
+							// handover from the HMD-fallback source (or a re-latch) never steps.
+							BodyState.LastBodyTrackingYawDeg =
+								BodyState.bHasSmoothedBodyYaw ? BodyState.SmoothedBodyYawDeg : 0.0f;
+							BodyState.bHasLastBodyTrackingHeading = false;
 						}
 					}
 				}
@@ -746,22 +840,40 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 				if (MediaPipeBodySolverMath::TryGetAxisHeadingDeg(
 						HipsRotWorld, BodyState.BodyTrackingHipsAxisIndex, HeadingDeg))
 				{
+					// Delta accumulation (2026-07-04 full-turn fix): the historical form
+					// clamped the ABSOLUTE offset from neutral to +/-100 and wrapped at
+					// +/-180, so a full turn could never be represented - MHA take 2 showed
+					// Epic's solve following complete turns while the avatar stopped at the
+					// clamp (hip-yaw RMSE 17-27 deg in the turn windows). Accumulating
+					// per-sample deltas keeps counting through the wrap; the range CVar
+					// (default 100 = historical envelope) bounds the result, and the live
+					// trial layer raises it for multi-turn freedom.
+					const float BodyYawMaxDeg =
+						FMath::Max(CVarMediaPipeBodyYawMaxDeg.GetValueOnAnyThread(), 10.0f);
+					if (!BodyState.bHasLastBodyTrackingHeading)
+					{
+						BodyState.LastBodyTrackingHeadingDeg = HeadingDeg;
+						BodyState.bHasLastBodyTrackingHeading = true;
+					}
+					const float StepDeg = FMath::FindDeltaAngleDegrees(
+						BodyState.LastBodyTrackingHeadingDeg, HeadingDeg);
+					BodyState.LastBodyTrackingHeadingDeg = HeadingDeg;
 					BodyState.LastBodyTrackingYawDeg = FMath::Clamp(
-						FRotator::NormalizeAxis(HeadingDeg - BodyState.BodyTrackingHipsNeutralHeadingDeg),
-						-100.0f, 100.0f);
+						BodyState.LastBodyTrackingYawDeg + StepDeg,
+						-BodyYawMaxDeg, BodyYawMaxDeg);
 
-					// Slow drift recenter: sustained near-zero yaw means the wearer is facing
-					// forward, so the neutral heading may creep toward the current heading to
-					// absorb IOBT tracking-space drift (max 0.5 deg/s - imperceptible). Held
-					// twists never qualify: yaw past the stillness band resets the clock.
+					// Slow drift recenter (same intent as before): sustained near-zero yaw
+					// means the wearer is facing forward, so the accumulated yaw drains
+					// toward zero (max 0.5 deg/s - imperceptible) to absorb IOBT
+					// tracking-space drift. Held twists never qualify.
 					if (FMath::Abs(BodyState.LastBodyTrackingYawDeg) < 10.0f)
 					{
 						BodyState.BodyYawRecenterStillSeconds += DeltaSeconds;
 						if (BodyState.BodyYawRecenterStillSeconds > 5.0f)
 						{
-							BodyState.BodyTrackingHipsNeutralHeadingDeg = MediaPipeBodySolverMath::ApproachAngleDeg(
-								BodyState.BodyTrackingHipsNeutralHeadingDeg,
-								HeadingDeg,
+							BodyState.LastBodyTrackingYawDeg = MediaPipeBodySolverMath::ApproachAngleDeg(
+								BodyState.LastBodyTrackingYawDeg,
+								0.0f,
 								DeltaSeconds,
 								20.0f,
 								0.5f);
@@ -838,6 +950,18 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 			}
 			TargetYawDeg += HipResidualDeg;
 		}
+	}
+
+	// Camera yaw anchor (2026-07-06): the Quest-derived body yaw carries a constant bias
+	// plus slow drift (take-4 round-3 measured +6deg at start growing to +10deg vs the
+	// Epic solve - the user sees the chest progressively "turning away"). The camera's
+	// shoulder line observes the true torso heading every frame; a low-passed closed-loop
+	// correction (updated after the pelvis write below) erases bias and drift while Quest
+	// keeps owning fast turns - same complementary architecture as the arm-direction and
+	// pelvis-anchor corrections.
+	if (CVarMediaPipeBodyYawFromCamera.GetValueOnAnyThread() != 0)
+	{
+		TargetYawDeg += BodyState.BodyYawCameraCorrectionDeg;
 	}
 
 	// Every yaw source feeds ONE rate-limited state, so source switches and tracking dropouts
@@ -949,6 +1073,50 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 		TargetPelvisRotCS,
 		HalfLifeToAlpha(SpineRotationHalfLifeSeconds, DeltaSeconds));
 	ApplyRotationCS(CSPose, Pelvis, BodyState.SmoothedPelvisRotCS);
+
+	// Camera yaw anchor error update (see the correction feed above). Runs AFTER the
+	// pelvis write so the posed upperarm positions (arms follow the pelvis chain with
+	// ref-pose locals at this point in the eval order) reflect this frame's applied yaw.
+	if (CVarMediaPipeBodyYawFromCamera.GetValueOnAnyThread() != 0 &&
+		UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate() && DeltaSeconds > 0.0f)
+	{
+		FVector CamHipRightWorld = FVector::RightVector;
+		FVector CamShoulderRightWorld = FVector::RightVector;
+		FVector CamUpWorld = FVector::UpVector;
+		FVector CamForwardWorld = FVector::ForwardVector;
+		if (TryGetTorsoBasisWorld(CamHipRightWorld, CamShoulderRightWorld, CamUpWorld, CamForwardWorld))
+		{
+			const FVector AvatarShoulderLineComp =
+				CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation() -
+				CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation();
+			const FVector CamShoulderLineComp =
+				TargetCompTransform.InverseTransformVectorNoScale(CamShoulderRightWorld * -1.0f);
+			const float AvatarYawDeg = FMath::RadiansToDegrees(
+				FMath::Atan2(AvatarShoulderLineComp.Y, AvatarShoulderLineComp.X));
+			const float CamYawDeg = FMath::RadiansToDegrees(
+				FMath::Atan2(CamShoulderLineComp.Y, CamShoulderLineComp.X));
+			const float ErrDeg = FMath::FindDeltaAngleDegrees(AvatarYawDeg, CamYawDeg);
+			const float YawAlpha = HalfLifeToAlpha(
+				FMath::Max(CVarMediaPipeBodyYawFromCameraHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
+				DeltaSeconds);
+			const float MaxCorrDeg = FMath::Max(CVarMediaPipeBodyYawFromCameraMaxDeg.GetValueOnAnyThread(), 0.0f);
+			BodyState.BodyYawCameraCorrectionDeg = FMath::Clamp(
+				BodyState.BodyYawCameraCorrectionDeg + YawAlpha * ErrDeg,
+				-MaxCorrDeg, MaxCorrDeg);
+			// Diagnostic (round-4 leak hunt 2026-07-06): the referee sees +6-9deg fused-vs-Epic
+			// yaw error but the correction barely engages - log what this loop actually measures.
+			static double LastYawAnchorLogSeconds = 0.0;
+			const double NowSeconds = FPlatformTime::Seconds();
+			if (NowSeconds - LastYawAnchorLogSeconds > 1.0)
+			{
+				LastYawAnchorLogSeconds = NowSeconds;
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.BodyYawAnchor: cam=%.1f avatar=%.1f err=%.1f corr=%.1f twist=%.1f camLineComp=(%.2f,%.2f,%.2f)"),
+					CamYawDeg, AvatarYawDeg, ErrDeg, BodyState.BodyYawCameraCorrectionDeg,
+					TwistYawDeg, CamShoulderLineComp.X, CamShoulderLineComp.Y, CamShoulderLineComp.Z);
+			}
+		}
+	}
 }
 
 void FAnimNode_MediaPipePoseDriven::DriveHmdHeadCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)

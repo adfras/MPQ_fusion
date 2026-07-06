@@ -1308,6 +1308,71 @@ namespace MediaPipeRuntimeCVars
 		10.0f,
 		TEXT("Maximum thigh adduction (degrees past vertical toward the midline) allowed by mp.MediaPipeLegAdductionClamp."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeArmTorsoGuardCm(
+		TEXT("mp.MediaPipeArmTorsoGuardCm"),
+		0.0f,
+		TEXT("Minimum horizontal distance (cm) the driven elbow/wrist targets may approach the torso axis. The stack had no non-penetration constraint: take-3 referee forensics 2026-07-05 measured the fused right wrist 2.0cm from the spine axis (inside the body) while the offline reference never dipped below 14.8cm. 0 disables (byte-stable default); the live trial layer sets a torso radius."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeArmDirectionFromCamera(
+		TEXT("mp.MediaPipeArmDirectionFromCamera"),
+		0.0f,
+		TEXT("Weight (0-1) for transplanting the camera's arm DIRECTIONS (shoulder->elbow and shoulder->wrist unit vectors) onto the Quest chain's segment lengths while the chain drives the arm. The chain synthesizes hanging arms too wide: elbow/wrist 22-24cm horizontal of the shoulder vs the camera's 7-10cm; the fused avatar hung its upper arms at 34-45 deg from vertical vs the offline referee's 15-21 (take-3 MHA referee 2026-07-05, the user's most-repeated visual report). Directions are shoulder-relative per source so frame translation bias cancels. Reliability-gated with a continuously eased blend; supersedes mp.MediaPipeArmElbowSwivelFromCamera (auto-disabled while this is active). 0 preserves historical behavior (byte-stable default); the live trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeArmElbowSwivelFromCamera(
+		TEXT("mp.MediaPipeArmElbowSwivelFromCamera"),
+		0.0f,
+		TEXT("Weight (0-1) for correcting the Quest arm chain's elbow SWIVEL (azimuth about the shoulder->wrist chord) toward the camera's measured elbow direction while the chain drives the arm. The Quest chain synthesizes elbows flared outward: measured 14.0cm off the shoulder-wrist chord at quiet standing vs the camera's 5.3cm and the offline reference's 8.3cm (take-3 MHA referee, 2026-07-05). Wrist and shoulder stay Quest-owned; only the elbow's swing direction adopts the camera's reading, reliability-gated and smoothed. 0 preserves historical behavior (byte-stable default); the live trial layer enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeFootFloorWindowSeconds(
+		TEXT("mp.MediaPipeFootFloorWindowSeconds"),
+		0.0f,
+		TEXT("When > 0, the per-foot observed source floor is the minimum over this many recent seconds (bucketed) instead of the all-time running minimum. The running min is monotonically corrupted by a single downward depth-noise spike: after one bad sample the standing feet read 'lifted' forever, grounded/plant never latch again, and the un-anchored feet snap and slide (MHA-referee take-3 forensics 2026-07-05: liftCm 3.6-6.4 with grounded=0 on both feet during quiet standing). A windowed floor learns downward instantly and lets outliers age out. 0 preserves the historical running-min (byte-stable default); the live trial layer sets a window. Requires the keyed foot-contact state."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipePelvisHmdAnchor(
+		TEXT("mp.MediaPipePelvisHmdAnchor"),
+		0,
+		TEXT("When non-zero, the planar (XY) pelvis translation is slow-corrected toward the drift-free Quest HMD anchor: the pelvis<->HMD planar offset is latched once at live-neutral settle, then a low-passed correction erases sustained camera drift while high-frequency camera motion (sways, steps, squats) passes through. Take-4 referee forensics 2026-07-06: the camera pelvis drifted laterally (+5cm growing to +7cm over 200s vs the Epic solve's 0.8cm) and the closed-loop HMD lean tilted the torso to keep the head under the stationary HMD - the user saw a leaning avatar. Adaptation freezes while the wearer is not upright, so genuine bends are not corrected away. 0 preserves historical behavior (byte-stable default); the candidate settings variant enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipePelvisHmdAnchorHalfLifeSeconds(
+		TEXT("mp.MediaPipePelvisHmdAnchorHalfLifeSeconds"),
+		6.0f,
+		TEXT("Half-life (seconds) of the mp.MediaPipePelvisHmdAnchor drift-correction low-pass. Long enough that stepping and swaying pass through untouched; short enough to erase multi-second camera drift."));
+
+	TAutoConsoleVariable<float> CVarMediaPipePelvisHmdAnchorMaxCm(
+		TEXT("mp.MediaPipePelvisHmdAnchorMaxCm"),
+		25.0f,
+		TEXT("Magnitude clamp (cm) on the mp.MediaPipePelvisHmdAnchor planar correction; bounds the damage if the anchor latches during a bad neutral."));
+
+	TAutoConsoleVariable<float> CVarMediaPipePelvisHmdAnchorUprightMaxCm(
+		TEXT("mp.MediaPipePelvisHmdAnchorUprightMaxCm"),
+		35.0f,
+		TEXT("Planar HMD-to-pelvis distance (cm) below which the wearer counts as upright for mp.MediaPipePelvisHmdAnchor adaptation. Bends/leans beyond this hold the last correction instead of learning the pose as drift."));
+
+	TAutoConsoleVariable<float> CVarQuestWristPalmTrimLeftDeg(
+		TEXT("mp.QuestWristPalmTrimLeftDeg"),
+		0.0f,
+		TEXT("Constant corrective twist (degrees, about the forearm axis) applied to the LEFT hand's final Quest-driven rotation. Compensates the constant palm retarget bias observed against the Epic offline solve (take-3/4 referee: fused palms read ~25deg rotated; user-visible as the wrist angling outward on forward points). 0 disables (byte-stable default); fitted per avatar from rotation captures."));
+
+	TAutoConsoleVariable<float> CVarQuestWristPalmTrimRightDeg(
+		TEXT("mp.QuestWristPalmTrimRightDeg"),
+		0.0f,
+		TEXT("Constant corrective twist (degrees, about the forearm axis) applied to the RIGHT hand's final Quest-driven rotation. See mp.QuestWristPalmTrimLeftDeg."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeBodyYawFromCamera(
+		TEXT("mp.MediaPipeBodyYawFromCamera"),
+		0,
+		TEXT("When non-zero, a low-passed closed-loop correction pulls the applied body yaw onto the camera's observed shoulder line. The Quest-derived yaw carries a constant bias plus slow drift (take-4 round-3 referee 2026-07-06: +6deg at start growing to +10deg vs the Epic solve - the wearer sees the chest progressively turning away); the camera observes the true torso heading every frame. Quest keeps owning fast turns; the correction only erases sustained error - same complementary architecture as the arm-direction and pelvis-anchor corrections. 0 preserves historical behavior (byte-stable default); the candidate settings variant enables it."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeBodyYawFromCameraHalfLifeSeconds(
+		TEXT("mp.MediaPipeBodyYawFromCameraHalfLifeSeconds"),
+		8.0f,
+		TEXT("Half-life (seconds) of the mp.MediaPipeBodyYawFromCamera correction low-pass. Long enough that deliberate quick turns stay Quest-owned; short enough to erase multi-second heading drift."));
+
+	TAutoConsoleVariable<float> CVarMediaPipeBodyYawFromCameraMaxDeg(
+		TEXT("mp.MediaPipeBodyYawFromCameraMaxDeg"),
+		25.0f,
+		TEXT("Magnitude clamp (degrees) on the mp.MediaPipeBodyYawFromCamera correction; bounds the damage if the camera torso basis misreads (heavy occlusion, profile views)."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeKneeMedialBowClamp(
 		TEXT("mp.MediaPipeKneeMedialBowClamp"),
 		0,
@@ -1338,10 +1403,20 @@ namespace MediaPipeRuntimeCVars
 		30.0f,
 		TEXT("Vertical divergence (MediaPipe wrist ABOVE the Quest chain's wrist, cm) that fires the overhead arm rescue even while the Quest still claims the hand is tracked. Measured 2026-07-02: overhead hands sag on the Quest side with questTracked=1 throughout - the tracked flag cannot be trusted; the divergence measures the error directly."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeBodyYawMaxDeg(
+		TEXT("mp.MediaPipeBodyYawMaxDeg"),
+		100.0f,
+		TEXT("Body-tracking yaw range (deg) the pelvis may follow from the Quest hips heading. The historical +/-100 clamp made FULL TURNS impossible: the wearer turns around, the avatar stops at 100 deg (MHA-referee take 2, 2026-07-04: hip-yaw RMSE 17-27 deg in turn windows; Epic follows the full turn). The live trial layer raises this to 720 with delta-accumulated yaw so multi-turn continuity works past the +/-180 wrap. 100 preserves the verified historical behavior."));
+
 	TAutoConsoleVariable<float> CVarMediaPipeArmOverheadRescueChainAboveVetoCm(
 		TEXT("mp.MediaPipeArmOverheadRescueChainAboveVetoCm"),
 		0.0f,
 		TEXT("When > 0: veto overhead-rescue latch ENTRY on the hand-untracked clause while the Quest arm chain is still FRESH and its wrist sits at least this many cm ABOVE the MediaPipe wrist. MHA-referee forensics 2026-07-04 (Take 1, early-take windows): the hand flag dropped while the fresh chain was 34-57 cm above the camera wrist, the rescue trusted the camera, and the camera was the wrong one (left wrist 25->52 cm vs the offline solve). Does not touch the divergence trigger (camera ABOVE chain) or the fully-gone path (requires a stale chain). 0 disables (byte-stable default); the live trial layer sets it. AWAITING WORN-HEADSET VERDICT."));
+
+	TAutoConsoleVariable<int32> CVarMediaPipeArmRescueShoulderRelDivergence(
+		TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"),
+		0,
+		TEXT("When non-zero and the Quest arm chain is FRESH, the rescue's divergence trigger compares SHOULDER-RELATIVE wrist heights (each wrist minus its own source's shoulder) instead of absolute Z. The absolute compare spans two coordinate frames whose origins do not agree - measured 2026-07-04 take-2 parity: a constant ~-90 cm camera-below-chain bias while the sources visibly agreed, so the camera-above-chain trigger could NEVER fire and a 6 s chain dropout (chain held the raised left arm 45 cm down, camera reliability 0.9) went unrescued. Shoulder-relative differencing cancels any translation bias. A shoulder-relative divergence trigger also bypasses the wrist-above-shoulder overhead gate: the measured dropout happened at shoulder height, not overhead. 0 preserves the verified historical behavior (byte-stable default); the live trial layer enables it. AWAITING WORN-HEADSET VERDICT."));
 
 	TAutoConsoleVariable<int32> CVarMediaPipeLegScaffoldAsymmetricFlexion(
 		TEXT("mp.MediaPipeLegScaffoldAsymmetricFlexion"),

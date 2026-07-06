@@ -214,6 +214,21 @@ namespace
 		OutSnapshot.Reset();
 		const bool bHasLeft = PopulateReplayFullArmChainSide(SourceArmChain.Left, NowSeconds, OutSnapshot.Left);
 		const bool bHasRight = PopulateReplayFullArmChainSide(SourceArmChain.Right, NowSeconds, OutSnapshot.Right);
+		// Schema v3: recorded hips pose rides the same snapshot so the body-yaw and sway
+		// paths see replayed hips exactly as they see live OpenXR hips.
+		const bool bHasHips = SourceArmChain.bHasHips;
+		if (bHasHips)
+		{
+			OutSnapshot.Hips.WorldTransform = FTransform(
+				SourceArmChain.HipsRotationWorld, SourceArmChain.HipsLocationWorld);
+			OutSnapshot.Hips.bValid = 1;
+			OutSnapshot.Hips.bPositionValid = 1;
+			OutSnapshot.Hips.bOrientationValid = SourceArmChain.bHipsOrientationValid;
+		}
+		// Hips ride along ONLY when at least one arm chain is present: a hips-only snapshot
+		// reports "active" to arm consumers that then drive arms from zeroed side data -
+		// dismembered floating arms, user-observed 2026-07-05 within an hour of the change.
+		// On chain-less frames the yaw path simply holds its last value, which is correct.
 		if (!bHasLeft && !bHasRight)
 		{
 			return false;
@@ -407,6 +422,23 @@ namespace
 	{
 		const uint32 Key = IsValid(KeyObject) ? KeyObject->GetUniqueID() : 0u;
 		ResetDerivedSignalRuntimeState(Key);
+	}
+
+	// Palm retarget trim (2026-07-06): constant per-side twist about the forearm axis on
+	// the FINAL hand rotation, whichever path produced it (Quest-tracked, held-rotation,
+	// camera hand). The retarget carries a constant palm-roll bias vs the Epic offline
+	// solve (fitted L +12.5 / R -6.3 deg on take 4); trimming only one apply site landed
+	// ~1/3 of the value, so every hand-rotation write goes through this helper. 0 = off.
+	FQuat ApplyQuestWristPalmTrim(const FQuat& HandRotCS, const FVector& ForearmAxisComp, const bool bIsLeft)
+	{
+		const float PalmTrimDeg = bIsLeft
+			? CVarQuestWristPalmTrimLeftDeg.GetValueOnAnyThread()
+			: CVarQuestWristPalmTrimRightDeg.GetValueOnAnyThread();
+		if (FMath::IsNearlyZero(PalmTrimDeg) || ForearmAxisComp.IsNearlyZero())
+		{
+			return HandRotCS;
+		}
+		return (FQuat(ForearmAxisComp.GetSafeNormal(), FMath::DegreesToRadians(PalmTrimDeg)) * HandRotCS).GetNormalized();
 	}
 
 	constexpr int32 HandLm_Wrist = 0;

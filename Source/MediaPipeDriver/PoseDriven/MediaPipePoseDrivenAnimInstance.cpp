@@ -411,6 +411,24 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 				PoseStateResetCount,
 				PoseStateResetReasonMask);
 		}
+		// Timestamp rewinds (replay seeks and loop wraps) invalidate every live neutral: the
+		// heading, lean, and sway baselines were zeroed against a moment that no longer
+		// precedes the stream. Re-close the settle gate so the neutrals re-zero at the next
+		// stillness, exactly like a fresh donning. Without this, each seek compounds baseline
+		// corruption that the wearer sees as whole-body tilt or a rotated stance (measured
+		// live 2026-07-05: compounded seeks showed as a 90-deg facing error and body tilt
+		// while single-seek captures measured only +15 deg).
+		if ((PoseStateResetReasonMask & 0x4) != 0)
+		{
+			BodyState.bLiveNeutralsReady = false;
+			BodyState.LiveNeutralSettleSeconds = 0.0f;
+			// The pelvis<->HMD planar anchor was latched against the invalidated neutral;
+			// re-latch it at the next settle or the correction chases a stale offset.
+			BodyState.bHasPelvisHmdAnchor = false;
+			BodyState.PelvisHmdAnchorOffsetXY = FVector2D::ZeroVector;
+			BodyState.PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
+			BodyState.BodyYawCameraCorrectionDeg = 0.0f;
+		}
 		PoseStateResetReasonMask = 0;
 		BodyState.bHasReferenceHipHeight = false;
 		BodyState.ReferenceHipHeightCm = 0.0f;

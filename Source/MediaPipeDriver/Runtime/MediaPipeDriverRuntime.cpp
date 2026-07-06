@@ -119,10 +119,20 @@ TAutoConsoleVariable<int32> CVarAutoQuestWebcamHandLandmarker(
 	0,
 	TEXT("When non-zero, the live webcam MediaPipe source also runs the 21-landmark hand landmarker so the camera can supply hand pose while a Quest hand is untracked (overhead, the Quest hand freezes and snaps on reacquire; observed 2026-07-03). Read when the webcam source spawns - set it before PIE (the live lower-body trial layer enables it). Default off keeps the baseline webcam load and replay evaluation unchanged."));
 
+TAutoConsoleVariable<FString> CVarAutoQuestWebcamPoseModel(
+	TEXT("mp.AutoQuestWebcamPoseModel"),
+	TEXT(""),
+	TEXT("Pose landmarker model tier for the live webcam MediaPipe source: \"lite\", \"full\" or \"heavy\" (Content/MediaPipe/pose_landmarker_<tier>.task). Empty keeps the legacy lite-first auto pick. Take-3 referee scoring (2026-07-05) showed right-side knee tracking improves sharply lite->full->heavy (raise-window angle error ~35-45deg down to ~11-17deg); heavy costs roughly 3x inference and smooths fast alternating raises. Read when the webcam source spawns - set before PIE."));
+
 TAutoConsoleVariable<FString> CVarPlacedEmbodiedVideoFile(
 	TEXT("mp.PlacedEmbodiedVideoFile"),
 	TEXT(""),
 	TEXT("Optional relative or absolute video file path to use instead of a webcam for mp.StartPlacedEmbodiedTracking."));
+
+TAutoConsoleVariable<FString> CVarMediaPipeSettingsVariant(
+	TEXT("mp.MediaPipeSettingsVariant"),
+	TEXT("baseline"),
+	TEXT("Named settings variant for the live trial layer and parity scoring replays: \"baseline\" (the user's accepted live stack) or \"candidate\" (baseline plus the awaiting-verdict experimental entries; the diff is logged on every apply). One switch replaces the scattered driver-script session-sets that made the stack impossible to navigate (settings consolidation 2026-07-06). Inspect the fully resolved stack with mp.DumpLiveProfileSettings."));
 
 bool IsMPQShadowAutoStartCVarArmed()
 {
@@ -476,8 +486,21 @@ struct FAutoQuestStationRefreshState
 	FAutoQuestMediaPipeStatsReportState MediaPipeStats;
 };
 
+// Settings-consolidation capture sink (2026-07-06): while non-null, the SetConsole*
+// helpers RECORD into this list instead of writing the console variable. This turns the
+// imperative profile functions themselves into the single declarative source of truth -
+// the parity replay folds the exact live profile without a hand-maintained copy (the
+// imperative-vs-declarative split is how mp.MediaPipeClavicleShrugWeight silently read 0
+// in every scoring replay while live ran 0.20).
+static TArray<FMediaPipeCVarSetting>* GProfileCaptureSink = nullptr;
+
 void SetConsoleInt(const TCHAR* Name, const int32 Value)
 {
+	if (GProfileCaptureSink)
+	{
+		GProfileCaptureSink->Add(FMediaPipeCVarSetting::MakeInt(Name, Value));
+		return;
+	}
 	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(Name))
 	{
 		if (CVar->GetInt() != Value)
@@ -489,6 +512,11 @@ void SetConsoleInt(const TCHAR* Name, const int32 Value)
 
 void SetConsoleFloat(const TCHAR* Name, const float Value)
 {
+	if (GProfileCaptureSink)
+	{
+		GProfileCaptureSink->Add(FMediaPipeCVarSetting::MakeFloat(Name, Value));
+		return;
+	}
 	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(Name))
 	{
 		if (!FMath::IsNearlyEqual(CVar->GetFloat(), Value, 0.001f))
@@ -500,6 +528,11 @@ void SetConsoleFloat(const TCHAR* Name, const float Value)
 
 void SetConsoleString(const TCHAR* Name, const FString& Value)
 {
+	if (GProfileCaptureSink)
+	{
+		GProfileCaptureSink->Add(FMediaPipeCVarSetting::MakeString(Name, Value));
+		return;
+	}
 	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(Name))
 	{
 		if (!CVar->GetString().Equals(Value, ESearchCase::CaseSensitive))
@@ -507,6 +540,23 @@ void SetConsoleString(const TCHAR* Name, const FString& Value)
 			CVar->Set(*Value, ECVF_SetByConsole);
 		}
 	}
+}
+
+TArray<FMediaPipeCVarSetting> CaptureLiveProfileSettings()
+{
+	// Run the live fusion profile with the sink armed: every Set the profile would make is
+	// recorded, none is written. Later entries for the same CVar win (matching imperative
+	// last-write semantics), which the fold's ReplaceOrAdd already implements.
+	TArray<FMediaPipeCVarSetting> Captured;
+	GProfileCaptureSink = &Captured;
+	ApplyAutoQuestProfile();
+	GProfileCaptureSink = nullptr;
+	return Captured;
+}
+
+bool IsCapturingProfileSettings()
+{
+	return GProfileCaptureSink != nullptr;
 }
 
 int32 GetConsoleIntValue(const TCHAR* Name)
@@ -567,6 +617,11 @@ void ApplyAutoQuestVrPerformanceProfile()
 // avatar-locked replay lower body silently freezes at the reference pose.
 void ReassertTrackingFusionReplayPoseCVarsIfActive(const TCHAR* ProfileName)
 {
+	// Profile-capture runs must stay side-effect free (see CaptureLiveProfileSettings).
+	if (IsCapturingProfileSettings())
+	{
+		return;
+	}
 	if (!FMediaPipeTrackingFusionDatasetReplayRuntime::Get().IsActive())
 	{
 		return;
@@ -603,7 +658,7 @@ void ApplyLiveLowerBodyTrialPolicyLayer()
 	FMediaPipeCVarPolicyLayer Layer;
 	Layer.PolicyId = LiveLowerBodyTrialPolicyId;
 	Layer.Priority = EMediaPipeCVarPolicyPriority::CaptureScope;
-	Layer.Settings = GetLiveLowerBodyTrialSettings();
+	Layer.Settings = GetLiveLowerBodyTrialSettingsForActiveVariant();
 	FMediaPipeCVarPolicyStack::Get().Apply(Layer);
 }
 
@@ -618,6 +673,13 @@ TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHmdLean"), 1),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeHmdLeanMaxDeg"), 55.0f),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeDriveHipTwist"), 1),
+		// Full-turn body yaw (2026-07-04, MHA take-2 iteration; AWAITING WORN-HEADSET
+		// VERDICT): the historical +/-100 clamp stopped the avatar mid-turn while the
+		// offline reference followed the wearer all the way around. Delta-accumulated
+		// yaw + a 720 range let complete turns through; recenter drains drift as before.
+		// BASELINE VERIFICATION SESSION 2026-07-05: entry disabled so live preview runs the
+		// user's pre-conversation baseline. Re-enable only after the worn baseline verdict.
+		// FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeBodyYawMaxDeg"), 720.0f),
 		// 2026-06-13 worn-headset feedback: legs should move to the wearer's full extent. The
 		// reliability stabilizer damped them whenever iPhone confidence dipped; off by user
 		// acceptance (trade-off: legs can wobble when the camera loses them).
@@ -668,6 +730,22 @@ TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
 		// "near floor", and the HMD flexion correction straightened RAISED legs to half-height
 		// knee raises. The keyed store survives; lifted legs get their exemption back.
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFootContactKeyedState"), 1),
+		// Robust sliding-window foot floor (take-3 referee forensics 2026-07-05): the all-time
+		// running-min floor is poisoned by one downward depth spike, after which standing feet
+		// read lifted forever (grounded=0, liftCm 3.6-6.4 measured), planting never engages,
+		// and feet snap/slide while the wearer stands still. 10s window: learns down instantly,
+		// outliers age out, and no hold in the guided protocol keeps a foot up long enough for
+		// a lifted foot to become its own floor. AWAITING WORN-HEADSET VERDICT.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeFootFloorWindowSeconds"), 10.0f),
+		// Camera elbow swivel (take-3 referee 2026-07-05): Quest chain synthesizes elbows
+		// flared outward (14cm off-chord vs camera 5.3 / Epic 8.3); the camera owns the
+		// elbow's swing direction while the chain keeps wrist+shoulder. Reliability-gated,
+		// smoothed, releases to chain when the camera cannot vote. AWAITING WORN VERDICT.
+		// Superseded by the direction transplant below (running both double-corrects azimuth):
+		// FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeArmElbowSwivelFromCamera"), 1.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeArmDirectionFromCamera"), 1.0f),
+		// Non-penetration: arm targets stay outside the torso (2cm-from-spine measured 2026-07-05).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeArmTorsoGuardCm"), 13.0f),
 		// Anatomical adduction bound: with the stabilizer off, drift walked the knees into
 		// each other (observed 2026-07-02).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeLegAdductionClamp"), 1),
@@ -683,6 +761,15 @@ TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
 		// synthesized guess), and the hand pose gate holds fingers ONLY on untracked frames
 		// (the rate threshold that twitched real fist closes is neutralized).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmOverheadRescue"), 1),
+		// Shoulder-relative divergence (take-2 parity forensics 2026-07-04): the absolute-Z
+		// camera-vs-chain compare spans frames with a ~-90cm origin bias and could never fire;
+		// shoulder-relative differencing cancels the bias and catches the measured 6s chain
+		// dropout at 51-58s take-time (chain held the raised left arm down, camera reliability
+		// 0.9). Simulated on the recorded take before enabling: owns the arm exactly during the
+		// dropout plus sub-half-second blips on fast lowers. AWAITING WORN-HEADSET VERDICT.
+		// BASELINE VERIFICATION SESSION 2026-07-05: entry disabled so live preview runs the
+		// user's pre-conversation baseline. Re-enable only after the worn baseline verdict.
+		// FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"), 1),
 		// mp.MediaPipeArmOverheadRescueChainAboveVetoCm stays OUT of the trial layer: measured
 		// against the MHA reference 2026-07-04, the 30cm veto fixed the early-take camera-low
 		// latch (52->16cm) but suppressed correct rescues elsewhere (30s window 13->26cm) - when
@@ -707,8 +794,112 @@ TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings()
 	};
 }
 
+// Candidate settings variant (2026-07-06, settings consolidation): everything above is the
+// BASELINE the user has accepted live. Entries below are the awaiting-verdict experimental
+// stack - previously scattered across driver-script session-sets and commented-out trial
+// entries, which is exactly the nebulousness the consolidation retires. Select with
+// mp.MediaPipeSettingsVariant candidate; the diff vs baseline is logged on every apply.
+TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
+{
+	return {
+		// Full-turn body yaw (take-2 referee 2026-07-04) - PULLED from candidate 2026-07-06:
+		// take-4 round-3 A/B showed the unclamped yaw buys nothing on turn-free takes while
+		// risking wander (yaw err 6.5deg clamped). Re-add when a full-turn take can
+		// discriminate. FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeBodyYawMaxDeg"), 720.0f),
+		// Shoulder-relative rescue divergence (take-2 parity forensics 2026-07-04).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"), 1),
+		// Clavicle shrug at meaningful weight (take-3 referee 2026-07-05: live imperative 0.20
+		// never reached parity; Epic shrugs 9cm, fused 2-3cm even at 0.6).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.6f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 1.0f),
+		// Knee clamps opened for real knees-together poses (take-3 referee 2026-07-05).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegAdductionMaxDeg"), 0.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeKneeMedialBowMaxDeg"), 0.0f),
+		// Heavy pose model (take-4 referee 2026-07-06: right-knee corr 0.03 -> 0.74).
+		FMediaPipeCVarSetting::MakeString(TEXT("mp.AutoQuestWebcamPoseModel"), TEXT("heavy")),
+		// HMD pelvis anchor (take-4 referee 2026-07-06: camera pelvis drifts laterally, the
+		// closed-loop HMD lean tilts the torso to compensate - fused lean +5cm growing to +7cm
+		// vs Epic 0.8cm. Quest SLAM owns the low-frequency planar anchor).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipePelvisHmdAnchor"), 1),
+		// Camera yaw anchor (take-4 round-3 referee 2026-07-06: chest yaw +6deg bias growing
+		// to +10deg - the user's "chest turns away" report. Camera shoulder line owns slow
+		// heading truth; Quest keeps fast turns).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeBodyYawFromCamera"), 1),
+		// Palm retarget trim about the forearm axis (take-4 user report: fused wrist angles
+		// outward on forward points). MESH-LEVEL need fitted vs the kellanized Epic solve:
+		// L +12.5 / R -6.3. The MetaHuman post-process rig redistributes forearm twist, so
+		// only a fraction of a node-level trim reaches the rendered mesh (measured gains
+		// L 0.34 / R 0.57 - asymmetric rig correctives). These COMMANDED values are
+		// gain-calibrated so the fitted amount lands at the mesh: verified round-5
+		// 2026-07-06, residual L -0.8 / R +0.4 deg (zero within noise). Refit BOTH the
+		// mesh-level need and the gains if the retarget mapping or the MetaHuman rig
+		// changes; the anim-node trace mp.PalmTrimLeak (gated on
+		// mp.MediaPipeCameraHandTrace) plus Tools palm_fit measure both ends.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimLeftDeg"), 36.8f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimRightDeg"), -11.1f),
+	};
+}
+
+FString GetActiveSettingsVariant()
+{
+	FString Variant = TEXT("baseline");
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MediaPipeSettingsVariant")))
+	{
+		Variant = CVar->GetString().TrimStartAndEnd().ToLower();
+	}
+	return (Variant == TEXT("candidate")) ? TEXT("candidate") : TEXT("baseline");
+}
+
+TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettingsForActiveVariant()
+{
+	TArray<FMediaPipeCVarSetting> Settings = GetLiveLowerBodyTrialSettings();
+	if (GetActiveSettingsVariant() != TEXT("candidate"))
+	{
+		return Settings;
+	}
+	FString Diff;
+	for (const FMediaPipeCVarSetting& Candidate : GetCandidateVariantSettings())
+	{
+		bool bReplaced = false;
+		for (FMediaPipeCVarSetting& Existing : Settings)
+		{
+			if (Existing.Name == Candidate.Name)
+			{
+				Existing = Candidate;
+				bReplaced = true;
+				break;
+			}
+		}
+		if (!bReplaced)
+		{
+			Settings.Add(Candidate);
+		}
+		switch (Candidate.Type)
+		{
+		case FMediaPipeCVarSetting::EType::Int:
+			Diff += FString::Printf(TEXT(" %s=%d"), *Candidate.Name, Candidate.IntValue);
+			break;
+		case FMediaPipeCVarSetting::EType::Float:
+			Diff += FString::Printf(TEXT(" %s=%.3g"), *Candidate.Name, Candidate.FloatValue);
+			break;
+		case FMediaPipeCVarSetting::EType::String:
+			Diff += FString::Printf(TEXT(" %s=%s"), *Candidate.Name, *Candidate.StringValue);
+			break;
+		}
+	}
+	UE_LOG(LogMediaPipePose, Log,
+		TEXT("SettingsVariant: CANDIDATE active; diff vs baseline:%s"), *Diff);
+	return Settings;
+}
+
 void ReassertLiveLowerBodyTrialIfArmed(const TCHAR* ProfileName)
 {
+	// Profile-capture runs must stay side-effect free: the trial layer is folded separately
+	// by the parity replay, and applying a real policy layer mid-capture would write CVars.
+	if (IsCapturingProfileSettings())
+	{
+		return;
+	}
 	if (!FMediaPipeCVarPolicyStack::Get().IsLayerActive(LiveLowerBodyTrialPolicyId))
 	{
 		return;
@@ -728,6 +919,48 @@ FAutoConsoleCommand CmdStartLiveLowerBodyTrial(
 		ApplyLiveLowerBodyTrialPolicyLayer();
 		UE_LOG(LogMediaPipePose, Log,
 			TEXT("mp.StartLiveLowerBodyTrial: armed. Press VR Preview (or continue the current session); legs, the HMD squat scaffold, and the right-side tracking panel are active. Watch mp.MediaPipeLegScaffold rows for source contributions."));
+	}));
+
+FAutoConsoleCommand CmdDumpLiveProfileSettings(
+	TEXT("mp.DumpLiveProfileSettings"),
+	TEXT("Log the complete declarative settings the live fusion stack resolves to: the captured live profile, the trial layer for the active mp.MediaPipeSettingsVariant, and which layer owns each CVar. The one readable source of truth for 'what is the stack actually running'."),
+	FConsoleCommandDelegate::CreateStatic([]()
+	{
+		auto Describe = [](const FMediaPipeCVarSetting& S) -> FString
+		{
+			switch (S.Type)
+			{
+			case FMediaPipeCVarSetting::EType::Int:
+				return FString::Printf(TEXT("%s=%d"), *S.Name, S.IntValue);
+			case FMediaPipeCVarSetting::EType::Float:
+				return FString::Printf(TEXT("%s=%.4g"), *S.Name, S.FloatValue);
+			default:
+				return FString::Printf(TEXT("%s=%s"), *S.Name, *S.StringValue);
+			}
+		};
+		const TArray<FMediaPipeCVarSetting> Profile = CaptureLiveProfileSettings();
+		const TArray<FMediaPipeCVarSetting> Trial = GetLiveLowerBodyTrialSettingsForActiveVariant();
+		TMap<FString, FString> Resolved;
+		TMap<FString, FString> Owner;
+		for (const FMediaPipeCVarSetting& S : Profile)
+		{
+			Resolved.Add(S.Name, Describe(S));
+			Owner.Add(S.Name, TEXT("profile"));
+		}
+		for (const FMediaPipeCVarSetting& S : Trial)
+		{
+			Resolved.Add(S.Name, Describe(S));
+			Owner.Add(S.Name, TEXT("trial"));
+		}
+		TArray<FString> Names;
+		Resolved.GetKeys(Names);
+		Names.Sort();
+		UE_LOG(LogMediaPipePose, Log, TEXT("DumpLiveProfileSettings: variant=%s profile=%d trial=%d resolved=%d"),
+			*GetActiveSettingsVariant(), Profile.Num(), Trial.Num(), Names.Num());
+		for (const FString& Name : Names)
+		{
+			UE_LOG(LogMediaPipePose, Log, TEXT("  [%s] %s"), *Owner[Name], *Resolved[Name]);
+		}
 	}));
 
 FAutoConsoleCommand CmdStopLiveLowerBodyTrial(
@@ -897,6 +1130,25 @@ UWorld* ResolveAutoQuestCommandWorld(UWorld* World)
 FString ResolveAutoModelPath()
 {
 	const FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir());
+
+	// Explicit tier override. The legacy auto pick below prefers LITE, which take-3
+	// referee scoring showed loses most of the right-side knee-raise amplitude that
+	// full/heavy recover (2026-07-05). Opt-in so defaults stay byte-stable.
+	const FString RequestedTier = CVarAutoQuestWebcamPoseModel.GetValueOnGameThread().TrimStartAndEnd().ToLower();
+	if (!RequestedTier.IsEmpty())
+	{
+		const FString TieredPath = FPaths::Combine(
+			ContentDir, FString::Printf(TEXT("MediaPipe/pose_landmarker_%s.task"), *RequestedTier));
+		if (FPaths::FileExists(TieredPath))
+		{
+			UE_LOG(LogMediaPipePose, Log, TEXT("Auto webcam pose model: tier '%s' via mp.AutoQuestWebcamPoseModel -> %s"),
+				*RequestedTier, *TieredPath);
+			return TieredPath;
+		}
+		UE_LOG(LogMediaPipePose, Warning, TEXT("mp.AutoQuestWebcamPoseModel='%s' but %s does not exist; using legacy auto pick."),
+			*RequestedTier, *TieredPath);
+	}
+
 	const TCHAR* CandidateNames[] = {
 		TEXT("MediaPipe/pose_landmarker_lite.task"),
 		TEXT("MediaPipe/pose_landmarker_full.task"),

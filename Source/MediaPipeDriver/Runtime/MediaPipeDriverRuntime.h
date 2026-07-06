@@ -42,6 +42,17 @@ extern const FName LocalFirstPersonBodyProxyUpdaterComponentName;
 // the same configuration the user feels live.
 MEDIAPIPEDRIVER_API TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettings();
 
+// Settings consolidation (2026-07-06): the imperative live-profile writes recorded as a
+// declarative list (capture sink in the SetConsole* helpers), the awaiting-verdict
+// candidate stack, and the variant selector (mp.MediaPipeSettingsVariant baseline|candidate).
+// Parity replays fold CaptureLiveProfileSettings + the variant-aware trial list so scoring
+// measures exactly the stack the user runs live - no hand-maintained copies.
+MEDIAPIPEDRIVER_API TArray<FMediaPipeCVarSetting> CaptureLiveProfileSettings();
+MEDIAPIPEDRIVER_API bool IsCapturingProfileSettings();
+MEDIAPIPEDRIVER_API TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings();
+MEDIAPIPEDRIVER_API FString GetActiveSettingsVariant();
+MEDIAPIPEDRIVER_API TArray<FMediaPipeCVarSetting> GetLiveLowerBodyTrialSettingsForActiveVariant();
+
 extern bool bHasAutoQuestMirrorYawCalibration;
 extern float AutoQuestMirrorYawCalibrationDeg;
 extern bool bHasAutoQuestEmbodiedYawCalibration;

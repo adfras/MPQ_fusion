@@ -423,7 +423,49 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	const float SampleFootFloorZ = bHeelMeasured
 		? FMath::Min(FMath::Min(AnkleWorld.Z, HeelWorld.Z), ToeWorld.Z)
 		: FMath::Min(AnkleWorld.Z, ToeWorld.Z);
-	if (!bHasObservedSourceFloor)
+	const float FootFloorWindowSeconds =
+		CVarMediaPipeFootFloorWindowSeconds.GetValueOnAnyThread();
+	if (FootFloorWindowSeconds > 0.0f && bUseKeyedFootContactState)
+	{
+		// Sliding-window floor: minimum over recent bucketed samples, so one downward
+		// depth spike cannot lower the floor for the rest of the session (running-min
+		// defect - see the CVar doc and the state-struct comment).
+		FMediaPipeFootContactSideRuntimeState& S = FootContactSideState;
+		const double NowSeconds = FPlatformTime::Seconds();
+		const double BucketSeconds = FMath::Max(
+			static_cast<double>(FootFloorWindowSeconds) / S.FloorBucketCount, 0.05);
+		if (!S.bFloorBucketsInit || S.FloorBucketStartTimeSeconds < 0.0)
+		{
+			for (float& B : S.FloorBucketMinZ)
+			{
+				B = SampleFootFloorZ;
+			}
+			S.FloorBucketStartTimeSeconds = NowSeconds;
+			S.FloorBucketIndex = 0;
+			S.bFloorBucketsInit = true;
+		}
+		while (NowSeconds - S.FloorBucketStartTimeSeconds >= BucketSeconds)
+		{
+			S.FloorBucketIndex = (S.FloorBucketIndex + 1) % S.FloorBucketCount;
+			S.FloorBucketMinZ[S.FloorBucketIndex] = SampleFootFloorZ;
+			S.FloorBucketStartTimeSeconds += BucketSeconds;
+			if (NowSeconds - S.FloorBucketStartTimeSeconds >= FootFloorWindowSeconds)
+			{
+				// Long gap (seek/pause): restart the window rather than spinning.
+				S.FloorBucketStartTimeSeconds = NowSeconds;
+			}
+		}
+		S.FloorBucketMinZ[S.FloorBucketIndex] =
+			FMath::Min(S.FloorBucketMinZ[S.FloorBucketIndex], SampleFootFloorZ);
+		float WindowMin = S.FloorBucketMinZ[0];
+		for (int32 BucketIdx = 1; BucketIdx < S.FloorBucketCount; ++BucketIdx)
+		{
+			WindowMin = FMath::Min(WindowMin, S.FloorBucketMinZ[BucketIdx]);
+		}
+		ObservedSourceFloorZ = WindowMin;
+		bHasObservedSourceFloor = true;
+	}
+	else if (!bHasObservedSourceFloor)
 	{
 		ObservedSourceFloorZ = SampleFootFloorZ;
 		bHasObservedSourceFloor = true;

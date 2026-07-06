@@ -118,6 +118,25 @@ struct FQuestWristSideRuntimeState
 	float ArmRescueEnterSeconds = 0.0f;
 	float ArmRescueExitSeconds = 0.0f;
 	double ArmRescueLastUpdateTimeSeconds = -1.0;
+	// Camera elbow-swivel correction (mp.MediaPipeArmElbowSwivelFromCamera): smoothed azimuth
+	// delta between the Quest chain's elbow and the camera's elbow about the shoulder->wrist
+	// chord. The Quest chain synthesizes elbows flared OUTWARD (+14cm off-chord measured vs
+	// the camera's 5.3cm and Epic's 8.3cm, take-3 referee 2026-07-05); the swivel is the one
+	// arm degree of freedom the camera measures better. Wall-clock smoothed, keyed state.
+	// Camera arm-direction transplant blend (eases in/out with camera reliability).
+	float ArmDirectionBlendAlpha = 0.0f;
+	double ArmDirectionLastUpdateTimeSeconds = -1.0;
+	// Complementary-fusion direction correction (2026-07-05 redesign after "arms too
+	// erratic" worn/viewer verdict): the QUEST chain owns high-frequency arm motion
+	// (smooth, fast); the CAMERA contributes a slow-filtered rotation correction that
+	// erases the chain's constant biases (wide hanging arms) without passing through
+	// camera landmark jitter. Stored as smoothed per-segment rotation deltas.
+	bool bHasArmDirCorrection = false;
+	FQuat ArmDirCorrectionElbow = FQuat::Identity;
+	FQuat ArmDirCorrectionWrist = FQuat::Identity;
+	float SmoothedElbowSwivelDeltaDeg = 0.0f;
+	bool bHasSmoothedElbowSwivel = false;
+	double ElbowSwivelLastUpdateTimeSeconds = -1.0;
 	double DropoutReacquireReachScaleSuppressUntilTimeSeconds = -1.0;
 	float PositionAuthorityAlpha = 0.0f;
 	double PositionAuthorityLastTimeSeconds = -1.0;

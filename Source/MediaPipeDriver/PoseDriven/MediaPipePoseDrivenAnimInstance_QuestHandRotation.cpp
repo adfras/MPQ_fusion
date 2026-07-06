@@ -180,7 +180,8 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 				? 1.0f
 				: FMath::Clamp((LostAgeSeconds - GraceSeconds) / FadeSeconds, 0.0f, 1.0f);
 			SmoothedQuestHandRotLocal = FQuat::Slerp(SmoothedQuestHandRotLocal, MediaPipeHandLocal, FadeAlpha).GetNormalized();
-			ApplyRotationCS(CSPose, HandBone, (LowerArmRotCS * SmoothedQuestHandRotLocal).GetNormalized());
+			ApplyRotationCS(CSPose, HandBone, ApplyQuestWristPalmTrim(
+				(LowerArmRotCS * SmoothedQuestHandRotLocal).GetNormalized(), ForearmAxisComp, bIsLeft));
 			Trace.bHadCalibration = 1;
 			Trace.bAppliedHandLocalToLowerArm = 1;
 			UpdateCalibrationTrace();
@@ -198,7 +199,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 			? 1.0f
 			: FMath::Clamp((LostAgeSeconds - GraceSeconds) / FadeSeconds, 0.0f, 1.0f);
 		SmoothedQuestHandRotCS = FQuat::Slerp(SmoothedQuestHandRotCS, MediaPipeHandTargetCS.GetNormalized(), FadeAlpha).GetNormalized();
-		ApplyRotationCS(CSPose, HandBone, SmoothedQuestHandRotCS);
+		ApplyRotationCS(CSPose, HandBone, ApplyQuestWristPalmTrim(SmoothedQuestHandRotCS, ForearmAxisComp, bIsLeft));
 		Trace.bHadCalibration = 1;
 		UpdateCalibrationTrace();
 		return true;
@@ -1576,6 +1577,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 		}
 		AppliedQuestHandRotCS = SmoothedQuestHandRotCS;
 	}
+	AppliedQuestHandRotCS = ApplyQuestWristPalmTrim(AppliedQuestHandRotCS, ForearmAxisComp, bIsLeft);
 	ApplyRotationCS(CSPose, HandBone, AppliedQuestHandRotCS);
 	QuestWristSideState.LastHandRotationApplyTimeSeconds = FPlatformTime::Seconds();
 	const FQuat AppliedHandRotCS = HandBone.IsValidToEvaluate()

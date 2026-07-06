@@ -927,8 +927,22 @@ void FMediaPipeTrackingFusionDatasetReplayRuntime::ApplyReplayPoseCVars_GameThre
 			}
 			Layer.Settings.Add(NewSetting);
 		};
+		// Settings consolidation (2026-07-06): fold the CAPTURED live profile first - the
+		// imperative SetConsole* writes recorded via the capture sink, so parity sees the
+		// exact live values (mp.MediaPipeClavicleShrugWeight read 0 in every scoring replay
+		// while live ran 0.20; that class of silent divergence ends here). Non-mp settings
+		// (VR perf r.*/sg.*) are dropped: replay keeps desktop quality. Then the trial layer
+		// for the active mp.MediaPipeSettingsVariant, mirroring the live layering order.
+		for (const FMediaPipeCVarSetting& ProfileSetting :
+			MediaPipeDriverRuntime::CaptureLiveProfileSettings())
+		{
+			if (ProfileSetting.Name.StartsWith(TEXT("mp.")))
+			{
+				ReplaceOrAdd(ProfileSetting);
+			}
+		}
 		for (const FMediaPipeCVarSetting& TrialSetting :
-			MediaPipeDriverRuntime::GetLiveLowerBodyTrialSettings())
+			MediaPipeDriverRuntime::GetLiveLowerBodyTrialSettingsForActiveVariant())
 		{
 			ReplaceOrAdd(TrialSetting);
 		}
@@ -1347,6 +1361,37 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::ParseSampleObject(
 	};
 	ParseArmChainSide(TEXT("left_arm_chain"), OutSample.Observations.ArmChain.Left);
 	ParseArmChainSide(TEXT("right_arm_chain"), OutSample.Observations.ArmChain.Right);
+
+	// Schema v3 (2026-07-04): recorded Quest body-tracking hips pose - the full-turn
+	// body-yaw source. Missing from older caches (treated as absent).
+	TSharedPtr<FJsonObject> BodyHipsObject;
+	if (TryGetObjectField(SourceObject, TEXT("body_hips"), BodyHipsObject) &&
+		TryReadBool(BodyHipsObject, TEXT("has_hips")))
+	{
+		FVector HipsLoc = FVector::ZeroVector;
+		if (TryReadVectorArray(BodyHipsObject, TEXT("loc"), HipsLoc))
+		{
+			OutSample.Observations.ArmChain.bHasHips = true;
+			OutSample.Observations.ArmChain.HipsLocationWorld = HipsLoc;
+			const TArray<TSharedPtr<FJsonValue>>* QuatArray = nullptr;
+			if (BodyHipsObject->TryGetArrayField(TEXT("quat"), QuatArray) &&
+				QuatArray && QuatArray->Num() == 4)
+			{
+				OutSample.Observations.ArmChain.HipsRotationWorld = FQuat(
+					(*QuatArray)[0]->AsNumber(),
+					(*QuatArray)[1]->AsNumber(),
+					(*QuatArray)[2]->AsNumber(),
+					(*QuatArray)[3]->AsNumber()).GetNormalized();
+			}
+			bool bOrientValid = false;
+			BodyHipsObject->TryGetBoolField(TEXT("orientation_valid"), bOrientValid);
+			OutSample.Observations.ArmChain.bHipsOrientationValid = bOrientValid ? 1 : 0;
+			OutSample.Observations.ArmChain.HipsTimestampSeconds = OutSample.TimeSeconds;
+			OutSample.Observations.ArmChain.HipsConfidence =
+				static_cast<float>(ReadNumber(BodyHipsObject, TEXT("confidence"), 1.0));
+			bHasAnySource = true;
+		}
+	}
 
 	TSharedPtr<FJsonObject> BodyPoseObject;
 	if (TryGetObjectField(SourceObject, TEXT("body_pose"), BodyPoseObject) &&
