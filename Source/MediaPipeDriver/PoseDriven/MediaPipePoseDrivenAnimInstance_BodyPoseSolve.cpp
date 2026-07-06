@@ -2297,9 +2297,27 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 // fast (posture), up over minutes, so held shrugs cannot absorb into their own baseline.
 void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
 {
-	if (CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() == 0 ||
-		!bHasPoseFrame || DeltaSeconds <= 0.0f || !bHasReferencePose)
+	if (CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() == 0 || DeltaSeconds <= 0.0f)
 	{
+		return;
+	}
+	// Gate trace (2026-07-06): a failing gate and a zero signal were indistinguishable -
+	// the mirror Kellan produced no lift and no rows while Manny shrugged. Every early
+	// exit now names itself (0.5s global throttle, all actors cycle through within ~2s).
+	static double GShrugGateLogSeconds = 0.0;
+	auto ShrugGateLog = [&](const TCHAR* Gate, const float A = 0.0f, const float B = 0.0f)
+	{
+		const double NowS = FPlatformTime::Seconds();
+		if (NowS - GShrugGateLogSeconds > 0.5)
+		{
+			GShrugGateLogSeconds = NowS;
+			UE_LOG(LogMediaPipePose, Log, TEXT("mp.ShrugGate: actor=%s gate=%s a=%.2f b=%.2f"),
+				*TargetActorName.ToString(), Gate, A, B);
+		}
+	};
+	if (!bHasPoseFrame || !bHasReferencePose)
+	{
+		ShrugGateLog(TEXT("frameOrRefPose"), bHasPoseFrame ? 1.0f : 0.0f, bHasReferencePose ? 1.0f : 0.0f);
 		return;
 	}
 	const float ShrugWeight = FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
@@ -2314,6 +2332,9 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		!TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) ||
 		!TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
 	{
+		ShrugGateLog(TEXT("hips"),
+			GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip),
+			GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip));
 		return;
 	}
 	const float HipMidZ = (LeftHipWorld.Z + RightHipWorld.Z) * 0.5f;
@@ -2348,6 +2369,8 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		const FBoneReference& UpperBone = bIsLeft ? UpperArmL : UpperArmR;
 		if (!ClavBone.IsValidToEvaluate() || !UpperBone.IsValidToEvaluate())
 		{
+			ShrugGateLog(bIsLeft ? TEXT("clavBoneL") : TEXT("clavBoneR"),
+				ClavBone.IsValidToEvaluate() ? 1.0f : 0.0f, UpperBone.IsValidToEvaluate() ? 1.0f : 0.0f);
 			continue;
 		}
 		const int32 ShoulderLm = bIsLeft
@@ -2356,6 +2379,7 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		FVector ShoulderWorld = FVector::ZeroVector;
 		if (GetLandmarkReliability(ShoulderLm) < 0.3f || !TryGetLmWorld(ShoulderLm, ShoulderWorld))
 		{
+			ShrugGateLog(bIsLeft ? TEXT("shoulderL") : TEXT("shoulderR"), GetLandmarkReliability(ShoulderLm));
 			continue;
 		}
 		const float HeightCm = ShoulderWorld.Z - HipMidZ;
@@ -2364,9 +2388,12 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		{
 			RestRefCm = HeightCm;
 		}
-		const float RefHalfLife = HeightCm < RestRefCm ? 0.7f : 90.0f;
+		// Live shoulder heights flicker +-8cm/s (worn test 2026-07-06: the 0.7s down-adapt
+		// chased every noise dip and the lift flickered instead of holding). 2.5s down /
+		// 90s up stays posture-aware but noise-proof; the 1.5cm deadband eats residual jitter.
+		const float RefHalfLife = HeightCm < RestRefCm ? 2.5f : 90.0f;
 		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, HalfLifeToAlpha(RefHalfLife, DeltaSeconds));
-		const float LiftRigCm = FMath::Clamp((HeightCm - RestRefCm) * RigScale, 0.0f, 14.0f);
+		const float LiftRigCm = FMath::Clamp((HeightCm - RestRefCm - 1.5f) * RigScale, 0.0f, 14.0f);
 		const FVector ClavPosComp = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
 		const FVector UpperPosComp = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
 		const FVector CurDir = (UpperPosComp - ClavPosComp);
@@ -2374,6 +2401,7 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		const float TargetSin = FMath::Clamp(LiftRigCm * ShrugWeight / ClavLenCm, 0.0f, 0.85f);
 		float& SmoothedSin = bIsLeft ? BodyState.ShrugSmoothedSinL : BodyState.ShrugSmoothedSinR;
 		SmoothedSin = FMath::Lerp(SmoothedSin, TargetSin, HalfLifeToAlpha(0.12f, DeltaSeconds));
+		ShrugGateLog(bIsLeft ? TEXT("computeL") : TEXT("computeR"), LiftRigCm, SmoothedSin);
 		if (SmoothedSin < 0.005f)
 		{
 			continue;
@@ -2390,8 +2418,8 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		{
 			LastLog = NowSeconds;
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.ClavicleShrugFusion: side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f"),
-				bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale);
+				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f"),
+				*TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale);
 		}
 	}
 }
