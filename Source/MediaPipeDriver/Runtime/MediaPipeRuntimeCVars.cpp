@@ -1358,6 +1358,11 @@ namespace MediaPipeRuntimeCVars
 		0.0f,
 		TEXT("Constant corrective twist (degrees, about the forearm axis) applied to the RIGHT hand's final Quest-driven rotation. See mp.QuestWristPalmTrimLeftDeg."));
 
+	TAutoConsoleVariable<int32> CVarMediaPipeClavicleShrugDirect(
+		TEXT("mp.MediaPipeClavicleShrugDirect"),
+		0,
+		TEXT("When non-zero, the clavicle shrug is driven BY GEOMETRY from the camera's metric shoulder lift: measured lift (vs an asymmetric rest reference that adapts down fast / up over minutes, so held shrugs cannot absorb into the baseline) scaled to the rig via the shoulder-width ratio, converted to the clavicle direction weight whose rotation reproduces that rise. Replaces the weights-of-evidence path's ceiling (its 0.25 direction clamp caps the avatar at ~2cm of rise; take-4 referee 2026-07-06: camera saw 7.7cm shrugs, avatar produced 1.5-2 vs the Epic solve's 11.5 at Kellan scale). The Quest chain cannot see shrugs at all (synthesized shoulders, 1.5cm amplitude measured) - the camera is the only shrug source. 0 preserves historical behavior (byte-stable default); the candidate settings variant enables it."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeBodyYawFromCamera(
 		TEXT("mp.MediaPipeBodyYawFromCamera"),
 		0,

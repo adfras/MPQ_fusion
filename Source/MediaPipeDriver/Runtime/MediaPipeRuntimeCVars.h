@@ -277,6 +277,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipePelvisHmdAnchorUprightMaxCm;
 	extern TAutoConsoleVariable<float> CVarQuestWristPalmTrimLeftDeg;
 	extern TAutoConsoleVariable<float> CVarQuestWristPalmTrimRightDeg;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeClavicleShrugDirect;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeBodyYawFromCamera;
 	extern TAutoConsoleVariable<float> CVarMediaPipeBodyYawFromCameraHalfLifeSeconds;
 	extern TAutoConsoleVariable<float> CVarMediaPipeBodyYawFromCameraMaxDeg;

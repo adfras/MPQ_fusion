@@ -2707,7 +2707,18 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
 				{
 					const FVector HipMidWorld = (LeftHipWorld + RightHipWorld) * 0.5f;
-					const float ShoulderHeightCm = FVector::DotProduct(ShoulderWorld - HipMidWorld, UpWorldSafe);
+					// Shrug signal source (2026-07-06): by this point ShoulderWorld has been
+					// reassigned to the ARM CHAIN's shoulder (line ~487), which is synthesized
+					// from the HMD and cannot see shrugs (1.5cm amplitude measured vs the
+					// camera's 7.7). The camera's own measurement was preserved at line ~292;
+					// the shrug height must come from it - it is the only source that sees
+					// the shoulders rise.
+					const FVector ShrugShoulderWorld =
+						(CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() != 0 &&
+							!MediaPipeSourceShoulderWorld.IsNearlyZero())
+						? MediaPipeSourceShoulderWorld
+						: ShoulderWorld;
+					const float ShoulderHeightCm = FVector::DotProduct(ShrugShoulderWorld - HipMidWorld, UpWorldSafe);
 					if (ShoulderHeightCm > KINDA_SMALL_NUMBER)
 					{
 						FMediaPipeArmSolverState& ClavicleArmState = bIsLeft ? LeftArmState : RightArmState;
@@ -2717,7 +2728,16 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							ClavicleArmState.ShoulderHeightReferenceCm = ShoulderHeightCm;
 						}
 
-						const float ReferenceHalfLifeSeconds = 8.0f;
+						// Asymmetric rest reference (shrug redesign 2026-07-06): the symmetric 8s
+						// lowpass absorbed HELD shrugs into the baseline - the signal decayed while
+						// the wearer was still shrugging (referee: fused shrug 1.5-2cm vs Epic
+						// 11.5). Shoulders REST at their minimum height; shrugs only go up. Adapt
+						// DOWN fast (posture drop, sitting) and UP over minutes, so the reference
+						// tracks true rest and a shrug can never eat its own baseline.
+						const bool bDirectShrug = CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() != 0;
+						const float ReferenceHalfLifeSeconds = bDirectShrug
+							? (ShoulderHeightCm < ClavicleArmState.ShoulderHeightReferenceCm ? 0.7f : 90.0f)
+							: 8.0f;
 						const float ReferenceAlpha = HalfLifeToAlpha(ReferenceHalfLifeSeconds, DeltaSeconds);
 						ClavicleArmState.ShoulderHeightReferenceCm = FMath::Lerp(
 							ClavicleArmState.ShoulderHeightReferenceCm,
@@ -2995,7 +3015,44 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 
 			const float ArmDrivenClavicleUpW = FMath::Pow(FMath::Clamp(ArmUp, 0.0f, 1.0f), 1.35f) * 0.18f;
-			const float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW * 0.35f, -0.08f, 0.25f);
+			float ShrugDrivenClavicleUpW = FMath::Clamp(ShoulderShrugW * 0.35f, -0.08f, 0.25f);
+			// Direct metric shrug (2026-07-06): the weights-of-evidence path above saturates at
+			// the 0.25 clamp (~2cm of rise) no matter the signal - the referee measured the
+			// camera seeing 7.7cm shrugs while the avatar produced 1.5-2 vs Epic's 11.5. Drive
+			// the clavicle BY GEOMETRY instead: the measured metric lift over the rig's
+			// clavicle length gives the direction-blend weight whose rotation reproduces that
+			// rise (rise ~= clavLen * UpW / sqrt(1+UpW^2)). Rig-scaled via the hip-height
+			// calibration ratio; the asymmetric rest reference above keeps the lift honest.
+			if (CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() != 0 &&
+				ClavBone.IsValidToEvaluate() && UpperBone.IsValidToEvaluate())
+			{
+				// Rig scale from shoulder widths (source landmarks vs posed rig), the same
+				// correspondence the clearance path uses; falls back to 1.0 when either side
+				// is unmeasurable this frame.
+				float RigScale = 1.0f;
+				FVector ScaleLS = FVector::ZeroVector;
+				FVector ScaleRS = FVector::ZeroVector;
+				if (UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate() &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, ScaleLS) &&
+					TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, ScaleRS))
+				{
+					const float SourceWidthCm = FVector::Dist(ScaleLS, ScaleRS);
+					const float RigWidthCm = FVector::Dist(
+						CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation(),
+						CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation());
+					if (SourceWidthCm > 10.0f && RigWidthCm > 10.0f)
+					{
+						RigScale = FMath::Clamp(RigWidthCm / SourceWidthCm, 0.5f, 2.0f);
+					}
+				}
+				const float LiftRigCm = FMath::Clamp(ShoulderSignedLiftCm * RigScale, 0.0f, 14.0f);
+				const float ClavLenCm = FMath::Max(8.0f, FVector::Dist(
+					CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation(),
+					CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation()));
+				const float DirectUpW = FMath::Clamp(LiftRigCm / ClavLenCm, 0.0f, 0.8f) *
+					FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
+				ShrugDrivenClavicleUpW = FMath::Max(ShrugDrivenClavicleUpW, DirectUpW);
+			}
 			const float UpW = FMath::Clamp(ArmDrivenClavicleUpW + ShrugDrivenClavicleUpW, -0.25f, 0.85f);
 			const float FwdW = FMath::Clamp(ArmForward, 0.0f, 1.0f) * 0.14f;
 

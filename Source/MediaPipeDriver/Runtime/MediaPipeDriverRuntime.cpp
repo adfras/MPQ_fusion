@@ -810,8 +810,12 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"), 1),
 		// Clavicle shrug at meaningful weight (take-3 referee 2026-07-05: live imperative 0.20
 		// never reached parity; Epic shrugs 9cm, fused 2-3cm even at 0.6).
-		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 0.6f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 1.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugMinCm"), 1.0f),
+		// Geometric shrug drive (take-4 referee 2026-07-06: the evidence-weights path caps at
+		// ~2cm by its 0.25 direction clamp; camera sees 7.7cm, Epic target 11.5 Kellan-scale.
+		// The Quest chain is blind to shrugs - camera is the only source).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeClavicleShrugDirect"), 1),
 		// Knee clamps opened for real knees-together poses (take-3 referee 2026-07-05).
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegAdductionMaxDeg"), 0.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeKneeMedialBowMaxDeg"), 0.0f),
