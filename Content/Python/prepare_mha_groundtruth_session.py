@@ -43,6 +43,10 @@ def prepare() -> None:
     # (2026-07-04) recorded camera_hands 0% because nothing turned the sensor on. Must
     # be set BEFORE VR Preview (the landmarker is read at webcam source spawn).
     unreal.SystemLibrary.execute_console_command(None, "mp.AutoQuestWebcamHandLandmarker 1")
+    # Heavy pose model for capture (user decision 2026-07-05): right-side knee error
+    # drops ~29->12deg vs the offline referee. Read at webcam source spawn - set
+    # BEFORE VR Preview, like the hand landmarker above.
+    unreal.SystemLibrary.execute_console_command(None, "mp.AutoQuestWebcamPoseModel heavy")
     unreal.SystemLibrary.execute_console_command(None, ARM_COMMAND)
     unreal.log("=" * 60)
     unreal.log("MHA GROUND-TRUTH SESSION READY")

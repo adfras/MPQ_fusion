@@ -42,6 +42,17 @@ CORE_BONES = [
     "clavicle_r", "upperarm_r", "lowerarm_r", "hand_r",
     "thigh_l", "calf_l", "foot_l", "ball_l",
     "thigh_r", "calf_r", "foot_r", "ball_r",
+    # Fingers (user rule: all bones, no curated subsets - 2026-07-05)
+    "thumb_01_l", "thumb_02_l", "thumb_03_l",
+    "index_01_l", "index_02_l", "index_03_l",
+    "middle_01_l", "middle_02_l", "middle_03_l",
+    "ring_01_l", "ring_02_l", "ring_03_l",
+    "pinky_01_l", "pinky_02_l", "pinky_03_l",
+    "thumb_01_r", "thumb_02_r", "thumb_03_r",
+    "index_01_r", "index_02_r", "index_03_r",
+    "middle_01_r", "middle_02_r", "middle_03_r",
+    "ring_01_r", "ring_02_r", "ring_03_r",
+    "pinky_01_r", "pinky_02_r", "pinky_03_r",
 ]
 
 
@@ -123,6 +134,9 @@ def _estimate_floor_z(world, actor):
     return 0.0
 
 
+ROT_BONES = ["hand_l", "hand_r", "lowerarm_l", "lowerarm_r", "upperarm_l", "upperarm_r"]
+
+
 def _sample_actor(state, actor, mesh):
     bones = {}
     for bone in CORE_BONES:
@@ -132,6 +146,18 @@ def _sample_actor(state, actor, mesh):
 
     if "thigh_l" not in bones or "calf_l" not in bones or "foot_l" not in bones:
         return None
+
+    # World rotations for the palm retarget fit (2026-07-06): positions cannot see a
+    # wrist twist; the constant palm-roll bias vs Epic needs orientation data.
+    rots = {}
+    for bone in ROT_BONES:
+        if not mesh.does_socket_exist(bone):
+            continue
+        try:
+            q = mesh.get_socket_transform(bone, unreal.RelativeTransformSpace.RTS_WORLD).rotation
+            rots[bone] = [q.x, q.y, q.z, q.w]
+        except Exception:
+            pass
 
     fwd = actor.get_actor_forward_vector()
     fwd_l = [fwd.x, fwd.y, fwd.z]
@@ -161,6 +187,7 @@ def _sample_actor(state, actor, mesh):
         "foot_r_z": bones["foot_r"][2] - floor_z if "foot_r" in bones else None,
         "ball_r_z": bones["ball_r"][2] - floor_z if "ball_r" in bones else None,
         "bones": bones,
+        "rots": rots,
     }
     for side in ("l", "r"):
         calf, foot, ball = bones.get("calf_" + side), bones.get("foot_" + side), bones.get("ball_" + side)
@@ -212,15 +239,33 @@ def _tick(delta_seconds):
     if state.done:
         return
     try:
-        state.elapsed += delta_seconds
+        # WALL-CLOCK phase timing (2026-07-06): accumulating engine delta_seconds under
+        # heavy load (two MetaHumans + parity solve at ~3fps) runs ~10x slower than real
+        # time because slate deltas are clamped - a "205s" capture silently became ~35min
+        # and downstream watchers timed out. The samples' own time base is already
+        # time.time(); the phase clock now matches it.
+        state.elapsed = time.time() - state.started_at
         if state.phase == "settle":
             if state.elapsed >= SETTLE_SECONDS:
                 state.phase = "capture"
+                state.started_at = time.time()
                 state.elapsed = 0.0
             return
 
-        for label, (actor, mesh) in state.targets.items():
-            sample = _sample_actor(state, actor, mesh)
+        for label, (actor, mesh) in list(state.targets.items()):
+            try:
+                sample = _sample_actor(state, actor, mesh)
+            except Exception:
+                # SELF-HEAL (2026-07-05): the MetaHuman BP rebuilds components mid-session;
+                # a cached mesh handle dying killed whole captures ("ObjectInstance is null").
+                # Re-resolve targets once and retry on the next tick instead of dying.
+                world = _get_pie_world()
+                if world:
+                    refreshed = _find_target_meshes(world)
+                    if label in refreshed:
+                        state.targets[label] = refreshed[label]
+                        _log(f"re-resolved stale mesh for {label}")
+                continue
             if sample is not None:
                 state.samples_by_actor.setdefault(label, []).append(sample)
 
