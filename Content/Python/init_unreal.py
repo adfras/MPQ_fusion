@@ -31,10 +31,17 @@ try:
     _is_automation = any(flag in _cmdline for flag in ("-unattended", "-nullrhi", "runtests"))
     if not _is_automation:
         unreal.SystemLibrary.execute_console_command(None, "mp.MetaHumanActiveProfile Kellan")
+        # Worn A/B rig (2026-07-06): interactive boots run the CANDIDATE settings variant -
+        # the referee-verified stack (heavy model, pelvis HMD anchor, gain-calibrated palm
+        # trims, geometric shrug, rescue divergence, open knee clamps). The variant must be
+        # set BEFORE the trial arms so the layer folds it; the diff vs baseline is logged.
+        # Revert to the accepted baseline with: mp.MediaPipeSettingsVariant baseline +
+        # mp.StartLiveLowerBodyTrial.
+        unreal.SystemLibrary.execute_console_command(None, "mp.MediaPipeSettingsVariant candidate")
         unreal.SystemLibrary.execute_console_command(None, "mp.StartLiveLowerBodyTrial")
         # Heavy pose model as the interactive default (user decision 2026-07-05).
         unreal.SystemLibrary.execute_console_command(None, "mp.AutoQuestWebcamPoseModel heavy")
-        unreal.log("[AutoTrial] layered fusion applied at startup (user default 2026-07-05)")
+        unreal.log("[AutoTrial] layered fusion applied at startup (CANDIDATE variant, worn A/B rig 2026-07-06)")
     else:
         unreal.log("[AutoTrial] automation session detected - raw defaults kept")
 except Exception as error:  # noqa: BLE001 - never break editor startup
