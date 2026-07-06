@@ -816,6 +816,12 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// ~2cm by its 0.25 direction clamp; camera sees 7.7cm, Epic target 11.5 Kellan-scale.
 		// The Quest chain is blind to shrugs - camera is the only source).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeClavicleShrugDirect"), 1),
+		// NOTE (worn test 2026-07-06 night): DriveClavicles stays 0. The legacy clavicle
+		// block inside DriveArmCS is unreachable on the Quest-chain path anyway (zero
+		// ClavicleDebug rows even with the flag forced on), and enabling it would create a
+		// second clavicle writer whenever the camera owns an arm. The shrug now runs on
+		// the fusion path via DriveClavicleShrugCS (torso solve, gated on ShrugDirect,
+		// immune to the profile's periodic DriveClavicles=0 stomp).
 		// Knee clamps opened for real knees-together poses (take-3 referee 2026-07-05).
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeLegAdductionMaxDeg"), 0.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeKneeMedialBowMaxDeg"), 0.0f),

@@ -2285,3 +2285,113 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 		}
 	}
 }
+
+// Clavicle shrug on the FUSION path (2026-07-06 night). The legacy shrug code lives deep
+// inside DriveArmCS's MediaPipe-arm section, which the Quest FullArmChain path never
+// reaches - worn test + zero ClavicleDebug rows proved the block is unreachable in the
+// live fusion regardless of any CVar (and the stable profile stomps DriveClavicles=0
+// every few minutes on top). Shrugging is a TORSO feature: this standalone drive runs in
+// the body solve eval order, BEFORE the arms, so the arm chain solves on the raised
+// shoulders. Camera is the only source that sees shrugs (chain shoulders are synthesized
+// from the HMD; measured 1.5cm vs the camera's 7.7). Asymmetric rest reference: down
+// fast (posture), up over minutes, so held shrugs cannot absorb into their own baseline.
+void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
+{
+	if (CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() == 0 ||
+		!bHasPoseFrame || DeltaSeconds <= 0.0f || !bHasReferencePose)
+	{
+		return;
+	}
+	const float ShrugWeight = FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
+	if (ShrugWeight < KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	FVector LeftHipWorld = FVector::ZeroVector;
+	FVector RightHipWorld = FVector::ZeroVector;
+	if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip) < 0.3f ||
+		GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip) < 0.3f ||
+		!TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) ||
+		!TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
+	{
+		return;
+	}
+	const float HipMidZ = (LeftHipWorld.Z + RightHipWorld.Z) * 0.5f;
+	// Rig scale: posed shoulder-joint span vs the camera's shoulder-landmark span.
+	float RigScale = 1.0f;
+	{
+		FVector Ls = FVector::ZeroVector;
+		FVector Rs = FVector::ZeroVector;
+		if (UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate() &&
+			TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, Ls) &&
+			TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, Rs))
+		{
+			const float SourceWidthCm = FVector::Dist(Ls, Rs);
+			const float RigWidthCm = FVector::Dist(
+				CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation(),
+				CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation());
+			if (SourceWidthCm > 10.0f && RigWidthCm > 10.0f)
+			{
+				RigScale = FMath::Clamp(RigWidthCm / SourceWidthCm, 0.5f, 2.0f);
+			}
+		}
+	}
+	const FVector UpComp = TargetCompTransform.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();
+	if (UpComp.IsNearlyZero())
+	{
+		return;
+	}
+	for (int32 SideIdx = 0; SideIdx < 2; ++SideIdx)
+	{
+		const bool bIsLeft = SideIdx == 0;
+		const FBoneReference& ClavBone = bIsLeft ? ClavicleL : ClavicleR;
+		const FBoneReference& UpperBone = bIsLeft ? UpperArmL : UpperArmR;
+		if (!ClavBone.IsValidToEvaluate() || !UpperBone.IsValidToEvaluate())
+		{
+			continue;
+		}
+		const int32 ShoulderLm = bIsLeft
+			? (int32)EMediaPipePoseLandmark::LeftShoulder
+			: (int32)EMediaPipePoseLandmark::RightShoulder;
+		FVector ShoulderWorld = FVector::ZeroVector;
+		if (GetLandmarkReliability(ShoulderLm) < 0.3f || !TryGetLmWorld(ShoulderLm, ShoulderWorld))
+		{
+			continue;
+		}
+		const float HeightCm = ShoulderWorld.Z - HipMidZ;
+		float& RestRefCm = bIsLeft ? BodyState.ShrugRestRefCmL : BodyState.ShrugRestRefCmR;
+		if (RestRefCm <= -1000.0f)
+		{
+			RestRefCm = HeightCm;
+		}
+		const float RefHalfLife = HeightCm < RestRefCm ? 0.7f : 90.0f;
+		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, HalfLifeToAlpha(RefHalfLife, DeltaSeconds));
+		const float LiftRigCm = FMath::Clamp((HeightCm - RestRefCm) * RigScale, 0.0f, 14.0f);
+		const FVector ClavPosComp = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
+		const FVector UpperPosComp = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
+		const FVector CurDir = (UpperPosComp - ClavPosComp);
+		const float ClavLenCm = FMath::Max(8.0f, CurDir.Size());
+		const float TargetSin = FMath::Clamp(LiftRigCm * ShrugWeight / ClavLenCm, 0.0f, 0.85f);
+		float& SmoothedSin = bIsLeft ? BodyState.ShrugSmoothedSinL : BodyState.ShrugSmoothedSinR;
+		SmoothedSin = FMath::Lerp(SmoothedSin, TargetSin, HalfLifeToAlpha(0.12f, DeltaSeconds));
+		if (SmoothedSin < 0.005f)
+		{
+			continue;
+		}
+		const FVector DesiredDir = (CurDir.GetSafeNormal() * FMath::Sqrt(1.0f - SmoothedSin * SmoothedSin) +
+			UpComp * SmoothedSin).GetSafeNormal();
+		const FQuat Delta = FQuat::FindBetweenNormals(CurDir.GetSafeNormal(), DesiredDir);
+		const FQuat ClavRot = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetRotation();
+		ApplyRotationCS(CSPose, ClavBone, (Delta * ClavRot).GetNormalized());
+		static double LastShrugLogSeconds[2] = {0.0, 0.0};
+		double& LastLog = LastShrugLogSeconds[SideIdx];
+		const double NowSeconds = FPlatformTime::Seconds();
+		if (NowSeconds - LastLog > 1.0)
+		{
+			LastLog = NowSeconds;
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.ClavicleShrugFusion: side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f"),
+				bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale);
+		}
+	}
+}

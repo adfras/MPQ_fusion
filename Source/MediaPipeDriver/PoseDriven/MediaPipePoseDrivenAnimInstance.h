@@ -731,6 +731,10 @@ private:
 	void DriveSpineCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void UpdateLiveNeutralGate(float DeltaSeconds);
 	void DriveHmdHeadCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
+	// Fusion-path clavicle shrug (2026-07-06): torso-level drive, runs before the arms so
+	// the Quest chain solves on raised shoulders; the legacy shrug inside DriveArmCS is
+	// unreachable on the chain path.
+	void DriveClavicleShrugCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveLivePelvisLeanTwistCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveArmCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
 	bool TryApplyQuestWristPositionWorld(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FVector& MediaPipeWristWorld, FVector& InOutWristWorld, FQuestWristMappingTrace* OutTrace = nullptr);

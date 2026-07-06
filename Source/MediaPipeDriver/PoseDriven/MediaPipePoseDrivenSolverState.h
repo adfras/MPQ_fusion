@@ -62,6 +62,13 @@ struct FMediaPipeBodySolverState
 	float BodyYawCameraCorrectionDeg = 0.0f;
 	bool bHasBodyYawCamAnchor = false;
 	float BodyYawCamAnchorDeg = 0.0f;
+	// Fusion-path clavicle shrug (DriveClavicleShrugCS): per-side asymmetric rest reference
+	// (camera shoulder height above hip-mid, cm; sentinel -10000 = unset) and the smoothed
+	// applied lift sine. Keyed store: node members are wiped by CacheBones in live sessions.
+	float ShrugRestRefCmL = -10000.0f;
+	float ShrugRestRefCmR = -10000.0f;
+	float ShrugSmoothedSinL = 0.0f;
+	float ShrugSmoothedSinR = 0.0f;
 	// Body yaw reference: the head-yaw neutral at session start. The slow neutral component of
 	// the HMD yaw is the wearer's body facing; its drift from this initial value turns the
 	// pelvis while the fast remainder stays head glance.
@@ -224,6 +231,10 @@ struct FMediaPipeBodySolverState
 		BodyYawCameraCorrectionDeg = 0.0f;
 		bHasBodyYawCamAnchor = false;
 		BodyYawCamAnchorDeg = 0.0f;
+		ShrugRestRefCmL = -10000.0f;
+		ShrugRestRefCmR = -10000.0f;
+		ShrugSmoothedSinL = 0.0f;
+		ShrugSmoothedSinR = 0.0f;
 		bHasInitialBodyYawNeutral = false;
 		InitialBodyYawNeutralDeg = 0.0f;
 		bBodyTrackingYawLatched = false;

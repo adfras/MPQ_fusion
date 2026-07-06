@@ -2403,6 +2403,9 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	if (bHasQuestOrHmdRuntimeInput)
 	{
 		DriveHmdHeadCS(CSPose, DeltaSeconds);
+		// Fusion-path shrug: torso-level, BEFORE the arms so the Quest chain solves on the
+		// raised shoulders (the legacy shrug inside DriveArmCS never runs on the chain path).
+		DriveClavicleShrugCS(CSPose, DeltaSeconds);
 	}
 	if (bHasPoseFrame)
 	{
