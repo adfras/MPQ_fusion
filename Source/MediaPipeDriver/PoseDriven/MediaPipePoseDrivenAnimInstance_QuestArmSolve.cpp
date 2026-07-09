@@ -926,6 +926,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		0.999f);
 
 	FQuestWristMappingTrace QuestWristTrace;
+	// Pre-fill the owner-independent facts. When body fusion or the chain-direct path owns
+	// this arm the wrist-position mapping never runs and a default trace prints
+	// questTracked=0 runtimeKey=0 - which reads as a dead Quest hand stream (2026-07-06:
+	// a full handoff chased that ghost while the stream was healthy the whole day).
+	QuestWristTrace.RuntimeStateKey = RuntimeStateKey;
+	QuestWristTrace.bQuestTracked = bQuestSideTrackedForArm ? 1 : 0;
 	bool bHasRecentHmdRelativeReachContinuity = false;
 	float PreviousHmdRelativeReachContinuityCm = 0.0f;
 	auto StoreHmdRelativeReachContinuity = [&](const FVector& FinalArmWristWorld)
@@ -3873,6 +3879,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			SolveLogInput.TargetActorName = TargetActorName;
 			SolveLogInput.bIsLeft = bIsLeft;
 			SolveLogInput.QuestArmMode = QuestArmMode;
+			SolveLogInput.ArmOwner =
+				bMediaPipeArmRescue ? TEXT("cameraRescue")
+				: bUseBodyFusionArm ? TEXT("bodyFusion")
+				: bMetaHumanFullArmChainDirectFresh ? TEXT("chainDirect")
+				: bQuestArmUsesWristEndpoint ? TEXT("questWrist")
+				: TEXT("mediaPipe");
 			SolveLogInput.bRequireTrackedForApply = CVarQuestWristRequireTrackedForApply.GetValueOnAnyThread() != 0;
 			SolveLogInput.bArmIKBranchEntered = bArmIKBranchEntered;
 			SolveLogInput.bForceArmIK = CVarQuestWristForceArmIK.GetValueOnAnyThread() != 0;

@@ -54,6 +54,14 @@ public:
 		float LeftDownDropCm,
 		float RightDownDropCm,
 		float TargetReachCm);
+	// Shown in the arm-length HUD slot while the Quest body-tracking chain owns the arms
+	// (the arm-length calibration is structurally idle then and its own HUD would sit at
+	// "Raise both hands / frames=0" forever, which reads as a dead hand stream).
+	static void DisplayArmSourceChainHud(
+		UWorld* World,
+		const FVector& StatusWorld,
+		bool bLeftHandTracked,
+		bool bRightHandTracked);
 	static void EmitManualCalibrationResetRequestedLog(int32 Serial);
 
 	static void EmitPostSolveReports(const FMediaPipeQuestWristPostSolveReportInput& Input);

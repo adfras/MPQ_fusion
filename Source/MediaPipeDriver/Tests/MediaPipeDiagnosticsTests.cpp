@@ -2090,6 +2090,7 @@ bool FMediaPipeQuestWristRollCompactFormatterAutomationTest::RunTest(const FStri
 	SolveLogInput.TargetActorName = FName(TEXT("SolveActor"));
 	SolveLogInput.bIsLeft = true;
 	SolveLogInput.QuestArmMode = 3;
+	SolveLogInput.ArmOwner = TEXT("questWrist");
 	SolveLogInput.bRequireTrackedForApply = true;
 	SolveLogInput.bArmIKBranchEntered = true;
 	SolveLogInput.bForceArmIK = true;
@@ -2102,7 +2103,7 @@ bool FMediaPipeQuestWristRollCompactFormatterAutomationTest::RunTest(const FStri
 	SolveLogInput.WristTrace = &WristTrace;
 	SolveLogInput.HandTrace = &Trace;
 	const FString SolveLog = FMediaPipeQuestWristDiagnosticFormatter::FormatQuestWristSolveLog(SolveLogInput);
-	TestTrue(TEXT("Solve log preserves prefix and arm mode"), SolveLog.StartsWith(TEXT("mp.QuestWristSolve: actor=SolveActor side=L questArmMode=3")));
+	TestTrue(TEXT("Solve log preserves prefix, arm mode, and arm owner"), SolveLog.StartsWith(TEXT("mp.QuestWristSolve: actor=SolveActor side=L questArmMode=3 armOwner=questWrist")));
 	TestTrue(TEXT("Solve log preserves wrist trace fields"), SolveLog.Contains(TEXT("positionApplied=1 requireTrackedApply=1")) && SolveLog.Contains(TEXT("runtimeKey=42")));
 	TestTrue(TEXT("Solve log preserves source elbow hint fields"), SolveLog.Contains(TEXT("questArmSourceElbowHint=1 questArmSourceElbow=")));
 	TestTrue(TEXT("Solve log preserves reach continuity fields"), SolveLog.Contains(TEXT("questArmReachContinuity=1 questArmReachRawCm=31.0 questArmReachPrevCm=53.0 questArmReachMaxStepCm=6.0")));

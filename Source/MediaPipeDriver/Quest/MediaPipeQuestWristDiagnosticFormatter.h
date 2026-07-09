@@ -136,6 +136,10 @@ struct MEDIAPIPEDRIVER_API FMediaPipeQuestWristSolveLogFormatInput
 	FName TargetActorName;
 	bool bIsLeft = false;
 	int32 QuestArmMode = 0;
+	// Which source owned this arm for the frame (bodyFusion/chainDirect/cameraRescue/
+	// questWrist/mediaPipe). The wrist-position fields below are all zeros whenever the
+	// owner is not questWrist - without this field those rows read as a dead hand stream.
+	FString ArmOwner = TEXT("unknown");
 	bool bRequireTrackedForApply = false;
 	bool bArmIKBranchEntered = false;
 	bool bForceArmIK = false;

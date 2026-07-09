@@ -105,6 +105,26 @@ void FMediaPipeQuestWristDebugReporter::DisplayArmLengthCalibrationHud(
 	DrawDebugString(World, StatusWorld, Text, nullptr, Color, 0.10f, true);
 }
 
+void FMediaPipeQuestWristDebugReporter::DisplayArmSourceChainHud(
+	UWorld* World,
+	const FVector& StatusWorld,
+	const bool bLeftHandTracked,
+	const bool bRightHandTracked)
+{
+	const bool bBothTracked = bLeftHandTracked && bRightHandTracked;
+	const FColor Color = bBothTracked ? FColor::Green : FColor::Yellow;
+	const FString Text = FString::Printf(
+		TEXT("QUEST ARM SOURCE: BODY CHAIN\nhands tracked L=%d R=%d\narm-length calibration idle while the chain owns the arms"),
+		bLeftHandTracked ? 1 : 0,
+		bRightHandTracked ? 1 : 0);
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(909121, 0.20f, Color, Text);
+	}
+	DrawDebugString(World, StatusWorld, Text, nullptr, Color, 0.10f, true);
+}
+
 void FMediaPipeQuestWristDebugReporter::EmitManualCalibrationResetRequestedLog(const int32 Serial)
 {
 	UE_LOG(

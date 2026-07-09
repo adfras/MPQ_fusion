@@ -247,6 +247,22 @@ void FMediaPipeQuestRuntimeDebugService::DisplayCalibrationHuds(
 		return;
 	}
 
+	// While the body-tracking chain owns the arms the calibration below cannot advance
+	// (the constrained quest-wrist solve that feeds it is disabled), so its HUD would sit
+	// at "Raise both hands / frames=0" forever. Report the chain + live hand state instead.
+	if (Input.bArmSourceChainActive &&
+		Input.WristState->ArmLengthCalibrationStage != QuestArmLengthCalibrationStage_Accepted)
+	{
+		FMediaPipeQuestWristDebugReporter::DisplayArmSourceChainHud(
+			Input.World,
+			ResolveArmLengthHudStatusWorld(
+				Input.TargetComponent->GetComponentLocation(),
+				Input.HmdPose),
+			Input.QuestHands->bLeftTracked != 0,
+			Input.QuestHands->bRightTracked != 0);
+		return;
+	}
+
 	const double NowSeconds = Input.World->GetTimeSeconds();
 	const bool bShowAccepted =
 		Input.WristState->ArmLengthCalibrationStage != QuestArmLengthCalibrationStage_Accepted ||

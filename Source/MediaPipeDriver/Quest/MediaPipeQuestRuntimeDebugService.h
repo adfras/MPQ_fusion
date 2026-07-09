@@ -36,6 +36,10 @@ struct MEDIAPIPEDRIVER_API FMediaPipeQuestCalibrationHudInput
 	const FQuestHandTrackingSnapshot* QuestHands = nullptr;
 	FMediaPipeQuestHmdPoseSnapshot HmdPose;
 	bool bArmLengthCalibrationHudOwner = false;
+	// True while the Quest body-tracking full arm chain owns the arms: the arm-length
+	// calibration is structurally idle then, so the HUD reports the chain + live hand
+	// tracked state instead of "Raise both hands / frames=0" forever.
+	bool bArmSourceChainActive = false;
 	bool bHasRefArmL = false;
 	bool bHasRefArmR = false;
 	float RefUpperLenCompL = 0.0f;

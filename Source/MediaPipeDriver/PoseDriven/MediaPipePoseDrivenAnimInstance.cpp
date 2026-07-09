@@ -681,6 +681,7 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	QuestCalibrationHudInput.WristState = &QuestRuntimeWristState;
 	QuestCalibrationHudInput.bArmLengthCalibrationHudOwner =
 		TargetMetaHumanProfile.bIsMetaHuman && TargetMetaHumanProfile.bIsActiveProfile;
+	QuestCalibrationHudInput.bArmSourceChainActive = FullArmChain.bActive != 0;
 	QuestCalibrationHudInput.bHasRefArmL = bHasRefArmL;
 	QuestCalibrationHudInput.bHasRefArmR = bHasRefArmR;
 	QuestCalibrationHudInput.RefUpperLenCompL = RefUpperLenCompL;

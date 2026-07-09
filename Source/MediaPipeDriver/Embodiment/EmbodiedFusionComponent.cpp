@@ -660,6 +660,7 @@ void UEmbodiedFusionComponent::DisplayQuestCalibrationHuds_GameThread(
 	QuestCalibrationHudInput.HmdPose = SourceObservations.HmdPose;
 	QuestCalibrationHudInput.bArmLengthCalibrationHudOwner =
 		Input.bArmLengthCalibrationHudOwner;
+	QuestCalibrationHudInput.bArmSourceChainActive = Input.bArmSourceChainActive;
 	QuestCalibrationHudInput.bHasRefArmL = Input.bHasRefArmL;
 	QuestCalibrationHudInput.bHasRefArmR = Input.bHasRefArmR;
 	QuestCalibrationHudInput.RefUpperLenCompL = Input.RefUpperLenCompL;

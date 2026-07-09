@@ -63,6 +63,7 @@ struct MEDIAPIPEDRIVER_API FEmbodiedFusionQuestCalibrationDebugInput
 	const USceneComponent* TargetComponent = nullptr;
 	const FQuestWristRuntimeState* WristState = nullptr;
 	bool bArmLengthCalibrationHudOwner = false;
+	bool bArmSourceChainActive = false;
 	bool bHasRefArmL = false;
 	bool bHasRefArmR = false;
 	float RefUpperLenCompL = 0.0f;
