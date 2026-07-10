@@ -3,6 +3,7 @@
 #include "MediaPipeArmGuardPolicy.h"
 #include "MediaPipeArmTwistSolver.h"
 #include "MediaPipeBodyDiagnostics.h"
+#include "MediaPipeClavicleShrugCorrector.h"
 #include "MediaPipeHeadingCorrector.h"
 #include "MediaPipePelvisAnchorCorrector.h"
 #include "MediaPipeBodyFusionDebugFormatter.h"
@@ -2211,153 +2212,56 @@ void FAnimNode_MediaPipePoseDriven::DriveSpineCS(FCSPose<FCompactPose>& CSPose, 
 // fast (posture), up over minutes, so held shrugs cannot absorb into their own baseline.
 void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds)
 {
-	if (CVarMediaPipeClavicleShrugDirect.GetValueOnAnyThread() == 0 || DeltaSeconds <= 0.0f)
+	// Thin pose-binding adapter (refactor/correctors Phase 4): the entire shrug drive -
+	// quiet-gated rest reference, soft-knee deadband, rig scale, sin smoothing, gate and
+	// fusion rows - lives verbatim in ApplyMediaPipeClavicleShrug
+	// (Correctors/MediaPipeClavicleShrugCorrector). This adapter only binds landmarks
+	// (pure reads, guarded on bHasPoseFrame exactly as the original gate order implied)
+	// and the five pose touches.
+	FMediaPipeClavicleShrugCorrectorInputs ShrugIn;
+	ShrugIn.DeltaSeconds = DeltaSeconds;
+	ShrugIn.bHasPoseFrame = bHasPoseFrame;
+	ShrugIn.bHasReferencePose = bHasReferencePose;
+	ShrugIn.TargetActorName = TargetActorName;
+	ShrugIn.TargetCompTransform = TargetCompTransform;
+	if (bHasPoseFrame)
 	{
-		return;
+		ShrugIn.LeftHipReliability = GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip);
+		ShrugIn.RightHipReliability = GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip);
+		ShrugIn.bHasLeftHipWorld = TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, ShrugIn.LeftHipWorld);
+		ShrugIn.bHasRightHipWorld = TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, ShrugIn.RightHipWorld);
+		ShrugIn.LeftShoulderReliability = GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftShoulder);
+		ShrugIn.RightShoulderReliability = GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightShoulder);
+		ShrugIn.bHasLeftShoulderWorld = TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, ShrugIn.LeftShoulderWorld);
+		ShrugIn.bHasRightShoulderWorld = TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, ShrugIn.RightShoulderWorld);
 	}
-	// Gate trace (2026-07-06): a failing gate and a zero signal were indistinguishable -
-	// the mirror Kellan produced no lift and no rows while Manny shrugged. Every early
-	// exit now names itself. Throttle is PER INSTANCE (2026-07-09): the old global static
-	// let whichever actor evaluated first starve the others' rows (Kellan logged 10 rows to
-	// Manny's 220 in the worn session that judged Kellan).
-	auto ShrugGateLog = [&](const TCHAR* Gate, const float A = 0.0f, const float B = 0.0f)
+	auto GetClavicleTranslationCS = [&CSPose, this](const bool bIsLeft) -> FVector
 	{
-		const double NowS = FPlatformTime::Seconds();
-		if (NowS - BodyState.ShrugGateLastLogTimeSeconds > 0.5)
-		{
-			BodyState.ShrugGateLastLogTimeSeconds = NowS;
-			UE_LOG(LogMediaPipePose, Log, TEXT("mp.ShrugGate: actor=%s gate=%s a=%.2f b=%.2f"),
-				*TargetActorName.ToString(), Gate, A, B);
-		}
+		const FBoneReference& Bone = bIsLeft ? ClavicleL : ClavicleR;
+		return CSPose.GetComponentSpaceTransform(Bone.CachedCompactPoseIndex).GetTranslation();
 	};
-	if (!bHasPoseFrame || !bHasReferencePose)
+	auto GetUpperArmTranslationCS = [&CSPose, this](const bool bIsLeft) -> FVector
 	{
-		ShrugGateLog(TEXT("frameOrRefPose"), bHasPoseFrame ? 1.0f : 0.0f, bHasReferencePose ? 1.0f : 0.0f);
-		return;
-	}
-	const float ShrugWeight = FMath::Clamp(CVarMediaPipeClavicleShrugWeight.GetValueOnAnyThread(), 0.0f, 2.0f);
-	if (ShrugWeight < KINDA_SMALL_NUMBER)
+		const FBoneReference& Bone = bIsLeft ? UpperArmL : UpperArmR;
+		return CSPose.GetComponentSpaceTransform(Bone.CachedCompactPoseIndex).GetTranslation();
+	};
+	auto GetClavicleRotationCS = [&CSPose, this](const bool bIsLeft) -> FQuat
 	{
-		return;
-	}
-	FVector LeftHipWorld = FVector::ZeroVector;
-	FVector RightHipWorld = FVector::ZeroVector;
-	if (GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip) < 0.3f ||
-		GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip) < 0.3f ||
-		!TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftHip, LeftHipWorld) ||
-		!TryGetLmWorld((int32)EMediaPipePoseLandmark::RightHip, RightHipWorld))
+		const FBoneReference& Bone = bIsLeft ? ClavicleL : ClavicleR;
+		return CSPose.GetComponentSpaceTransform(Bone.CachedCompactPoseIndex).GetRotation();
+	};
+	auto ApplyClavicleRotation = [&CSPose, this](const bool bIsLeft, const FQuat& NewRotCS)
 	{
-		ShrugGateLog(TEXT("hips"),
-			GetLandmarkReliability((int32)EMediaPipePoseLandmark::LeftHip),
-			GetLandmarkReliability((int32)EMediaPipePoseLandmark::RightHip));
-		return;
-	}
-	const float HipMidZ = (LeftHipWorld.Z + RightHipWorld.Z) * 0.5f;
-	// Rig scale: posed shoulder-joint span vs the camera's shoulder-landmark span.
-	float RigScale = 1.0f;
-	{
-		FVector Ls = FVector::ZeroVector;
-		FVector Rs = FVector::ZeroVector;
-		if (UpperArmL.IsValidToEvaluate() && UpperArmR.IsValidToEvaluate() &&
-			TryGetLmWorld((int32)EMediaPipePoseLandmark::LeftShoulder, Ls) &&
-			TryGetLmWorld((int32)EMediaPipePoseLandmark::RightShoulder, Rs))
-		{
-			const float SourceWidthCm = FVector::Dist(Ls, Rs);
-			const float RigWidthCm = FVector::Dist(
-				CSPose.GetComponentSpaceTransform(UpperArmL.CachedCompactPoseIndex).GetTranslation(),
-				CSPose.GetComponentSpaceTransform(UpperArmR.CachedCompactPoseIndex).GetTranslation());
-			if (SourceWidthCm > 10.0f && RigWidthCm > 10.0f)
-			{
-				RigScale = FMath::Clamp(RigWidthCm / SourceWidthCm, 0.5f, 2.0f);
-			}
-		}
-	}
-	const FVector UpComp = TargetCompTransform.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();
-	if (UpComp.IsNearlyZero())
-	{
-		return;
-	}
-	for (int32 SideIdx = 0; SideIdx < 2; ++SideIdx)
-	{
-		const bool bIsLeft = SideIdx == 0;
-		const FBoneReference& ClavBone = bIsLeft ? ClavicleL : ClavicleR;
-		const FBoneReference& UpperBone = bIsLeft ? UpperArmL : UpperArmR;
-		if (!ClavBone.IsValidToEvaluate() || !UpperBone.IsValidToEvaluate())
-		{
-			ShrugGateLog(bIsLeft ? TEXT("clavBoneL") : TEXT("clavBoneR"),
-				ClavBone.IsValidToEvaluate() ? 1.0f : 0.0f, UpperBone.IsValidToEvaluate() ? 1.0f : 0.0f);
-			continue;
-		}
-		const int32 ShoulderLm = bIsLeft
-			? (int32)EMediaPipePoseLandmark::LeftShoulder
-			: (int32)EMediaPipePoseLandmark::RightShoulder;
-		FVector ShoulderWorld = FVector::ZeroVector;
-		if (GetLandmarkReliability(ShoulderLm) < 0.3f || !TryGetLmWorld(ShoulderLm, ShoulderWorld))
-		{
-			ShrugGateLog(bIsLeft ? TEXT("shoulderL") : TEXT("shoulderR"), GetLandmarkReliability(ShoulderLm));
-			continue;
-		}
-		const float HeightCm = ShoulderWorld.Z - HipMidZ;
-		float& RestRefCm = bIsLeft ? BodyState.ShrugRestRefCmL : BodyState.ShrugRestRefCmR;
-		if (RestRefCm <= -1000.0f)
-		{
-			RestRefCm = HeightCm;
-		}
-		// Live shoulder heights flicker +-8cm/s (worn test 2026-07-06: the 0.7s down-adapt
-		// chased every noise dip and the lift flickered instead of holding). 2.5s down /
-		// 90s up stays posture-aware but noise-proof.
-		// QUIET-GATED up-adapt (2026-07-09 worn forensics): even at 90s, three minutes of
-		// shrug reps and arm raises walked the right rest reference 45.9 -> 47.2cm - the
-		// baseline learned from the very lifts it must measure, eating ~3cm of every late
-		// shrug. The baseline may only learn upward from samples near rest (<=2.5cm above);
-		// active lifts barely count (600s), so posture shifts still converge over minutes.
-		const float ElevationCm = HeightCm - RestRefCm;
-		const float RefHalfLife = ElevationCm < 0.0f ? 2.5f : (ElevationCm <= 2.5f ? 90.0f : 600.0f);
-		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, HalfLifeToAlpha(RefHalfLife, DeltaSeconds));
-		// SOFT-KNEE deadband (2026-07-09): the old hard subtraction (- 1.5cm) removed 1.5cm
-		// from every shrug on top of the rest-ref loss - his proven 7.7cm camera shrug applied
-		// only 3.5-5.5cm live. The knee still zeroes resting jitter (output is 0 at or below
-		// the deadband) but restores the full amplitude on real shrugs: at 3cm over rest it
-		// passes 2.4cm, at 7.7cm it passes 7.6cm.
-		const float ShrugDeadbandCm = 1.5f;
-		const float OverRestCm = HeightCm - RestRefCm;
-		const float KneeLiftCm = OverRestCm <= ShrugDeadbandCm
-			? 0.0f
-			: OverRestCm - ShrugDeadbandCm * FMath::Exp(-(OverRestCm - ShrugDeadbandCm) / ShrugDeadbandCm);
-		const float LiftRigCm = FMath::Clamp(KneeLiftCm * RigScale, 0.0f, 14.0f);
-		const FVector ClavPosComp = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
-		const FVector UpperPosComp = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
-		const FVector CurDir = (UpperPosComp - ClavPosComp);
-		const float ClavLenCm = FMath::Max(8.0f, CurDir.Size());
-		const float TargetSin = FMath::Clamp(LiftRigCm * ShrugWeight / ClavLenCm, 0.0f, 0.85f);
-		float& SmoothedSin = bIsLeft ? BodyState.ShrugSmoothedSinL : BodyState.ShrugSmoothedSinR;
-		SmoothedSin = FMath::Lerp(SmoothedSin, TargetSin, HalfLifeToAlpha(0.12f, DeltaSeconds));
-		ShrugGateLog(bIsLeft ? TEXT("computeL") : TEXT("computeR"), LiftRigCm, SmoothedSin);
-		if (SmoothedSin < 0.005f)
-		{
-			continue;
-		}
-		const FVector DesiredDir = (CurDir.GetSafeNormal() * FMath::Sqrt(1.0f - SmoothedSin * SmoothedSin) +
-			UpComp * SmoothedSin).GetSafeNormal();
-		const FQuat Delta = FQuat::FindBetweenNormals(CurDir.GetSafeNormal(), DesiredDir);
-		const FQuat ClavRot = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetRotation();
-		ApplyRotationCS(CSPose, ClavBone, (Delta * ClavRot).GetNormalized());
-		// Per-instance throttle (2026-07-09): the old function-static pair was shared across
-		// actors, so the acceptance actor's rows were starved by whichever evaluated first.
-		double& LastLog = bIsLeft ? BodyState.ShrugFusionLastLogTimeSecondsL : BodyState.ShrugFusionLastLogTimeSecondsR;
-		const double NowSeconds = FPlatformTime::Seconds();
-		if (NowSeconds - LastLog > 1.0)
-		{
-			LastLog = NowSeconds;
-			// appliedCm = rig-side upper-arm rise actually produced by this frame's clavicle
-			// write (post-apply joint height vs the pre-apply CurDir geometry), the number the
-			// mirror verdict is judged on.
-			const FVector UpperAfterComp =
-				CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
-			const float AppliedLiftCm = FVector::DotProduct(UpperAfterComp - UpperPosComp, UpComp);
-			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f appliedCm=%.1f"),
-				*TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale, AppliedLiftCm);
-		}
-	}
+		ApplyRotationCS(CSPose, bIsLeft ? ClavicleL : ClavicleR, NewRotCS);
+	};
+	const FMediaPipeClavicleShrugPoseAccess PoseAccess{
+		ClavicleL.IsValidToEvaluate(),
+		ClavicleR.IsValidToEvaluate(),
+		UpperArmL.IsValidToEvaluate(),
+		UpperArmR.IsValidToEvaluate(),
+		GetClavicleTranslationCS,
+		GetUpperArmTranslationCS,
+		GetClavicleRotationCS,
+		ApplyClavicleRotation};
+	ApplyMediaPipeClavicleShrug(ShrugIn, PoseAccess, BodyState);
 }
