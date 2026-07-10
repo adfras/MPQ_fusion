@@ -702,3 +702,35 @@ Reachability map (verified 2026-07-10 at commit 89627a2):
 promotes the candidate's hand-loss behavior into the baseline trial list and retires those
 two entries themselves. At that point the static proof must be re-run line by line
 (defaults, every settings layer, every test, every reader) before any line is deleted.
+
+### 9.1 Corrector refactor execution log (branch refactor/correctors, tag refactor-base = fe88b84)
+
+Gates per phase: GATE-BUILD (editor closed, bounded Build.bat); GATE-AUTO
+(`Automation RunTests MediaPipe`, count may only grow, 157 at Phase 0); GATE-PY; and the
+GOLDEN gate — each extraction was functionized IN PLACE first, a characterization battery
+captured a hex-exact dump of every state field and output, the dump was committed to
+`Docs/refactor_baseline/goldens/*.golden`, and only then did the body move to its
+`Correctors/` TU, where the test must reproduce the dump BYTE for byte on every run. The
+goldens are this refactor's operationalization of "replay outputs byte-identical": the
+project has no deterministic full-solve replay artifact (the June GATE-PIE is
+tolerance-based leg metrics), and the extracted live paths are dormant under raw test
+defaults — the goldens are the instrument that actually pins them.
+
+| Phase | Commit | Tests | What moved |
+| ----- | ------ | ----- | ---------- |
+| 0 | 887255f | 157/157 | Baseline: worn-session tracer fingerprint (5 row families) + test log into `Docs/refactor_baseline/`; tag `refactor-base`. |
+| 1 | 1ca84a7 | 158/158 | `Correctors/MediaPipeBoundedCorrector.h` — the shared contract (config + keyed state; exact-formula mirrors incl. a bit-identical copy of the node-private `HalfLifeToAlpha`); zero call sites; state unit test. |
+| 2 | 7c27c0e | 159/159 | Camera arm-direction corrector → `Correctors/MediaPipeArmDirectionCorrector` (hysteresis vote, 3s learner, 20° clamp, quiet gate, motion fade, `mp.ArmDirCorrection` row). 1,751-step golden. |
+| 3 | 259cc7b | 161/161 | Heading trim → `Correctors/MediaPipeHeadingCorrector`; pelvis anchor → `Correctors/MediaPipePelvisAnchorCorrector`. State stays in `FMediaPipeBodySolverState` (its live survival is field-proven and its Reset() is test-asserted; the keyed-store rule targets what CacheBones wipes, i.e. arm solver state). |
+| 4 | 7e8406f | 162/162 | Clavicle shrug drive → `Correctors/MediaPipeClavicleShrugCorrector` via a narrow pose-access seam (per-bone validity + transform callbacks); `DriveClavicleShrugCS` is a thin adapter. The 8 Stage2 shrug tests pass unmodified and stay with `FMediaPipeStage2ShoulderEvidence`, the unit they actually test. 2,052-step golden. |
+| 5 | dc05858 | 163/163 | Quest-reach extender (incl. two-bone elbow re-solve and dormant-path reset) → `Correctors/MediaPipeReachExtender`. 1,142-step golden. |
+| 6 | 89627a2 | 164/164 | Arm loss override → `Correctors/MediaPipeArmLossOverride` with Trigger/Hold/Release/Update/Reset. Deliberately NOT the corrector contract (it seizes ownership; it does not learn/bound/fade). 500-step golden over the trigger clause matrix and both dwells. |
+| 7 | 96be711 | 164/164 (untouched) | DEFERRED, docs only — see section 9 above. Nothing deleted; no CVars retired. |
+| 8 | (this commit) | 164/164 | Orchestrator socket-map annotation on `DriveArmCS` (comment-only; the camera-hand baseline block stays frozen in place per the Phase-7 deferral), this execution log, docs index. Awaiting the single worn acceptance session. |
+
+Behavior-preservation instruments, in force for every phase: goldens byte-identical
+across the in-place→moved boundary; test count never shrank; no anim-node members added;
+no value tuned; every hoist pure and documented (wall clocks, landmark reads); log rows
+character-identical. Live equivalence is sealed by the Phase-8 worn acceptance session
+(~3 min on the Kellan mirror: raise + extend arms, fists, shrug, hands behind back,
+overhead) judged against `Docs/refactor_baseline/`.

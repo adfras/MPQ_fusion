@@ -35,6 +35,14 @@ historical unless this index marks them active.
 
 - `REFACTOR_PLAN.md`: the phased structural refactor and cleanup plan (gates, evidence,
   execution log). Read this before moving, deleting, or restructuring anything.
+- `refactor_baseline/`: the corrector-refactor reference (2026-07-10, branch
+  `refactor/correctors`): worn-session tracer fingerprint, the Phase-0 157-test log, and
+  the `goldens/` characterization dumps that byte-lock every extracted corrector. See
+  `REFACTOR_PLAN.md` section 9 for the execution log and the Phase-7 deferral record.
+- `RESOLUTION_2026-07-10_ARM_CHURN_AND_STICKY_WRIST.md` (with
+  `RESOLUTION_2026-07-09_SHRUG_AND_WRIST_SNAP.md`): the six-round arm-quality arc the
+  correctors implement - read these to understand WHY each corrector has its bound, quiet
+  gate, motion fade, and tracer.
 - `CVAR_REFERENCE.md`: GENERATED inventory of every `mp.*` console variable (default,
   readers, writers, multi-writer conflict flags). Regenerate with
   `python Tools/GenerateCVarReference.py` after adding/removing CVars or writers.

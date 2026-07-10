@@ -147,6 +147,21 @@ void FillSyntheticQuestHandSideFromMediaPipe(
 }
 } // namespace
 
+// ORCHESTRATOR MAP (refactor/correctors Phase 8; the call sequence below is the frozen
+// application order - moving a socket changes behavior and is out of bounds):
+//   1. BUILD      - source resolution, tracked-recency bookkeeping, chain/fused/landmark arm
+//                   candidates, MediaPipe source snapshot.
+//   2. OVERRIDE   - FMediaPipeArmLossOverride (Correctors/): trigger/hold/release latch, then
+//                   the source demotion effect applied here.
+//   3. SOCKETS    - in the existing order on the chain-direct path:
+//                   ApplyMediaPipeArmDirectionCorrection (Correctors/), then
+//                   ApplyMediaPipeReachExtension (Correctors/).
+//   4. GUARD      - the torso-capsule guard (inline below; not a phase target).
+//   5. TRACER     - mp.ArmJumpTrace stage attribution (inline below; instruments the sockets).
+//   6. ASSEMBLY   - wrist solve, hand rotation dispatch, fingers. The camera-hand ownership
+//                   block (~lines 4040-4870, gated on mp.MediaPipeHandRotationOnQuestLoss /
+//                   mp.MediaPipeFingersOnQuestLoss) is BASELINE-LIVE and deliberately frozen
+//                   in place - see Docs/REFACTOR_PLAN.md section 9 (Phase 7 deferred).
 void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds)
 {
 	if (!bDriveArms)
