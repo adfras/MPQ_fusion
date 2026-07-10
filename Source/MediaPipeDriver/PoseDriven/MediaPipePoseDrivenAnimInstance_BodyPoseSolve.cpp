@@ -2303,14 +2303,15 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 	}
 	// Gate trace (2026-07-06): a failing gate and a zero signal were indistinguishable -
 	// the mirror Kellan produced no lift and no rows while Manny shrugged. Every early
-	// exit now names itself (0.5s global throttle, all actors cycle through within ~2s).
-	static double GShrugGateLogSeconds = 0.0;
+	// exit now names itself. Throttle is PER INSTANCE (2026-07-09): the old global static
+	// let whichever actor evaluated first starve the others' rows (Kellan logged 10 rows to
+	// Manny's 220 in the worn session that judged Kellan).
 	auto ShrugGateLog = [&](const TCHAR* Gate, const float A = 0.0f, const float B = 0.0f)
 	{
 		const double NowS = FPlatformTime::Seconds();
-		if (NowS - GShrugGateLogSeconds > 0.5)
+		if (NowS - BodyState.ShrugGateLastLogTimeSeconds > 0.5)
 		{
-			GShrugGateLogSeconds = NowS;
+			BodyState.ShrugGateLastLogTimeSeconds = NowS;
 			UE_LOG(LogMediaPipePose, Log, TEXT("mp.ShrugGate: actor=%s gate=%s a=%.2f b=%.2f"),
 				*TargetActorName.ToString(), Gate, A, B);
 		}
@@ -2390,10 +2391,26 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		}
 		// Live shoulder heights flicker +-8cm/s (worn test 2026-07-06: the 0.7s down-adapt
 		// chased every noise dip and the lift flickered instead of holding). 2.5s down /
-		// 90s up stays posture-aware but noise-proof; the 1.5cm deadband eats residual jitter.
-		const float RefHalfLife = HeightCm < RestRefCm ? 2.5f : 90.0f;
+		// 90s up stays posture-aware but noise-proof.
+		// QUIET-GATED up-adapt (2026-07-09 worn forensics): even at 90s, three minutes of
+		// shrug reps and arm raises walked the right rest reference 45.9 -> 47.2cm - the
+		// baseline learned from the very lifts it must measure, eating ~3cm of every late
+		// shrug. The baseline may only learn upward from samples near rest (<=2.5cm above);
+		// active lifts barely count (600s), so posture shifts still converge over minutes.
+		const float ElevationCm = HeightCm - RestRefCm;
+		const float RefHalfLife = ElevationCm < 0.0f ? 2.5f : (ElevationCm <= 2.5f ? 90.0f : 600.0f);
 		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, HalfLifeToAlpha(RefHalfLife, DeltaSeconds));
-		const float LiftRigCm = FMath::Clamp((HeightCm - RestRefCm - 1.5f) * RigScale, 0.0f, 14.0f);
+		// SOFT-KNEE deadband (2026-07-09): the old hard subtraction (- 1.5cm) removed 1.5cm
+		// from every shrug on top of the rest-ref loss - his proven 7.7cm camera shrug applied
+		// only 3.5-5.5cm live. The knee still zeroes resting jitter (output is 0 at or below
+		// the deadband) but restores the full amplitude on real shrugs: at 3cm over rest it
+		// passes 2.4cm, at 7.7cm it passes 7.6cm.
+		const float ShrugDeadbandCm = 1.5f;
+		const float OverRestCm = HeightCm - RestRefCm;
+		const float KneeLiftCm = OverRestCm <= ShrugDeadbandCm
+			? 0.0f
+			: OverRestCm - ShrugDeadbandCm * FMath::Exp(-(OverRestCm - ShrugDeadbandCm) / ShrugDeadbandCm);
+		const float LiftRigCm = FMath::Clamp(KneeLiftCm * RigScale, 0.0f, 14.0f);
 		const FVector ClavPosComp = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetTranslation();
 		const FVector UpperPosComp = CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
 		const FVector CurDir = (UpperPosComp - ClavPosComp);
@@ -2411,15 +2428,22 @@ void FAnimNode_MediaPipePoseDriven::DriveClavicleShrugCS(FCSPose<FCompactPose>& 
 		const FQuat Delta = FQuat::FindBetweenNormals(CurDir.GetSafeNormal(), DesiredDir);
 		const FQuat ClavRot = CSPose.GetComponentSpaceTransform(ClavBone.CachedCompactPoseIndex).GetRotation();
 		ApplyRotationCS(CSPose, ClavBone, (Delta * ClavRot).GetNormalized());
-		static double LastShrugLogSeconds[2] = {0.0, 0.0};
-		double& LastLog = LastShrugLogSeconds[SideIdx];
+		// Per-instance throttle (2026-07-09): the old function-static pair was shared across
+		// actors, so the acceptance actor's rows were starved by whichever evaluated first.
+		double& LastLog = bIsLeft ? BodyState.ShrugFusionLastLogTimeSecondsL : BodyState.ShrugFusionLastLogTimeSecondsR;
 		const double NowSeconds = FPlatformTime::Seconds();
 		if (NowSeconds - LastLog > 1.0)
 		{
 			LastLog = NowSeconds;
+			// appliedCm = rig-side upper-arm rise actually produced by this frame's clavicle
+			// write (post-apply joint height vs the pre-apply CurDir geometry), the number the
+			// mirror verdict is judged on.
+			const FVector UpperAfterComp =
+				CSPose.GetComponentSpaceTransform(UpperBone.CachedCompactPoseIndex).GetTranslation();
+			const float AppliedLiftCm = FVector::DotProduct(UpperAfterComp - UpperPosComp, UpComp);
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f"),
-				*TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale);
+				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f appliedCm=%.1f"),
+				*TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale, AppliedLiftCm);
 		}
 	}
 }

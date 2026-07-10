@@ -39,6 +39,20 @@ struct FQuestWristSideRuntimeState
 	FVector RotationSemanticRollCalibrationUpComp = FVector::ZeroVector;
 	bool bHasRotationSemanticRollLastTwist = false;
 	float RotationSemanticRollLastTwistDeg = 0.0f;
+	// Palm-roll measurement-source hysteresis + continuity (2026-07-09 worn forensics): the
+	// projected-basis roll and the swing-corrected fallback disagree by 20-130deg during side
+	// raises, and the projection score oscillates around the threshold, so per-frame source
+	// switching snapped the right wrist 38+ times in one session (wristPalmFallback flapping,
+	// wristPalmHeld never engaged). The active source may only change after a dwell (short
+	// dips HOLD the last roll instead), and every committed switch rebases the new source
+	// through a continuity bias so the output roll never steps. The bias decays to zero only
+	// while the calibrated primary is measuring (the fallback's absolute value is untrusted -
+	// it contributes relative motion only).
+	uint8 PalmRollActiveSource = 0; // 0=none/held, 1=projected primary, 2=swing-corrected fallback
+	float PalmRollPrimaryOkSeconds = 0.0f;
+	float PalmRollPrimaryBadSeconds = 0.0f;
+	float PalmRollContinuityBiasDeg = 0.0f;
+	double PalmRollSourceLastUpdateTimeSeconds = -1.0;
 	uint8 RotationCalibrationState = QuestWristCalibrationState_WaitingForStablePose;
 	uint8 RotationCalibrationRejectReason = QuestWristCalibrationReject_WaitingForStablePose;
 	int32 RotationCalibrationStableFrameCount = 0;
@@ -118,6 +132,14 @@ struct FQuestWristSideRuntimeState
 	float ArmRescueEnterSeconds = 0.0f;
 	float ArmRescueExitSeconds = 0.0f;
 	double ArmRescueLastUpdateTimeSeconds = -1.0;
+	// Wall-clock time this side's Quest hand tracked flag was last TRUE (2026-07-09): the
+	// tracked flag flickers sub-second at the FOV edge, and a single dropped frame let the
+	// rescue's untracked clause and the camera-hand latch seize a hand mid side-raise
+	// (armOwner=cameraRescue + handRotApplied=0 at 07:30:39, wrist snap). Quest stays the
+	// hand authority through flickers shorter than mp.QuestWristLostTrackingGraceSeconds;
+	// the divergence trigger (direct camera evidence the Quest is WRONG) bypasses the grace.
+	// Like the rescue latch, deliberately NOT cleared by Reset(): recency self-heals.
+	double LastQuestSideTrackedTimeSeconds = -1.0;
 	// Camera elbow-swivel correction (mp.MediaPipeArmElbowSwivelFromCamera): smoothed azimuth
 	// delta between the Quest chain's elbow and the camera's elbow about the shoulder->wrist
 	// chord. The Quest chain synthesizes elbows flared OUTWARD (+14cm off-chord measured vs

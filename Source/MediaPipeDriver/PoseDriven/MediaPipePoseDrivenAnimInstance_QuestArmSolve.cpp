@@ -252,6 +252,21 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		UE_LOG(LogMediaPipePose, Log, TEXT("%s"), *FormatMediaPipeMetaHumanFullArmChainLog(FullArmChainLogInput));
 	};
 	const bool bQuestSideTrackedForArm = bQuestHandTrackingEnabled && IsQuestHandSideTracked(QuestHands, bIsLeft);
+	// Tracked-flag flicker grace (2026-07-09): the flag drops for sub-second bursts at the
+	// FOV edge during side raises; a single dropped frame must not hand the arm or the hand
+	// rotation to the camera. Recency lives in the keyed state (RuntimeStateKey==0 skips the
+	// write - pre-PreUpdate evaluations must not touch the shared key-0 bucket).
+	const double QuestTrackedNowSeconds = FPlatformTime::Seconds();
+	if (bQuestSideTrackedForArm && RuntimeStateKey != 0)
+	{
+		QuestWristSideState.LastQuestSideTrackedTimeSeconds = QuestTrackedNowSeconds;
+	}
+	const float QuestTrackedGraceSeconds = FMath::Max(0.0f, CVarQuestWristLostTrackingGraceSeconds.GetValueOnAnyThread());
+	const bool bQuestSideRecentlyTrackedForArm =
+		bQuestSideTrackedForArm ||
+		(RuntimeStateKey != 0 &&
+			QuestWristSideState.LastQuestSideTrackedTimeSeconds >= 0.0 &&
+			QuestTrackedNowSeconds - QuestWristSideState.LastQuestSideTrackedTimeSeconds <= QuestTrackedGraceSeconds);
 	const bool bQuestSideUsableForArm = bQuestHandTrackingEnabled && IsQuestHandSideUsableForWrist(QuestHands, bIsLeft);
 	const int32 QuestArmMode = FMath::Clamp(CVarQuestArmMode.GetValueOnAnyThread(), 0, 3);
 	const bool bQuestArmFallbackAllowed =
@@ -361,14 +376,17 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		const bool bRescueDivergenceTriggered =
 			(bMetaHumanFullArmChainFresh || bHasRecentTrackedQuestWristForDivergence) &&
 			RescueQuestDivergenceCm >= CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread();
+		// Flicker grace (2026-07-09): the untracked clauses coast through sub-second tracked-flag
+		// drops (Quest stays the hand authority); the divergence trigger keeps bypassing the
+		// grace because it is direct camera evidence the Quest pose is WRONG, not merely gone.
 		const bool bQuestArmWrongOrLost =
-			(!bQuestSideTrackedForArm && !bChainAboveVeto) || bRescueDivergenceTriggered;
+			(!bQuestSideRecentlyTrackedForArm && !bChainAboveVeto) || bRescueDivergenceTriggered;
 		// USER RULE (2026-07-02): never hold an arm against the camera. When the Quest side is
 		// FULLY gone (hand untracked AND chain stale), any camera detection takes the arm - no
 		// reliability floor, no overhead-region requirement (measured: overhead MediaPipe
 		// reliability drops to 0.2-0.4 at the top of frame, well under the old 0.5 floor, and
 		// the rescue refused arms it could plainly see).
-		const bool bQuestArmFullyGone = !bQuestSideTrackedForArm && !bMetaHumanFullArmChainFresh;
+		const bool bQuestArmFullyGone = !bQuestSideRecentlyTrackedForArm && !bMetaHumanFullArmChainFresh;
 		// A bias-free (shoulder-relative) divergence against a FRESH chain is direct evidence the
 		// chain is wrong wherever the arm is - the measured take-2 dropout held the raised arm at
 		// SHOULDER height, which the overhead gate refused. Untracked-clause and legacy absolute
@@ -3786,7 +3804,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			? FMath::Clamp(static_cast<float>(OwnershipNowSeconds - QuestWristSideState.CameraHandOwnershipLastUpdateTimeSeconds), 0.0f, 0.1f)
 			: 0.0f;
 		QuestWristSideState.CameraHandOwnershipLastUpdateTimeSeconds = OwnershipNowSeconds;
-		if (QuestWristSideState.bArmRescueActive || !bQuestSideTrackedForArm)
+		// Flicker grace (2026-07-09): a single dropped tracked frame used to latch camera hand
+		// ownership instantly, suppressing DriveQuestHandCS for at least the 0.2s handback -
+		// every sub-second Quest flicker became a visible wrist snap to the camera basis and
+		// back. Quest keeps the hand through flickers shorter than the tracked-recency grace;
+		// DriveQuestHandCS's own held-rotation path bridges those frames.
+		if (QuestWristSideState.bArmRescueActive || !bQuestSideRecentlyTrackedForArm)
 		{
 			QuestWristSideState.bCameraHandOwnershipLatched = true;
 			QuestWristSideState.CameraHandQuestSolidSeconds = 0.0f;

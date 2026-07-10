@@ -41,6 +41,10 @@ try:
         unreal.SystemLibrary.execute_console_command(None, "mp.StartLiveLowerBodyTrial")
         # Heavy pose model as the interactive default (user decision 2026-07-05).
         unreal.SystemLibrary.execute_console_command(None, "mp.AutoQuestWebcamPoseModel heavy")
+        # Hand-ownership transition trace (2026-07-09 wrist-snap arc): logs ONLY ownership
+        # handovers (camera latch / handback), so it is worn-session cheap. It was off in the
+        # session that needed it; keep it armed for interactive boots.
+        unreal.SystemLibrary.execute_console_command(None, "mp.MediaPipeCameraHandTrace 1")
         unreal.log("[AutoTrial] layered fusion applied at startup (CANDIDATE variant, worn A/B rig 2026-07-06)")
     else:
         unreal.log("[AutoTrial] automation session detected - raw defaults kept")

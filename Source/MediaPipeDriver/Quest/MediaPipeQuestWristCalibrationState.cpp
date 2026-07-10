@@ -24,6 +24,11 @@ void FQuestWristSideRuntimeState::ResetRotationCalibration()
 	RotationSemanticRollCalibrationUpComp = FVector::ZeroVector;
 	bHasRotationSemanticRollLastTwist = false;
 	RotationSemanticRollLastTwistDeg = 0.0f;
+	PalmRollActiveSource = 0;
+	PalmRollPrimaryOkSeconds = 0.0f;
+	PalmRollPrimaryBadSeconds = 0.0f;
+	PalmRollContinuityBiasDeg = 0.0f;
+	PalmRollSourceLastUpdateTimeSeconds = -1.0;
 	RotationCalibrationState = QuestWristCalibrationState_WaitingForStablePose;
 	RotationCalibrationRejectReason = QuestWristCalibrationReject_WaitingForStablePose;
 	RotationCalibrationStableFrameCount = 0;

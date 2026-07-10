@@ -1093,28 +1093,109 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 						ProjectedRollDeg,
 						ProjectedRollScore);
 					Trace.SemanticRollAxisScore = ProjectedRollScore;
-					if (bHasProjectedPalmRoll && ProjectedRollScore >= MinPalmProjectionScore)
+					if (PalmMode >= 2)
 					{
-						WrappedQuestTwistDeg = ProjectedRollDeg;
-						bHasMeasuredPalmRoll = true;
-					}
-					else if (PalmMode >= 2)
-					{
+						// SOURCE HYSTERESIS + CONTINUITY (2026-07-09 worn forensics): the projected
+						// roll and the swing-corrected fallback disagree by 20-130deg during side
+						// raises while the projection score oscillates around the threshold, so the
+						// old first-match-wins selection flapped between the two bases per frame -
+						// the right wrist visibly snapped on every switch (38 flap rows, all side=R,
+						// the hold never engaged because one source always measured). The source may
+						// only change after a dwell; short projection dips HOLD the last roll; every
+						// committed switch is rebased through a continuity bias so the output never
+						// steps. The bias decays only while the calibrated primary measures - the
+						// fallback contributes relative motion, never its absolute offset.
 						float SwingCorrectedRollDeg = 0.0f;
 						float SwingCorrectedRollScore = 0.0f;
-						if (MeasureQuestSwingCorrectedRollDeg(
-							CurrentQuestLocal,
-							QuestWristSideState.RotationSemanticRollCalibrationForwardComp,
-							QuestWristSideState.RotationSemanticRollCalibrationUpComp,
-							SwingCorrectedRollDeg,
-							SwingCorrectedRollScore) &&
-							SwingCorrectedRollScore >= MinPalmProjectionScore)
+						const bool bPrimaryRollOk = bHasProjectedPalmRoll && ProjectedRollScore >= MinPalmProjectionScore;
+						const bool bFallbackRollOk =
+							MeasureQuestSwingCorrectedRollDeg(
+								CurrentQuestLocal,
+								QuestWristSideState.RotationSemanticRollCalibrationForwardComp,
+								QuestWristSideState.RotationSemanticRollCalibrationUpComp,
+								SwingCorrectedRollDeg,
+								SwingCorrectedRollScore) &&
+							SwingCorrectedRollScore >= MinPalmProjectionScore;
+						// Wall-clock dwell stepping (DeltaSeconds reaches evaluations as 0 without a
+						// paired update - same measured failure as the arm-rescue dwell).
+						const double PalmRollNowSeconds = FPlatformTime::Seconds();
+						const float PalmRollStepSeconds = QuestWristSideState.PalmRollSourceLastUpdateTimeSeconds >= 0.0
+							? FMath::Clamp(static_cast<float>(PalmRollNowSeconds - QuestWristSideState.PalmRollSourceLastUpdateTimeSeconds), 0.0f, 0.1f)
+							: 0.0f;
+						QuestWristSideState.PalmRollSourceLastUpdateTimeSeconds = PalmRollNowSeconds;
+						if (bPrimaryRollOk)
 						{
-							WrappedQuestTwistDeg = SwingCorrectedRollDeg;
+							QuestWristSideState.PalmRollPrimaryOkSeconds += PalmRollStepSeconds;
+							QuestWristSideState.PalmRollPrimaryBadSeconds = 0.0f;
+						}
+						else
+						{
+							QuestWristSideState.PalmRollPrimaryBadSeconds += PalmRollStepSeconds;
+							QuestWristSideState.PalmRollPrimaryOkSeconds = 0.0f;
+						}
+						uint8 PalmRollDesiredSource = 0;
+						if (QuestWristSideState.PalmRollActiveSource == 2)
+						{
+							if (bPrimaryRollOk && (QuestWristSideState.PalmRollPrimaryOkSeconds >= 0.25f || !bFallbackRollOk))
+							{
+								PalmRollDesiredSource = 1;
+							}
+							else if (bFallbackRollOk)
+							{
+								PalmRollDesiredSource = 2;
+							}
+						}
+						else if (bPrimaryRollOk)
+						{
+							PalmRollDesiredSource = 1;
+						}
+						else if (bFallbackRollOk && QuestWristSideState.PalmRollPrimaryBadSeconds >= 0.30f)
+						{
+							PalmRollDesiredSource = 2;
+						}
+						const bool bHasRollContinuityAnchor = QuestWristSideState.bHasRotationSemanticRollLastTwist;
+						const float LastRollWrappedDeg = bHasRollContinuityAnchor
+							? FRotator::NormalizeAxis(QuestWristSideState.RotationSemanticRollLastTwistDeg)
+							: 0.0f;
+						if (PalmRollDesiredSource == 1)
+						{
+							if (QuestWristSideState.PalmRollActiveSource != 1 && bHasRollContinuityAnchor)
+							{
+								QuestWristSideState.PalmRollContinuityBiasDeg =
+									FRotator::NormalizeAxis(LastRollWrappedDeg - ProjectedRollDeg);
+							}
+							else
+							{
+								QuestWristSideState.PalmRollContinuityBiasDeg = FMath::Lerp(
+									QuestWristSideState.PalmRollContinuityBiasDeg,
+									0.0f,
+									HalfLifeToAlpha(0.6f, PalmRollStepSeconds));
+							}
+							WrappedQuestTwistDeg = FRotator::NormalizeAxis(ProjectedRollDeg + QuestWristSideState.PalmRollContinuityBiasDeg);
+							bHasMeasuredPalmRoll = true;
+							QuestWristSideState.PalmRollActiveSource = 1;
+						}
+						else if (PalmRollDesiredSource == 2)
+						{
+							if (QuestWristSideState.PalmRollActiveSource != 2 && bHasRollContinuityAnchor)
+							{
+								QuestWristSideState.PalmRollContinuityBiasDeg =
+									FRotator::NormalizeAxis(LastRollWrappedDeg - SwingCorrectedRollDeg);
+							}
+							WrappedQuestTwistDeg = FRotator::NormalizeAxis(SwingCorrectedRollDeg + QuestWristSideState.PalmRollContinuityBiasDeg);
 							Trace.SemanticRollAxisScore = FMath::Max(Trace.SemanticRollAxisScore, SwingCorrectedRollScore);
 							Trace.bUsedPalmRollFallback = 1;
 							bHasMeasuredPalmRoll = true;
+							QuestWristSideState.PalmRollActiveSource = 2;
 						}
+						// PalmRollDesiredSource == 0: neither source is committed this frame - fall
+						// through to the hold below. PalmRollActiveSource is kept so the dwell logic
+						// resumes from the prior committed source.
+					}
+					else if (bHasProjectedPalmRoll && ProjectedRollScore >= MinPalmProjectionScore)
+					{
+						WrappedQuestTwistDeg = ProjectedRollDeg;
+						bHasMeasuredPalmRoll = true;
 					}
 					else if (PalmMode >= 1)
 					{

@@ -69,6 +69,13 @@ struct FMediaPipeBodySolverState
 	float ShrugRestRefCmR = -10000.0f;
 	float ShrugSmoothedSinL = 0.0f;
 	float ShrugSmoothedSinR = 0.0f;
+	// Per-instance shrug log throttles. The previous function-static throttles were shared
+	// across every node instance, so the Manny actor consumed nearly every 1 Hz slot and the
+	// mirror Kellan emitted 10 rows to Manny's 220 in the 2026-07-09 worn session - the actor
+	// under judgment was the one with no evidence.
+	double ShrugFusionLastLogTimeSecondsL = -1.0;
+	double ShrugFusionLastLogTimeSecondsR = -1.0;
+	double ShrugGateLastLogTimeSeconds = -1.0;
 	// Body yaw reference: the head-yaw neutral at session start. The slow neutral component of
 	// the HMD yaw is the wearer's body facing; its drift from this initial value turns the
 	// pelvis while the fast remainder stays head glance.
@@ -235,6 +242,9 @@ struct FMediaPipeBodySolverState
 		ShrugRestRefCmR = -10000.0f;
 		ShrugSmoothedSinL = 0.0f;
 		ShrugSmoothedSinR = 0.0f;
+		ShrugFusionLastLogTimeSecondsL = -1.0;
+		ShrugFusionLastLogTimeSecondsR = -1.0;
+		ShrugGateLastLogTimeSeconds = -1.0;
 		bHasInitialBodyYawNeutral = false;
 		InitialBodyYawNeutralDeg = 0.0f;
 		bBodyTrackingYawLatched = false;
