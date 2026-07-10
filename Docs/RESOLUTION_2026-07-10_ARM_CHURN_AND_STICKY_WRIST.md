@@ -150,3 +150,22 @@ Expected rows next session: `calibrationState=Tracking` surviving hand flickers 
 `WaitingForStablePose` stretches while worn), `handRotApplied=1` on tracked frames
 throughout, `mp.ChainReachExtend` showing `frac→1.0` and `appliedExtCm>0` on full
 extensions, and no `wristRotCalibHad=0` rows outside genuine multi-second losses.
+
+## Round 3 (same day): reach extension chased transients — arms pumped a few cm
+
+Worn verdict after round 2: arms much better but "jump a few centimetres during
+movements, frequently when I closed my fists". The `mp.ChainReachExtend` rows named it:
+applied extension pumped 0.1→6.2→0.6cm (L) / 0.1→5.2→0.2cm (R) across three 1Hz rows at
+02:47:12–14 with `desired` spiking 0→18.8→1.4cm, plus sub-second 0→3.5→0 oscillations
+aliased by the 1Hz throttle — all with `tracked=1` (zero of ten >1cm dips coincided with
+a tracked-flag flip; the flag-flicker hypothesis was checked and is FALSE). Two transient
+sources: the low-latency hand-tracking wrist LEADS the laggy body chain during fast moves
+(the fraction reads ~0.95 while the chain still reads bent → huge momentary "deficit"),
+and a fist-close makes the hand tracker re-fit its model, stepping the wrist estimate a
+few cm at constant pose. The 0.15s smoothing rendered every such round trip.
+
+Fix (same CVar, no new levers): the extension now requires the straightness fraction
+SUSTAINED ≥0.85 for 0.35s, ramps in across 0.85→0.97, caps at 8cm (the plausible chain
+deficit — lag spikes cannot pass), and eases asymmetrically (0.45s half-life in, 0.8s
+out). Steady-state full extensions keep their full assist; transients render as nothing.
+Evidence row gained `highS=` (the sustained-fraction dwell).

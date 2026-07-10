@@ -664,6 +664,25 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				GetQuestHandPositions(QuestHands, bIsLeft)[static_cast<int32>(EHandKeypoint::Wrist)];
 			const FVector ChainWristOffsetNow = WristWorld - ShoulderWorld;
 			const float ChainReachNowCm = ChainWristOffsetNow.Size();
+			const double ReachNowSeconds = FPlatformTime::Seconds();
+			const float ReachStepSeconds = QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds >= 0.0
+				? FMath::Clamp(static_cast<float>(ReachNowSeconds - QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds), 0.0f, 0.1f)
+				: 0.0f;
+			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = ReachNowSeconds;
+			// TRANSIENT GATE (2026-07-10 late-day worn verdict "arms jump a few cm, often on
+			// fist closes"): the raw fraction/chain mismatch is transient two ways - the
+			// low-latency hand-tracking wrist LEADS the laggy body chain during fast moves
+			// (measured desired 0 -> 18.8 -> 1.4cm across three 1Hz rows while tracked=1
+			// throughout; zero of ten >1cm dips coincided with a tracked-flag flip), and a
+			// fist-close model re-fit steps the wrist estimate a few cm at constant pose.
+			// The extension is a near-full-extension assist, so it now requires the fraction
+			// SUSTAINED above apply-start for a dwell, ramps in across apply-start..apply-full,
+			// caps at the plausible chain deficit (the lag spikes cannot pass), and eases
+			// asymmetrically (slower out than in) so nothing pumps.
+			constexpr float ReachApplyStartFrac = 0.85f;
+			constexpr float ReachApplyFullFrac = 0.97f;
+			constexpr float ReachDwellSeconds = 0.35f;
+			constexpr float ReachMaxExtensionCm = 8.0f;
 			float RealReachFraction = -1.0f;
 			float DesiredExtensionCm = 0.0f;
 			if (bQuestSideTrackedForArm &&
@@ -674,20 +693,35 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			{
 				const float RealReachCm = FVector::Dist(RealHandWristWorld, ChainSrcShoulderWorld);
 				RealReachFraction = FMath::Clamp(RealReachCm / ChainSrcLenSumCm, 0.0f, 1.0f);
-				DesiredExtensionCm = FMath::Max(0.0f, RealReachFraction * AvatarFullReachCm - ChainReachNowCm) * ChainReachWeight;
+				if (RealReachFraction >= ReachApplyStartFrac)
+				{
+					QuestWristSideState.ChainReachHighFracSeconds += ReachStepSeconds;
+				}
+				else
+				{
+					QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
+				}
+				if (QuestWristSideState.ChainReachHighFracSeconds >= ReachDwellSeconds)
+				{
+					const float ReachRampAlpha = FMath::Clamp(
+						(RealReachFraction - ReachApplyStartFrac) / (ReachApplyFullFrac - ReachApplyStartFrac),
+						0.0f,
+						1.0f);
+					DesiredExtensionCm = FMath::Min(
+						FMath::Max(0.0f, RealReachFraction * AvatarFullReachCm - ChainReachNowCm),
+						ReachMaxExtensionCm) * ReachRampAlpha * ChainReachWeight;
+				}
 			}
-			const double ReachNowSeconds = FPlatformTime::Seconds();
-			const float ReachStepSeconds = QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds >= 0.0
-				? FMath::Clamp(static_cast<float>(ReachNowSeconds - QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds), 0.0f, 0.1f)
-				: 0.0f;
-			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = ReachNowSeconds;
-			// 0.15s half-life both ways: fast enough to track a real punch-out, slow enough that
-			// a tracked-flag flicker cannot pop the wrist; hand loss decays the extension back to
-			// the bare chain smoothly.
+			else
+			{
+				QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
+			}
+			const float ReachSmoothHalfLifeSeconds =
+				DesiredExtensionCm > QuestWristSideState.ChainReachExtensionCm ? 0.45f : 0.8f;
 			QuestWristSideState.ChainReachExtensionCm = FMath::Lerp(
 				QuestWristSideState.ChainReachExtensionCm,
 				DesiredExtensionCm,
-				HalfLifeToAlpha(0.15f, ReachStepSeconds));
+				HalfLifeToAlpha(ReachSmoothHalfLifeSeconds, ReachStepSeconds));
 			if (QuestWristSideState.ChainReachExtensionCm > 0.05f && ChainReachNowCm > KINDA_SMALL_NUMBER)
 			{
 				const FVector ReachAxis = ChainWristOffsetNow / ChainReachNowCm;
@@ -734,11 +768,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					ReachNowSeconds, 1.0, QuestWristSideState.ChainReachExtendLastLogTimeSeconds))
 			{
 				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.ChainReachExtend: actor=%s side=%s tracked=%d frac=%.2f srcLenSumCm=%.1f chainReachCm=%.1f desiredExtCm=%.1f appliedExtCm=%.1f fullReachCm=%.1f"),
+					TEXT("mp.ChainReachExtend: actor=%s side=%s tracked=%d frac=%.2f highS=%.2f srcLenSumCm=%.1f chainReachCm=%.1f desiredExtCm=%.1f appliedExtCm=%.1f fullReachCm=%.1f"),
 					*TargetActorName.ToString(),
 					bIsLeft ? TEXT("L") : TEXT("R"),
 					bQuestSideTrackedForArm ? 1 : 0,
 					RealReachFraction,
+					QuestWristSideState.ChainReachHighFracSeconds,
 					ChainSrcLenSumCm,
 					ChainReachNowCm,
 					DesiredExtensionCm,
@@ -749,6 +784,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		else if (RuntimeStateKey != 0)
 		{
 			QuestWristSideState.ChainReachExtensionCm = 0.0f;
+			QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
 			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = -1.0;
 		}
 

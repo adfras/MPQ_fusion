@@ -162,6 +162,13 @@ struct FQuestWristSideRuntimeState
 	// to zero when the real wrist is unavailable. Keyed for the same CacheBones reason as
 	// everything else here.
 	float ChainReachExtensionCm = 0.0f;
+	// Seconds the real-wrist straightness fraction has been sustained above the apply-start
+	// threshold (2026-07-10 late-day fix): the extension chased instantaneous fraction/chain
+	// mismatches - the low-latency hand wrist leads the laggy body chain during fast moves
+	// (desired spiked 0->18.8->1.4cm across three 1Hz rows) and a fist-close re-fit steps
+	// the wrist estimate a few cm - rendering as cm-scale arm pumps. Extension now needs the
+	// fraction HIGH and SUSTAINED before it may apply.
+	float ChainReachHighFracSeconds = 0.0f;
 	double ChainReachExtensionLastUpdateTimeSeconds = -1.0;
 	double ChainReachExtendLastLogTimeSeconds = -1.0;
 	// Wall-clock time this side's Quest hand tracked flag was last TRUE (2026-07-09): the
