@@ -43,6 +43,8 @@ Saved/
 *.log
 *.tmp
 *.temp
+# Refactor baseline reference rows/test log are tracked deliberately (refactor/correctors Phase 0)
+!Docs/refactor_baseline/*.log
 *.bak
 *.swp
 *.pdb
