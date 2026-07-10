@@ -518,35 +518,72 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		// camera frame's translation bias cancels by construction.
 		const float ArmDirectionWeight = FMath::Clamp(
 			CVarMediaPipeArmDirectionFromCamera.GetValueOnAnyThread(), 0.0f, 1.0f);
-		if (ArmDirectionWeight > 0.0f && bHasMediaPipeArmWorld && RuntimeStateKey != 0)
+		if (ArmDirectionWeight > 0.0f && RuntimeStateKey != 0)
 		{
-			const float DirReliability = FMath::Min3(
-				GetLandmarkReliability(ShoulderLm),
-				GetLandmarkReliability(ElbowLm),
-				GetLandmarkReliability(WristLm));
+			const float DirReliability = bHasMediaPipeArmWorld
+				? FMath::Min3(
+					GetLandmarkReliability(ShoulderLm),
+					GetLandmarkReliability(ElbowLm),
+					GetLandmarkReliability(WristLm))
+				: 0.0f;
 			const double DirNowSeconds = FPlatformTime::Seconds();
 			float DirStepSeconds = QuestWristSideState.ArmDirectionLastUpdateTimeSeconds >= 0.0
 				? static_cast<float>(DirNowSeconds - QuestWristSideState.ArmDirectionLastUpdateTimeSeconds)
 				: FMath::Max(DeltaSeconds, CachedDeltaTimeSeconds);
 			DirStepSeconds = FMath::Clamp(DirStepSeconds, 0.0f, 0.1f);
 			QuestWristSideState.ArmDirectionLastUpdateTimeSeconds = DirNowSeconds;
-			// Blend weight eases toward full when the camera can vote, toward zero when it
-			// cannot - continuous ownership, never a switch.
-			const float DirTargetAlpha = (DirReliability >= 0.5f) ? ArmDirectionWeight : 0.0f;
-			const float DirSmoothAlpha = 1.0f - FMath::Exp(-DirStepSeconds / 0.15f);
+			// HYSTERESIS GATE (2026-07-10 late-day worn forensics): the old vote was binary at
+			// rel 0.5 with a 0.15s ease, and the outer gate required a measured camera arm - a
+			// sub-second reliability dip (fist closes move the wrist landmark's confidence) or
+			// a single unmeasured camera frame toggled the ENTIRE learned correction out and
+			// back in, rendering as a few-cm arm jump on both sides at once (measured 03:22:21:
+			// dirAlpha 0.00->1.00 with rel 0.00->0.97 across one 1Hz row, both arms). The vote
+			// now engages at rel >= 0.6 sustained 0.3s, releases below 0.4 sustained 0.3s, and
+			// the blend eases asymmetrically (0.4s in / 1.2s out); the correction keeps APPLYING
+			// from keyed state through camera dropouts - only the eased alpha moves the arm.
+			if (bHasMediaPipeArmWorld && DirReliability >= 0.6f)
+			{
+				QuestWristSideState.ArmDirCameraVoteEnterSeconds += DirStepSeconds;
+				QuestWristSideState.ArmDirCameraVoteExitSeconds = 0.0f;
+				if (QuestWristSideState.ArmDirCameraVoteEnterSeconds >= 0.3f)
+				{
+					QuestWristSideState.bArmDirCameraVoteEngaged = true;
+				}
+			}
+			else if (!bHasMediaPipeArmWorld || DirReliability < 0.4f)
+			{
+				QuestWristSideState.ArmDirCameraVoteExitSeconds += DirStepSeconds;
+				QuestWristSideState.ArmDirCameraVoteEnterSeconds = 0.0f;
+				if (QuestWristSideState.ArmDirCameraVoteExitSeconds >= 0.3f)
+				{
+					QuestWristSideState.bArmDirCameraVoteEngaged = false;
+				}
+			}
+			else
+			{
+				// Between the thresholds: hold the current latch, drain neither way.
+				QuestWristSideState.ArmDirCameraVoteEnterSeconds = 0.0f;
+				QuestWristSideState.ArmDirCameraVoteExitSeconds = 0.0f;
+			}
+			const float DirTargetAlpha = QuestWristSideState.bArmDirCameraVoteEngaged ? ArmDirectionWeight : 0.0f;
+			const float DirSmoothTauSeconds = DirTargetAlpha > QuestWristSideState.ArmDirectionBlendAlpha ? 0.4f : 1.2f;
+			const float DirSmoothAlpha = 1.0f - FMath::Exp(-DirStepSeconds / DirSmoothTauSeconds);
 			QuestWristSideState.ArmDirectionBlendAlpha = FMath::Lerp(
 				QuestWristSideState.ArmDirectionBlendAlpha, DirTargetAlpha, DirSmoothAlpha);
 			const float DirAlpha = QuestWristSideState.ArmDirectionBlendAlpha;
-			if (DirAlpha > KINDA_SMALL_NUMBER)
+			const FVector ChainElbowOffset = ElbowWorld - ShoulderWorld;
+			const FVector ChainWristOffset = WristWorld - ShoulderWorld;
+			// LEARNING: only reliable, measured camera frames may steer the correction - the
+			// old code kept learning at 0.8s tau from whatever landmarks existed while the
+			// blend decayed, feeding garbage into the very correction it would re-apply.
+			if (bHasMediaPipeArmWorld && DirReliability >= 0.6f &&
+				!ChainElbowOffset.IsNearlyZero() && !ChainWristOffset.IsNearlyZero())
 			{
 				const FVector CamElbowDir =
 					(MediaPipeSourceElbowWorld - MediaPipeSourceShoulderWorld).GetSafeNormal();
 				const FVector CamWristDir =
 					(MediaPipeSourceWristWorld - MediaPipeSourceShoulderWorld).GetSafeNormal();
-				const FVector ChainElbowOffset = ElbowWorld - ShoulderWorld;
-				const FVector ChainWristOffset = WristWorld - ShoulderWorld;
-				if (!CamElbowDir.IsNearlyZero() && !CamWristDir.IsNearlyZero() &&
-					!ChainElbowOffset.IsNearlyZero() && !ChainWristOffset.IsNearlyZero())
+				if (!CamElbowDir.IsNearlyZero() && !CamWristDir.IsNearlyZero())
 				{
 					// DEPTH-AWARE split (2026-07-05, hands-on-hips forensics): the camera's
 					// direction is trustworthy in its PICTURE PLANE and a guess along its DEPTH
@@ -615,23 +652,49 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 						QuestWristSideState.bHasArmDirCorrection);
 					QuestWristSideState.ArmDirCorrectionWrist = FQuat::Slerp(
 						QuestWristSideState.ArmDirCorrectionWrist, WristDelta, CorrectionAlpha).GetNormalized();
-					// DirAlpha (reliability-eased) scales how much of the slow correction
-					// applies; when the camera cannot vote the corrections decay via the
-					// zero-target path upstream and the arm returns to pure chain.
-					const FQuat ScaledElbow = FQuat::Slerp(
-						FQuat::Identity, QuestWristSideState.ArmDirCorrectionElbow, DirAlpha);
-					const FQuat ScaledWrist = FQuat::Slerp(
-						FQuat::Identity, QuestWristSideState.ArmDirCorrectionWrist, DirAlpha);
-					const FVector CorrectedElbowDir = ScaledElbow.RotateVector(ChainElbowDir);
-					const FVector CorrectedWristDir = ScaledWrist.RotateVector(ChainWristDir);
-					if (!CorrectedElbowDir.IsNearlyZero() && !CorrectedWristDir.IsNearlyZero())
-					{
-						ElbowWorld = ShoulderWorld + CorrectedElbowDir * ChainElbowOffset.Size();
-						WristWorld = ShoulderWorld + CorrectedWristDir * ChainWristOffset.Size();
-					}
 				}
 			}
+			// APPLICATION: needs only the keyed corrections and the chain's own directions, so
+			// it keeps running through camera dropouts - the eased DirAlpha is the ONLY thing
+			// that moves the arm, never a per-frame gate.
+			if (DirAlpha > KINDA_SMALL_NUMBER &&
+				QuestWristSideState.bHasArmDirCorrection &&
+				!ChainElbowOffset.IsNearlyZero() && !ChainWristOffset.IsNearlyZero())
+			{
+				const FQuat ScaledElbow = FQuat::Slerp(
+					FQuat::Identity, QuestWristSideState.ArmDirCorrectionElbow, DirAlpha);
+				const FQuat ScaledWrist = FQuat::Slerp(
+					FQuat::Identity, QuestWristSideState.ArmDirCorrectionWrist, DirAlpha);
+				const FVector CorrectedElbowDir = ScaledElbow.RotateVector(ChainElbowOffset.GetSafeNormal());
+				const FVector CorrectedWristDir = ScaledWrist.RotateVector(ChainWristOffset.GetSafeNormal());
+				if (!CorrectedElbowDir.IsNearlyZero() && !CorrectedWristDir.IsNearlyZero())
+				{
+					ElbowWorld = ShoulderWorld + CorrectedElbowDir * ChainElbowOffset.Size();
+					WristWorld = ShoulderWorld + CorrectedWristDir * ChainWristOffset.Size();
+				}
+			}
+			// Drift evidence row (1Hz, keyed throttle): the correction ANGLES were previously
+			// logged nowhere - arm drift was invisible in the data. Wandering angles at quiet
+			// standing are the drift signature; dirAlpha/engaged expose gate churn.
+			if (CVarMediaPipeCameraHandTrace.GetValueOnAnyThread() != 0 &&
+				FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+					DirNowSeconds, 1.0, QuestWristSideState.ArmDirCorrectionLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.ArmDirCorrection: actor=%s side=%s engaged=%d rel=%.2f dirAlpha=%.2f elbowCorrDeg=%.1f wristCorrDeg=%.1f enterS=%.2f exitS=%.2f hasMpArm=%d"),
+					*TargetActorName.ToString(),
+					bIsLeft ? TEXT("L") : TEXT("R"),
+					QuestWristSideState.bArmDirCameraVoteEngaged ? 1 : 0,
+					DirReliability,
+					DirAlpha,
+					FMath::RadiansToDegrees(QuestWristSideState.ArmDirCorrectionElbow.GetAngle()),
+					FMath::RadiansToDegrees(QuestWristSideState.ArmDirCorrectionWrist.GetAngle()),
+					QuestWristSideState.ArmDirCameraVoteEnterSeconds,
+					QuestWristSideState.ArmDirCameraVoteExitSeconds,
+					bHasMediaPipeArmWorld ? 1 : 0);
+			}
 		}
+		const FVector ArmTraceWristAfterDirWorld = WristWorld;
 
 		// QUEST-REACH EXTENSION (2026-07-10, restores what the old quest-wrist solve's
 		// reach-scale calibration provided before the chain path gated it off): the chain
@@ -787,6 +850,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
 			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = -1.0;
 		}
+		const FVector ArmTraceWristAfterExtWorld = WristWorld;
 
 		// Torso-capsule guard (take-3 forensics 2026-07-05: the fused right wrist passed
 		// within 2.0cm of the spine axis at 66s - inside the body - while the offline referee
@@ -826,6 +890,65 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					GuardPoint(WristWorld);
 				}
 			}
+		}
+
+		// JUMP-ATTRIBUTION TRACER (2026-07-10, worn verdict "arms still jump sometimes"): the
+		// 1Hz stage rows alias sub-second events and cannot say WHICH stage moved the arm. Per
+		// frame, compare the final wrist target's motion against the RAW chain source's motion -
+		// real body movement cancels out, so any residual above the threshold is solver-injected.
+		// On trigger, one row names each stage's contribution (direction correction, reach
+		// extension, torso guard) and how much it CHANGED since the previous frame - the culprit
+		// is the largest change. Event-driven and rate-limited; costs nothing between events.
+		if (RuntimeStateKey != 0 && CVarMediaPipeCameraHandTrace.GetValueOnAnyThread() != 0)
+		{
+			const double ArmJumpNowSeconds = FPlatformTime::Seconds();
+			const FVector ChainRawWristWorld = FullArmChainResult.WristWorld;
+			if (QuestWristSideState.bHasArmJumpBaseline &&
+				QuestWristSideState.ArmJumpLastTimeSeconds >= 0.0)
+			{
+				const float ArmJumpDtSeconds = static_cast<float>(
+					ArmJumpNowSeconds - QuestWristSideState.ArmJumpLastTimeSeconds);
+				if (ArmJumpDtSeconds > 0.0f && ArmJumpDtSeconds <= 0.1f)
+				{
+					const FVector FinalDelta = WristWorld - QuestWristSideState.ArmJumpLastFinalWristWorld;
+					const FVector SourceDelta = ChainRawWristWorld - QuestWristSideState.ArmJumpLastChainWristWorld;
+					const float ResidualCm = (FinalDelta - SourceDelta).Size();
+					if (ResidualCm > 1.2f &&
+						FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+							ArmJumpNowSeconds, 0.25, QuestWristSideState.ArmJumpLastLogTimeSeconds))
+					{
+						const float DirOffCm = (ArmTraceWristAfterDirWorld - ChainRawWristWorld).Size();
+						const float PrevDirOffCm = (QuestWristSideState.ArmJumpLastDirWristWorld - QuestWristSideState.ArmJumpLastChainWristWorld).Size();
+						const float ExtOffCm = (ArmTraceWristAfterExtWorld - ArmTraceWristAfterDirWorld).Size();
+						const float PrevExtOffCm = (QuestWristSideState.ArmJumpLastExtWristWorld - QuestWristSideState.ArmJumpLastDirWristWorld).Size();
+						const float GuardOffCm = (WristWorld - ArmTraceWristAfterExtWorld).Size();
+						const float PrevGuardOffCm = (QuestWristSideState.ArmJumpLastFinalWristWorld - QuestWristSideState.ArmJumpLastExtWristWorld).Size();
+						UE_LOG(LogMediaPipePose, Log,
+							TEXT("mp.ArmJumpTrace: actor=%s side=%s residCm=%.1f dFinalCm=%.1f dSourceCm=%.1f dt=%.3f dirOffCm=%.1f dDirCm=%+.1f extOffCm=%.1f dExtCm=%+.1f guardOffCm=%.1f dGuardCm=%+.1f dirAlpha=%.2f appliedExtCm=%.1f questTracked=%d"),
+							*TargetActorName.ToString(),
+							bIsLeft ? TEXT("L") : TEXT("R"),
+							ResidualCm,
+							FinalDelta.Size(),
+							SourceDelta.Size(),
+							ArmJumpDtSeconds,
+							DirOffCm,
+							DirOffCm - PrevDirOffCm,
+							ExtOffCm,
+							ExtOffCm - PrevExtOffCm,
+							GuardOffCm,
+							GuardOffCm - PrevGuardOffCm,
+							QuestWristSideState.ArmDirectionBlendAlpha,
+							QuestWristSideState.ChainReachExtensionCm,
+							bQuestSideTrackedForArm ? 1 : 0);
+					}
+				}
+			}
+			QuestWristSideState.ArmJumpLastChainWristWorld = ChainRawWristWorld;
+			QuestWristSideState.ArmJumpLastDirWristWorld = ArmTraceWristAfterDirWorld;
+			QuestWristSideState.ArmJumpLastExtWristWorld = ArmTraceWristAfterExtWorld;
+			QuestWristSideState.ArmJumpLastFinalWristWorld = WristWorld;
+			QuestWristSideState.ArmJumpLastTimeSeconds = ArmJumpNowSeconds;
+			QuestWristSideState.bHasArmJumpBaseline = true;
 		}
 
 		// Camera elbow swivel: narrower correction retained for configurations that keep the

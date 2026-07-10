@@ -187,6 +187,25 @@ struct FQuestWristSideRuntimeState
 	// Camera arm-direction transplant blend (eases in/out with camera reliability).
 	float ArmDirectionBlendAlpha = 0.0f;
 	double ArmDirectionLastUpdateTimeSeconds = -1.0;
+	// Hysteresis latch for the camera direction vote (2026-07-10): the old binary rel-0.5
+	// gate toggled the ENTIRE learned correction on sub-second reliability dips (fist closes
+	// move the wrist landmark's confidence) - both arms jumped together. Engage needs rel
+	// >= 0.6 sustained; release needs rel < 0.4 (or no camera arm) sustained.
+	bool bArmDirCameraVoteEngaged = false;
+	float ArmDirCameraVoteEnterSeconds = 0.0f;
+	float ArmDirCameraVoteExitSeconds = 0.0f;
+	double ArmDirCorrectionLogTimeSeconds = -1.0;
+	// Jump-attribution tracer baselines (mp.ArmJumpTrace, 2026-07-10): previous frame's wrist
+	// target at each solve stage (raw chain / after direction correction / after reach
+	// extension / final). Residual motion of the final target vs the raw chain isolates
+	// solver-injected jumps from real body movement.
+	bool bHasArmJumpBaseline = false;
+	FVector ArmJumpLastChainWristWorld = FVector::ZeroVector;
+	FVector ArmJumpLastDirWristWorld = FVector::ZeroVector;
+	FVector ArmJumpLastExtWristWorld = FVector::ZeroVector;
+	FVector ArmJumpLastFinalWristWorld = FVector::ZeroVector;
+	double ArmJumpLastTimeSeconds = -1.0;
+	double ArmJumpLastLogTimeSeconds = -1.0;
 	// Complementary-fusion direction correction (2026-07-05 redesign after "arms too
 	// erratic" worn/viewer verdict): the QUEST chain owns high-frequency arm motion
 	// (smooth, fast); the CAMERA contributes a slow-filtered rotation correction that

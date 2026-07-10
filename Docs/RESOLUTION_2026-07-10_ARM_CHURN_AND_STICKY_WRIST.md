@@ -169,3 +169,29 @@ SUSTAINED ≥0.85 for 0.35s, ramps in across 0.85→0.97, caps at 8cm (the plaus
 deficit — lag spikes cannot pass), and eases asymmetrically (0.45s half-life in, 0.8s
 out). Steady-state full extensions keep their full assist; transients render as nothing.
 Evidence row gained `highS=` (the sustained-fraction dwell).
+
+## Round 4 (same day): residual jumps + drift = the camera direction correction
+
+Post-round-3 worn verdict: better, but arms still jump occasionally and drift. Rows:
+reach extension now peaks 1.3cm (exonerated); the one full-scale event captured was
+`mp.MediaPipeArmDirectionFromCamera`'s blend going 0.00→1.00 on BOTH arms at 03:22:21
+(rel 0.00→0.97) — the binary rel-0.5 vote with a 0.15s ease toggled the entire learned
+direction correction. Sub-second reliability dips (fist closes move the wrist landmark's
+confidence) alias invisibly at 1Hz, and the correction's magnitude was logged nowhere —
+drift was unmeasurable.
+
+Fixes/instruments (same build):
+1. **Hysteresis on the camera direction vote** (keyed latch): engage rel ≥0.6 sustained
+   0.3s, release rel <0.4 (or no camera arm) sustained 0.3s; blend eases 0.4s in / 1.2s
+   out. Application now runs from keyed state through camera dropouts (the old outer
+   gate required a measured camera arm — one unmeasured frame un-applied the whole
+   correction instantly). Learning now requires reliable measured frames (the old code
+   kept learning from garbage while the blend decayed).
+2. **`mp.ArmDirCorrection` row** (1Hz, keyed): correction angles (elbowCorrDeg/
+   wristCorrDeg), engaged/rel/dirAlpha — drift is now a measurable curve; wandering
+   angles at quiet standing are the signature, and a bound is the fix if proven.
+3. **`mp.ArmJumpTrace` row** (event-driven, gated on mp.MediaPipeCameraHandTrace):
+   per-frame residual of the final wrist target's motion vs the RAW chain source's
+   motion (real movement cancels; residual >1.2cm in one frame = solver-injected jump);
+   on trigger, names each stage's contribution and its change (dirOffCm/dDirCm,
+   extOffCm/dExtCm, guardOffCm/dGuardCm) — every future jump names its culprit.
