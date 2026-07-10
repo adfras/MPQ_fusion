@@ -734,3 +734,18 @@ no value tuned; every hoist pure and documented (wall clocks, landmark reads); l
 character-identical. Live equivalence is sealed by the Phase-8 worn acceptance session
 (~3 min on the Kellan mirror: raise + extend arms, fists, shrug, hands behind back,
 overhead) judged against `Docs/refactor_baseline/`.
+
+### 9.2 Worn acceptance (2026-07-10 13:31-13:33 UTC) — ACCEPTED
+
+User verdict on the Kellan mirror: "ok seems fine". Tracer comparison vs
+`Docs/refactor_baseline/` (session rows archived by the acceptance run): all five row
+families field-format IDENTICAL; bounded corrector saturates at exactly 20.00° in both
+sessions with matching quiet/engaged distributions; reach extension appliedExtCm max
+1.50 in BOTH sessions; shrug appliedCm peak 11.5 (baseline 10.0) with the rest reference
+in the same 42-47cm band; zero `cameraLatched` rows with `rescue=1 questTracked=1` (the
+round-1 bug signature stays dead). 14 of 15 ArmJumpTrace events match the baseline class
+(1.2-2.5cm, direction-attributed, bounded); the single 12.6cm event at 13:32:23 is a
+REAL overhead dropout handover (questTracked=0 at :28, rescue latched at :29, dir/ext/
+guard contributions ≤2.5cm) — the override doing its designed job during the overhead
+protocol leg, a case the shorter baseline window simply did not contain (7 vs 64 rescue
+rows). The corrector refactor is behavior-preserving and ACCEPTED.
