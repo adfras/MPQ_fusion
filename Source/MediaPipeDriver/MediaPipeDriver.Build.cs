@@ -13,6 +13,7 @@ public class MediaPipeDriver : ModuleRules
 			Path.Combine(ModuleDirectory, "Avatar"),
 			Path.Combine(ModuleDirectory, "BodyFusion"),
 			Path.Combine(ModuleDirectory, "Core"),
+			Path.Combine(ModuleDirectory, "Correctors"),
 			Path.Combine(ModuleDirectory, "Diagnostics"),
 			Path.Combine(ModuleDirectory, "Embodiment"),
 			Path.Combine(ModuleDirectory, "PoseDriven"),
