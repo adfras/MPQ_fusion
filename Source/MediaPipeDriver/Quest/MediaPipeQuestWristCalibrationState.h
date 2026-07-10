@@ -52,6 +52,12 @@ struct FQuestWristSideRuntimeState
 	float PalmRollPrimaryOkSeconds = 0.0f;
 	float PalmRollPrimaryBadSeconds = 0.0f;
 	float PalmRollContinuityBiasDeg = 0.0f;
+	// Bounded bias lifetime (2026-07-10): wall-clock seconds the continuity bias has lived
+	// without re-grounding (|bias| within a few degrees of zero). During raises the primary
+	// drops out faster than its decay could run and the re-anchor-on-resume preserved a wrong
+	// roll indefinitely ("only occasionally corrects itself"); past the age cap the bias
+	// rate-limited-converges to the measuring source instead of holding.
+	float PalmRollBiasAgeSeconds = 0.0f;
 	double PalmRollSourceLastUpdateTimeSeconds = -1.0;
 	uint8 RotationCalibrationState = QuestWristCalibrationState_WaitingForStablePose;
 	uint8 RotationCalibrationRejectReason = QuestWristCalibrationReject_WaitingForStablePose;
@@ -132,6 +138,14 @@ struct FQuestWristSideRuntimeState
 	float ArmRescueEnterSeconds = 0.0f;
 	float ArmRescueExitSeconds = 0.0f;
 	double ArmRescueLastUpdateTimeSeconds = -1.0;
+	// Diagnostic throttles for this side's mp.ArmOverheadRescue / mp.QuestWristSolve rows
+	// (2026-07-10): node-member timers are wiped by CacheBones every frame (the rescue row
+	// emitted at frame rate, 3,522 rows/side), and the wrist-solve row's function-static
+	// global pair rationed rows across ALL actors (the acceptance mirror Kellan starved to
+	// 4 rows while Manny consumed the budget - third session of starved evidence). Keyed
+	// per-actor-side timers survive resets and give every actor its own cadence.
+	double ArmRescueLastLogTimeSeconds = -1.0;
+	double QuestWristSolveLastLogTimeSeconds = -1.0;
 	// Wall-clock time this side's Quest hand tracked flag was last TRUE (2026-07-09): the
 	// tracked flag flickers sub-second at the FOV edge, and a single dropped frame let the
 	// rescue's untracked clause and the camera-hand latch seize a hand mid side-raise

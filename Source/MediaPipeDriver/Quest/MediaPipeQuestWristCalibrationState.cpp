@@ -28,6 +28,7 @@ void FQuestWristSideRuntimeState::ResetRotationCalibration()
 	PalmRollPrimaryOkSeconds = 0.0f;
 	PalmRollPrimaryBadSeconds = 0.0f;
 	PalmRollContinuityBiasDeg = 0.0f;
+	PalmRollBiasAgeSeconds = 0.0f;
 	PalmRollSourceLastUpdateTimeSeconds = -1.0;
 	RotationCalibrationState = QuestWristCalibrationState_WaitingForStablePose;
 	RotationCalibrationRejectReason = QuestWristCalibrationReject_WaitingForStablePose;

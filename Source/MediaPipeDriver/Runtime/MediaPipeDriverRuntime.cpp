@@ -806,8 +806,15 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// take-4 round-3 A/B showed the unclamped yaw buys nothing on turn-free takes while
 		// risking wander (yaw err 6.5deg clamped). Re-add when a full-turn take can
 		// discriminate. FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeBodyYawMaxDeg"), 720.0f),
-		// Shoulder-relative rescue divergence (take-2 parity forensics 2026-07-04).
-		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"), 1),
+		// Shoulder-relative rescue divergence (take-2 parity forensics 2026-07-04) - PULLED from
+		// candidate 2026-07-10 after the worn A/B verdict: the divergence trigger seized TRACKED
+		// arms mid-raise (log: cond=1 with questTracked=1 chainFresh=1 on L82/R54 rows, rescue
+		// active in bursts every 15-20s, divergence flapping around the single 30cm threshold
+		// with no magnitude hysteresis) - the user's "considerable drift / movement far from
+		// smooth". Baseline rescue (overhead/fully-gone only) felt much better on arms+hands.
+		// Re-add only with real enter/exit hysteresis PLUS a hold-tracked veto
+		// (questTracked=1 && chainFresh=1 must never divergence-seize).
+		// FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeArmRescueShoulderRelDivergence"), 1),
 		// Clavicle shrug at meaningful weight (take-3 referee 2026-07-05: live imperative 0.20
 		// never reached parity; Epic shrugs 9cm, fused 2-3cm even at 0.6).
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeClavicleShrugWeight"), 1.0f),

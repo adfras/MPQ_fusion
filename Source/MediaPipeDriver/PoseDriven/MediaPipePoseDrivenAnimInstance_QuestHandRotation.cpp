@@ -1123,6 +1123,25 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 							? FMath::Clamp(static_cast<float>(PalmRollNowSeconds - QuestWristSideState.PalmRollSourceLastUpdateTimeSeconds), 0.0f, 0.1f)
 							: 0.0f;
 						QuestWristSideState.PalmRollSourceLastUpdateTimeSeconds = PalmRollNowSeconds;
+						// BOUNDED BIAS LIFETIME (2026-07-10 worn forensics): the bias re-anchors on
+						// EVERY primary resume, and during raises the primary drops out faster than
+						// the 0.6s decay can run - a wrong roll persisted indefinitely and "only
+						// occasionally corrected itself" (user verdict; sticky sideways hand). The
+						// bias now carries an age: it re-grounds (age 0) whenever the bias is within
+						// a few degrees of zero, and once it lives past the cap without re-grounding
+						// it rate-limited-converges to whichever source is measuring - truth wins
+						// within ~1s of measured frames, still with no per-frame step. Re-anchoring
+						// on a source switch deliberately does NOT reset the age: the re-based bias
+						// inherits the old roll's wrongness.
+						if (FMath::Abs(QuestWristSideState.PalmRollContinuityBiasDeg) <= 3.0f)
+						{
+							QuestWristSideState.PalmRollBiasAgeSeconds = 0.0f;
+						}
+						else
+						{
+							QuestWristSideState.PalmRollBiasAgeSeconds += PalmRollStepSeconds;
+						}
+						const bool bPalmRollBiasExpired = QuestWristSideState.PalmRollBiasAgeSeconds >= 0.75f;
 						if (bPrimaryRollOk)
 						{
 							QuestWristSideState.PalmRollPrimaryOkSeconds += PalmRollStepSeconds;
@@ -1166,10 +1185,25 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 							}
 							else
 							{
-								QuestWristSideState.PalmRollContinuityBiasDeg = FMath::Lerp(
+								// Expired biases converge fast (0.2s half-life plus a 60deg/s floor so
+								// small residuals cannot linger): the primary IS measuring truth here,
+								// and the only reason to keep any bias is step-free smoothness - which
+								// an exponential-per-frame decay preserves.
+								const float BiasDecayHalfLifeSeconds = bPalmRollBiasExpired ? 0.2f : 0.6f;
+								float DecayedBiasDeg = FMath::Lerp(
 									QuestWristSideState.PalmRollContinuityBiasDeg,
 									0.0f,
-									HalfLifeToAlpha(0.6f, PalmRollStepSeconds));
+									HalfLifeToAlpha(BiasDecayHalfLifeSeconds, PalmRollStepSeconds));
+								if (bPalmRollBiasExpired)
+								{
+									const float LinearBiasDeg = FMath::Sign(QuestWristSideState.PalmRollContinuityBiasDeg) *
+										FMath::Max(FMath::Abs(QuestWristSideState.PalmRollContinuityBiasDeg) - 60.0f * PalmRollStepSeconds, 0.0f);
+									if (FMath::Abs(LinearBiasDeg) < FMath::Abs(DecayedBiasDeg))
+									{
+										DecayedBiasDeg = LinearBiasDeg;
+									}
+								}
+								QuestWristSideState.PalmRollContinuityBiasDeg = DecayedBiasDeg;
 							}
 							WrappedQuestTwistDeg = FRotator::NormalizeAxis(ProjectedRollDeg + QuestWristSideState.PalmRollContinuityBiasDeg);
 							bHasMeasuredPalmRoll = true;
@@ -1181,6 +1215,18 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 							{
 								QuestWristSideState.PalmRollContinuityBiasDeg =
 									FRotator::NormalizeAxis(LastRollWrappedDeg - SwingCorrectedRollDeg);
+							}
+							else if (bPalmRollBiasExpired)
+							{
+								// A young bias stays frozen here (the fallback contributes relative
+								// motion, never its untrusted absolute offset) - but an EXPIRED bias
+								// means the primary has not grounded the roll for the whole cap, and
+								// an indefinite hold is exactly the sticky-wrong wrist. Converge
+								// gently to the swing-corrected absolute: the only measurement present.
+								QuestWristSideState.PalmRollContinuityBiasDeg = FMath::Lerp(
+									QuestWristSideState.PalmRollContinuityBiasDeg,
+									0.0f,
+									HalfLifeToAlpha(1.0f, PalmRollStepSeconds));
 							}
 							WrappedQuestTwistDeg = FRotator::NormalizeAxis(SwingCorrectedRollDeg + QuestWristSideState.PalmRollContinuityBiasDeg);
 							Trace.SemanticRollAxisScore = FMath::Max(Trace.SemanticRollAxisScore, SwingCorrectedRollScore);

@@ -405,10 +405,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 
 		// Per-condition diagnostic (throttled): names which gate blocks the rescue so the
 		// worn-headset verdict can be matched against data instead of guesses.
+		// Throttle lives in the KEYED side state (2026-07-10): the DiagnosticsState node member
+		// is wiped by CacheBones every frame in live VR, so the "1 Hz" row emitted at frame rate
+		// (3,522 rows/side in the 2026-07-10 worn session). This block already requires
+		// RuntimeStateKey != 0, so the keyed write is safe.
 		{
-			double& LastRescueLogTimeSeconds = bIsLeft
-				? DiagnosticsState.LastArmRescueLogTimeSecondsL
-				: DiagnosticsState.LastArmRescueLogTimeSecondsR;
+			double& LastRescueLogTimeSeconds = QuestWristSideState.ArmRescueLastLogTimeSeconds;
 			const double RescueNowSeconds = FPlatformTime::Seconds();
 			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(RescueNowSeconds, 1.0, LastRescueLogTimeSeconds))
 			{
@@ -3809,7 +3811,14 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		// every sub-second Quest flicker became a visible wrist snap to the camera basis and
 		// back. Quest keeps the hand through flickers shorter than the tracked-recency grace;
 		// DriveQuestHandCS's own held-rotation path bridges those frames.
-		if (QuestWristSideState.bArmRescueActive || !bQuestSideRecentlyTrackedForArm)
+		// DECOUPLED from the arm rescue (2026-07-10 worn forensics): the old entry clause
+		// (bArmRescueActive || !recentlyTracked) handed the WRIST to the camera whenever the
+		// rescue owned the ARM, even with Quest tracking healthy - measured L11/R7 cameraLatched
+		// entries with rescue=1 questTracked=1 on the mirror Kellan in one 7-minute session,
+		// each a visible wrist snap to the camera basis. Hand rotation follows camera ONLY on
+		// actual Quest tracking loss (past the grace); a camera-owned arm keeps its Quest hand.
+		// Real dropouts still hand the wrist over: fully-gone arms are also !recentlyTracked.
+		if (!bQuestSideRecentlyTrackedForArm)
 		{
 			QuestWristSideState.bCameraHandOwnershipLatched = true;
 			QuestWristSideState.CameraHandQuestSolidSeconds = 0.0f;
@@ -3854,8 +3863,9 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	else if (bCameraHandFeaturesEnabled)
 	{
 		// Pre-PreUpdate evaluation (RuntimeStateKey==0): no per-component keyed store to latch
-		// in; fall back to the per-frame formula for this evaluation only.
-		bCameraOwnsHandPose = QuestWristSideState.bArmRescueActive || !bQuestSideTrackedForArm;
+		// in; fall back to the per-frame formula for this evaluation only (rescue-decoupled
+		// 2026-07-10, same as the latched entry clause above).
+		bCameraOwnsHandPose = !bQuestSideTrackedForArm;
 	}
 	else if (RuntimeStateKey != 0 && QuestWristSideState.bCameraHandOwnershipLatched)
 	{
@@ -3885,18 +3895,26 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		CVarQuestWristTrace.GetValueOnAnyThread() != 0 ||
 		CVarQuestHandDebug.GetValueOnAnyThread() != 0)
 	{
-		double& LastQuestWristSolveLogTimeSeconds = bIsLeft ? DiagnosticsState.LastQuestWristSolveLogTimeSecondsL : DiagnosticsState.LastQuestWristSolveLogTimeSecondsR;
+		// Throttle lives in the KEYED side state (2026-07-10): the old pair was a node-member
+		// timer (wiped by CacheBones every frame, so it never throttled anything) plus a
+		// function-static shared across ALL actors, which rationed one row per interval per
+		// side for the whole process - Manny consumed the budget and the acceptance mirror
+		// Kellan L starved to 4 rows across the entire 2026-07-10 worn session. Per-actor-side
+		// keyed timers give every actor its own cadence. Pre-PreUpdate evaluations
+		// (RuntimeStateKey==0) keep a process-wide static so the shared key-0 bucket is never
+		// written (keyed-store rule).
 		const double NowSeconds = FPlatformTime::Seconds();
-		static double LastGlobalQuestWristSolveLogTimes[2] = {-1.0, -1.0};
-		double& LastGlobalQuestWristSolveLogTimeSeconds = LastGlobalQuestWristSolveLogTimes[bIsLeft ? 0 : 1];
+		static double LastKeylessQuestWristSolveLogTimes[2] = {-1.0, -1.0};
+		double& LastQuestWristSolveLogTimeSeconds = RuntimeStateKey != 0
+			? QuestWristSideState.QuestWristSolveLastLogTimeSeconds
+			: LastKeylessQuestWristSolveLogTimes[bIsLeft ? 0 : 1];
 		const double RequiredLogIntervalSeconds = CVarQuestWristTrace.GetValueOnAnyThread() != 0
 			? static_cast<double>(FMath::Clamp(CVarQuestWristTraceLogIntervalSeconds.GetValueOnAnyThread(), 0.05f, 5.0f))
 			: 1.0;
-		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottledPair(
+		if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
 			NowSeconds,
 			RequiredLogIntervalSeconds,
-			LastQuestWristSolveLogTimeSeconds,
-			LastGlobalQuestWristSolveLogTimeSeconds))
+			LastQuestWristSolveLogTimeSeconds))
 		{
 			FMediaPipeQuestWristSolveLogFormatInput SolveLogInput;
 			SolveLogInput.TargetActorName = TargetActorName;
