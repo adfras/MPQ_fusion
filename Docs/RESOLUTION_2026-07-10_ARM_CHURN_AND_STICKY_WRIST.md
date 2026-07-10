@@ -231,3 +231,23 @@ Two leaks named by event timing:
    0.8s → 3.0s.
 Drift row gained `applyAlpha=`. Expected next session: near-zero direction-attributed
 jump events; wander in single digits; drift readable as a slow, small settle only.
+
+## WORN VERDICT (2026-07-10, end of arc): "much better" — accepted
+
+Six rounds in one day, each mechanism named from rows before its fix:
+
+| Round | Commit  | What the rows named | Fix |
+|-------|---------|---------------------|-----|
+| 1 | ea94abf | Divergence rescue seized tracked arms (no hysteresis); latch dragged wrist; sticky bias; starved diagnostics | Rescue off in candidate; latch decoupled; bounded bias; keyed throttles |
+| 2 | 507ba1e | Source-flip wiped accepted wrist calibration on every flicker (hand snapped limp, re-accepts baked wrong bases); chain had NO reach lever | Flip-dwell guard; trims out; quest-only hands; chain-reach extension from real quest wrist |
+| 3 | 8ac8e0c | Reach extension chased fraction/chain latency transients (desired spiked 18.8cm) | Sustained-fraction dwell + ramp + 8cm cap + asymmetric easing |
+| 4 | 9921c2b | Direction vote binary at rel 0.5 toggled whole correction (both arms at once) | Vote hysteresis; dropout-safe apply; reliable-only learning; ArmJumpTrace + ArmDirCorrection tracers |
+| 5 | 40c0328 | Correction UNBOUNDED: 69–99°, wrist displaced 65cm, 27/34 jumps | 20° magnitude clamp; quiet-gated learning |
+| 6 | ac28e97 | Frozen correction still applied mid-move (11/13 jumps); 0.8s learner stepped during holds (2/13 + wander) | Motion-faded application; 3.0s learner tau |
+
+The complete recipe for any slow bias-eraser fusing latency-mismatched sources, extracted
+from this arc: (1) magnitude bound matching the validated purpose, (2) learning gated to
+quiet frames, (3) application faded with motion, (4) slow estimator tau, (5) an
+event-driven attribution tracer so the next regression names itself. The mp.ArmJumpTrace
+/ mp.ArmDirCorrection instruments stay armed via mp.MediaPipeCameraHandTrace — read them
+FIRST in any future arm-quality session.
