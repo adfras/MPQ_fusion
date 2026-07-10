@@ -1318,6 +1318,11 @@ namespace MediaPipeRuntimeCVars
 		0.0f,
 		TEXT("Weight (0-1) for transplanting the camera's arm DIRECTIONS (shoulder->elbow and shoulder->wrist unit vectors) onto the Quest chain's segment lengths while the chain drives the arm. The chain synthesizes hanging arms too wide: elbow/wrist 22-24cm horizontal of the shoulder vs the camera's 7-10cm; the fused avatar hung its upper arms at 34-45 deg from vertical vs the offline referee's 15-21 (take-3 MHA referee 2026-07-05, the user's most-repeated visual report). Directions are shoulder-relative per source so frame translation bias cancels. Reliability-gated with a continuously eased blend; supersedes mp.MediaPipeArmElbowSwivelFromCamera (auto-disabled while this is active). 0 preserves historical behavior (byte-stable default); the live trial layer enables it."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeArmDirectionFromCameraMaxDeg(
+		TEXT("mp.MediaPipeArmDirectionFromCameraMaxDeg"),
+		20.0f,
+		TEXT("Magnitude clamp (degrees) on the mp.MediaPipeArmDirectionFromCamera per-segment correction rotations. The corrector was validated to erase a STANDING ~15-20deg hanging-arm bias, but it had no bound: during active movement the 0.8s learner integrated transient camera-vs-chain latency disagreements into 69-99deg corrections that wandered 63-93deg per 10s and displaced the wrist up to 65cm from the chain pose (mp.ArmDirCorrection / mp.ArmJumpTrace, 2026-07-10 worn session: 27 of 34 traced arm jumps named this stage). The clamp bounds the correction to its validated purpose; learning is additionally gated to quiet-arm frames in the solve."));
+
 	TAutoConsoleVariable<float> CVarMediaPipeChainReachFromQuestHand(
 		TEXT("mp.MediaPipeChainReachFromQuestHand"),
 		0.0f,

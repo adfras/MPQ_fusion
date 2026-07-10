@@ -573,10 +573,51 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			const float DirAlpha = QuestWristSideState.ArmDirectionBlendAlpha;
 			const FVector ChainElbowOffset = ElbowWorld - ShoulderWorld;
 			const FVector ChainWristOffset = WristWorld - ShoulderWorld;
-			// LEARNING: only reliable, measured camera frames may steer the correction - the
-			// old code kept learning at 0.8s tau from whatever landmarks existed while the
-			// blend decayed, feeding garbage into the very correction it would re-apply.
-			if (bHasMediaPipeArmWorld && DirReliability >= 0.6f &&
+			// MAGNITUDE BOUND (2026-07-10 round 5): the correction was validated to erase a
+			// STANDING ~15-20deg hanging-arm bias but had no cap - the tracers measured 69-99deg
+			// corrections displacing the wrist up to 65cm (27/34 traced jumps named this stage).
+			const float DirCorrectionMaxRad = FMath::DegreesToRadians(
+				FMath::Clamp(CVarMediaPipeArmDirectionFromCameraMaxDeg.GetValueOnAnyThread(), 0.0f, 90.0f));
+			auto ClampCorrection = [&](FQuat& CorrectionQuat)
+			{
+				FVector CorrAxis = FVector::ZeroVector;
+				double CorrAngle = 0.0;
+				CorrectionQuat.ToAxisAndAngle(CorrAxis, CorrAngle);
+				if (CorrAngle > PI)
+				{
+					CorrAngle = 2.0 * PI - CorrAngle;
+					CorrAxis = -CorrAxis;
+				}
+				if (CorrAngle > DirCorrectionMaxRad && !CorrAxis.IsNearlyZero())
+				{
+					CorrectionQuat = FQuat(CorrAxis, DirCorrectionMaxRad).GetNormalized();
+				}
+			};
+			// QUIET GATE (2026-07-10 round 5): a standing-bias eraser learns only while the raw
+			// chain wrist is slow - during raises the camera and chain legitimately disagree
+			// (different latencies), and the 0.8s learner integrated those transients into the
+			// wandering 63-93deg/10s corrections the drift row measured. Speed baseline is keyed;
+			// unknown speed (first frame / gap) counts as not-quiet.
+			const FVector DirLearnChainWristWorld = FullArmChainResult.WristWorld;
+			float ChainWristSpeedCmPerSec = -1.0f;
+			if (QuestWristSideState.ArmDirLearnLastTimeSeconds >= 0.0)
+			{
+				const float SpeedDtSeconds = static_cast<float>(DirNowSeconds - QuestWristSideState.ArmDirLearnLastTimeSeconds);
+				if (SpeedDtSeconds > KINDA_SMALL_NUMBER && SpeedDtSeconds <= 0.1f)
+				{
+					ChainWristSpeedCmPerSec =
+						FVector::Dist(DirLearnChainWristWorld, QuestWristSideState.ArmDirLearnLastChainWristWorld) / SpeedDtSeconds;
+				}
+			}
+			QuestWristSideState.ArmDirLearnLastChainWristWorld = DirLearnChainWristWorld;
+			QuestWristSideState.ArmDirLearnLastTimeSeconds = DirNowSeconds;
+			const bool bArmQuietForLearning =
+				ChainWristSpeedCmPerSec >= 0.0f && ChainWristSpeedCmPerSec <= 15.0f;
+			// LEARNING: only reliable, measured camera frames with a QUIET arm may steer the
+			// correction - the old code kept learning at 0.8s tau from whatever landmarks
+			// existed while the blend decayed, feeding garbage into the very correction it
+			// would re-apply.
+			if (bHasMediaPipeArmWorld && DirReliability >= 0.6f && bArmQuietForLearning &&
 				!ChainElbowOffset.IsNearlyZero() && !ChainWristOffset.IsNearlyZero())
 			{
 				const FVector CamElbowDir =
@@ -652,6 +693,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 						QuestWristSideState.bHasArmDirCorrection);
 					QuestWristSideState.ArmDirCorrectionWrist = FQuat::Slerp(
 						QuestWristSideState.ArmDirCorrectionWrist, WristDelta, CorrectionAlpha).GetNormalized();
+					ClampCorrection(QuestWristSideState.ArmDirCorrectionElbow);
+					ClampCorrection(QuestWristSideState.ArmDirCorrectionWrist);
 				}
 			}
 			// APPLICATION: needs only the keyed corrections and the chain's own directions, so
@@ -661,6 +704,9 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				QuestWristSideState.bHasArmDirCorrection &&
 				!ChainElbowOffset.IsNearlyZero() && !ChainWristOffset.IsNearlyZero())
 			{
+				// Defensive re-clamp: covers corrections stored before a live clamp change.
+				ClampCorrection(QuestWristSideState.ArmDirCorrectionElbow);
+				ClampCorrection(QuestWristSideState.ArmDirCorrectionWrist);
 				const FQuat ScaledElbow = FQuat::Slerp(
 					FQuat::Identity, QuestWristSideState.ArmDirCorrectionElbow, DirAlpha);
 				const FQuat ScaledWrist = FQuat::Slerp(
@@ -681,7 +727,7 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					DirNowSeconds, 1.0, QuestWristSideState.ArmDirCorrectionLogTimeSeconds))
 			{
 				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.ArmDirCorrection: actor=%s side=%s engaged=%d rel=%.2f dirAlpha=%.2f elbowCorrDeg=%.1f wristCorrDeg=%.1f enterS=%.2f exitS=%.2f hasMpArm=%d"),
+					TEXT("mp.ArmDirCorrection: actor=%s side=%s engaged=%d rel=%.2f dirAlpha=%.2f elbowCorrDeg=%.1f wristCorrDeg=%.1f spdCmS=%.1f quiet=%d enterS=%.2f exitS=%.2f hasMpArm=%d"),
 					*TargetActorName.ToString(),
 					bIsLeft ? TEXT("L") : TEXT("R"),
 					QuestWristSideState.bArmDirCameraVoteEngaged ? 1 : 0,
@@ -689,6 +735,8 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					DirAlpha,
 					FMath::RadiansToDegrees(QuestWristSideState.ArmDirCorrectionElbow.GetAngle()),
 					FMath::RadiansToDegrees(QuestWristSideState.ArmDirCorrectionWrist.GetAngle()),
+					ChainWristSpeedCmPerSec,
+					bArmQuietForLearning ? 1 : 0,
 					QuestWristSideState.ArmDirCameraVoteEnterSeconds,
 					QuestWristSideState.ArmDirCameraVoteExitSeconds,
 					bHasMediaPipeArmWorld ? 1 : 0);

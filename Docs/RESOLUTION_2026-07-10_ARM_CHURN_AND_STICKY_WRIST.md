@@ -195,3 +195,20 @@ Fixes/instruments (same build):
    motion (real movement cancels; residual >1.2cm in one frame = solver-injected jump);
    on trigger, names each stage's contribution and its change (dirOffCm/dDirCm,
    extOffCm/dExtCm, guardOffCm/dGuardCm) — every future jump names its culprit.
+
+## Round 5 (same day): the tracers convicted the corrector's MAGNITUDE, not its gate
+
+First tracer session: 34 jump events, 27 named the direction correction — with
+`dirAlpha=1.00` and tracking healthy (the round-4 gate held; not a toggle). The `dir=`
+column showed the correction displacing the wrist 28–65cm from the chain pose, each jump
+being that offset stepping 2–6cm/frame. The drift row measured correction angles of 69°
+(L elbow) / 99° (R elbow) with 63–93° wander per 10s — a corrector validated to erase a
+STANDING ~15–20° hanging-arm bias, unbounded, integrating transient camera-vs-chain
+latency disagreements at 0.8s tau during movement. Reach extension exonerated (≤0.8cm).
+
+Fixes: **magnitude clamp** `mp.MediaPipeArmDirectionFromCameraMaxDeg` (default 20° —
+bounds the corrector to its validated purpose; clamped after learning and defensively at
+application), and **quiet-gated learning** (keyed chain-wrist speed baseline; learn only
+below 15cm/s — standing bias is a standing phenomenon). Drift row gained `spdCmS=` and
+`quiet=`. Expected next session: elbow/wristCorrDeg ≤20 always, 10s wander in single
+digits at quiet standing, `mp.ArmJumpTrace` events attributed to `direction` near zero.

@@ -195,6 +195,14 @@ struct FQuestWristSideRuntimeState
 	float ArmDirCameraVoteEnterSeconds = 0.0f;
 	float ArmDirCameraVoteExitSeconds = 0.0f;
 	double ArmDirCorrectionLogTimeSeconds = -1.0;
+	// Quiet-gate baseline for correction LEARNING (2026-07-10 round 5): the corrector may
+	// only learn while the raw chain wrist is slow - a standing-bias eraser has no business
+	// learning during raises, where the 0.8s tau integrated transient camera-vs-chain
+	// latency disagreements into 69-99deg corrections (10s wander 63-93deg, wrist displaced
+	// up to 65cm; 27 of 34 traced arm jumps named this stage). Applied corrections are also
+	// magnitude-clamped via mp.MediaPipeArmDirectionFromCameraMaxDeg.
+	FVector ArmDirLearnLastChainWristWorld = FVector::ZeroVector;
+	double ArmDirLearnLastTimeSeconds = -1.0;
 	// Jump-attribution tracer baselines (mp.ArmJumpTrace, 2026-07-10): previous frame's wrist
 	// target at each solve stage (raw chain / after direction correction / after reach
 	// extension / final). Residual motion of the final target vs the raw chain isolates
