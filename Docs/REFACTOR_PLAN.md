@@ -668,3 +668,37 @@ pending user decision (sizes listed in Phase 4).
 | 2 | 2026-06-11 | `e9c3a26` (+`ca5f2cd` tmp-file fixup) | BUILD wrapper ok; AUTO 54/54; PY 20/20 + selftest | Deleted untracked root litter: `Test.txt`–`Test4.txt` (lessons verified present in AGENTS.md bridge guidance), `ce0a1c04-*.png`, root `ump_shared.dll` (SHA-256 identical to `ThirdParty/mediapipe_wrapper/ump_shared.dll`: EBB1A650…45A3B). Fixed `Start_Codex_Unreal_Agent.bat` UE_5.7→UE_5.8. `git rm` `Automation_TestingKit5.sln/.slnx` (regenerable, zero references). Root: 29 → 21 files. |
 | 1 | 2026-06-11 | `9ad2c36` | BUILD via wrapper: cold rebuild incl. 2.45 GB shared PCH, 90 actions, 150.7 s, survived silent stretches; AUTO 54/54; PY 20/20 + selftest | Old CPU-threshold probe falsely killed a live build ("cl/link CPU stuck at 12s" while cl.exe showed +42k page faults/6 s); replaced with activity signature = ANY change in cpu/io/page-fault/process-count of project build processes. Also fixed `Start-Process` ExitCode-null quirk (cache handle + WaitForExit + UBT Result-line fallback) which misreported a succeeded build as failed. AGENTS.md stall guidance updated. |
 | 0 | 2026-06-11 | `0e233f0` + tag `replay-solve-baseline-20260610`; plan `2826092` | BUILD ok (43.6 s, link-only); AUTO 54/54 exit 0; PY 20/20 + selftest OK; PIE PASS both avatars | Dataset backed up to `D:\Backups\TestingKit5_CanonicalReplayDataset` (15 files SHA-256 verified + plots). PIE vs 06-10 final: Kellan knee L 121.09–174.96 / R 112.93–174.96 identical, ball median 0.81 vs 0.80, 0 penetration, drift 0.0; Manny identical knees, ball 0.76 vs 0.75. Comparator: `Tools/compare_replay_measurements.py`. Note: editor PIE driven via TestingKit5 AgentBridge on port 8766 (`CODEX_AGENT_PORT=8766`) because port 8765 hosts a TestingKit6-bound bridge. |
+
+## 9. Corrector refactor (refactor/correctors, 2026-07-10) — Phase 7 DEFERRED: webcam-hand machinery is baseline-live
+
+Phase 7 of the corrector extraction ("delete the dead webcam-hand rotation machinery and
+retire `mp.MediaPipeHandRotationOnQuestLoss` / `mp.MediaPipeFingersOnQuestLoss`") is
+**deferred by user decision**: the static proof required before deletion FAILED. The
+machinery is NOT dead — it is the baseline variant's live behavior, kept intentionally so
+`mp.MediaPipeSettingsVariant baseline` remains the old system for worn A/B comparisons.
+
+Reachability map (verified 2026-07-10 at commit 89627a2):
+
+- **Gate CVars and per-layer values.** Engine defaults: both `0`
+  (`Runtime/MediaPipeRuntimeCVars.cpp:50-58`). Baseline trial list
+  (`GetLiveLowerBodyTrialSettings()`, `Runtime/MediaPipeDriverRuntime.cpp:784-785`): both
+  **1** — the 2026-07-03 camera-hand takeover is part of the accepted baseline. Candidate
+  variant (`GetCandidateVariantSettings()`, `Runtime/MediaPipeDriverRuntime.cpp:864-865`):
+  both **0** (2026-07-10 round-2 "quest-only hands"). So the machinery runs live whenever
+  the trial layer is applied with the baseline variant selected.
+- **Where the gated code actually lives.** ALL reads of both gates are in
+  `PoseDriven/MediaPipePoseDrivenAnimInstance_QuestArmSolve.cpp`, currently lines
+  ~4023-4855: the camera-hand ownership latch/branches, the synthetic-finger feed
+  (`FillSyntheticQuestHandSideFromMediaPipe`), the keyed camera-hand state selection, and
+  the camera-hand trace surface. **`_QuestHandRotation.cpp` has ZERO reads of these
+  gates** — earlier working notes claiming ~1,100 dead lines live there were wrong; that
+  file holds the LIVE palm-roll/rotation-calibration machinery (the `wristPalm*` /
+  `calibrationState` fields in the worn baseline rows). No shipped doc carried the wrong
+  claim; recorded here so it does not resurface.
+- **Test coupling.** `Tests/MediaPipeDiagnosticsTests.cpp:847-849` asserts the trial layer
+  carries both gates at 1. Any retirement touches this test.
+
+**Re-arm condition for the deletion:** deletion becomes eligible only after the user
+promotes the candidate's hand-loss behavior into the baseline trial list and retires those
+two entries themselves. At that point the static proof must be re-run line by line
+(defaults, every settings layer, every test, every reader) before any line is deleted.
