@@ -23,6 +23,7 @@
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestConstrainedArmSolver.h"
 #include "MediaPipeQuestWristApplyPolicy.h"
+#include "MediaPipeReachExtender.h"
 #include "MediaPipeQuestWristDebugReporter.h"
 #include "MediaPipeQuestWristCalibrationState.h"
 #include "MediaPipeQuestWristDiagnosticFormatter.h"
@@ -569,143 +570,30 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			CVarMediaPipeChainReachFromQuestHand.GetValueOnAnyThread(), 0.0f, 1.0f);
 		if (ChainReachWeight > 0.0f && RuntimeStateKey != 0)
 		{
-			const float ChainUpperLenCm = FVector::Dist(FullArmChainResult.ElbowWorld, FullArmChainResult.ShoulderWorld);
-			const float ChainLowerLenCm = FVector::Dist(FullArmChainResult.WristWorld, FullArmChainResult.ElbowWorld);
-			const float AvatarFullReachCm =
-				(ChainUpperLenCm + ChainLowerLenCm) *
-				FMath::Clamp(CVarQuestConstrainedArmMaxReachFraction.GetValueOnAnyThread(), 0.5f, 0.999f);
-			const FVector ChainSrcShoulderWorld = FullArmChainSide.UpperArm.WorldTransform.GetLocation();
-			const FVector ChainSrcElbowWorld = FullArmChainSide.LowerArm.WorldTransform.GetLocation();
-			const FVector ChainSrcWristWorld = FullArmChainSide.WristOrPalm.WorldTransform.GetLocation();
-			const float ChainSrcLenSumCm =
-				FVector::Dist(ChainSrcElbowWorld, ChainSrcShoulderWorld) +
-				FVector::Dist(ChainSrcWristWorld, ChainSrcElbowWorld);
-			const FVector RealHandWristWorld =
+			// Extracted verbatim to ApplyMediaPipeReachExtension
+			// (Correctors/MediaPipeReachExtender; refactor/correctors Phase 5). Inputs are
+			// the exact locals the inline block read; the wall clock, chain-source joints,
+			// and real hand wrist are hoisted here (pure reads).
+			FMediaPipeReachExtenderInputs ReachIn;
+			ReachIn.bIsLeft = bIsLeft;
+			ReachIn.TargetActorName = TargetActorName;
+			ReachIn.Weight = ChainReachWeight;
+			ReachIn.bQuestSideTrackedForArm = bQuestSideTrackedForArm;
+			ReachIn.NowSeconds = FPlatformTime::Seconds();
+			ReachIn.ChainShoulderWorld = ShoulderWorld;
+			ReachIn.ChainResultShoulderWorld = FullArmChainResult.ShoulderWorld;
+			ReachIn.ChainResultElbowWorld = FullArmChainResult.ElbowWorld;
+			ReachIn.ChainResultWristWorld = FullArmChainResult.WristWorld;
+			ReachIn.ChainSrcShoulderWorld = FullArmChainSide.UpperArm.WorldTransform.GetLocation();
+			ReachIn.ChainSrcElbowWorld = FullArmChainSide.LowerArm.WorldTransform.GetLocation();
+			ReachIn.ChainSrcWristWorld = FullArmChainSide.WristOrPalm.WorldTransform.GetLocation();
+			ReachIn.RealHandWristWorld =
 				GetQuestHandPositions(QuestHands, bIsLeft)[static_cast<int32>(EHandKeypoint::Wrist)];
-			const FVector ChainWristOffsetNow = WristWorld - ShoulderWorld;
-			const float ChainReachNowCm = ChainWristOffsetNow.Size();
-			const double ReachNowSeconds = FPlatformTime::Seconds();
-			const float ReachStepSeconds = QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds >= 0.0
-				? FMath::Clamp(static_cast<float>(ReachNowSeconds - QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds), 0.0f, 0.1f)
-				: 0.0f;
-			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = ReachNowSeconds;
-			// TRANSIENT GATE (2026-07-10 late-day worn verdict "arms jump a few cm, often on
-			// fist closes"): the raw fraction/chain mismatch is transient two ways - the
-			// low-latency hand-tracking wrist LEADS the laggy body chain during fast moves
-			// (measured desired 0 -> 18.8 -> 1.4cm across three 1Hz rows while tracked=1
-			// throughout; zero of ten >1cm dips coincided with a tracked-flag flip), and a
-			// fist-close model re-fit steps the wrist estimate a few cm at constant pose.
-			// The extension is a near-full-extension assist, so it now requires the fraction
-			// SUSTAINED above apply-start for a dwell, ramps in across apply-start..apply-full,
-			// caps at the plausible chain deficit (the lag spikes cannot pass), and eases
-			// asymmetrically (slower out than in) so nothing pumps.
-			constexpr float ReachApplyStartFrac = 0.85f;
-			constexpr float ReachApplyFullFrac = 0.97f;
-			constexpr float ReachDwellSeconds = 0.35f;
-			constexpr float ReachMaxExtensionCm = 8.0f;
-			float RealReachFraction = -1.0f;
-			float DesiredExtensionCm = 0.0f;
-			if (bQuestSideTrackedForArm &&
-				ChainSrcLenSumCm > 30.0f &&
-				ChainReachNowCm > KINDA_SMALL_NUMBER &&
-				!RealHandWristWorld.ContainsNaN() &&
-				!RealHandWristWorld.IsNearlyZero())
-			{
-				const float RealReachCm = FVector::Dist(RealHandWristWorld, ChainSrcShoulderWorld);
-				RealReachFraction = FMath::Clamp(RealReachCm / ChainSrcLenSumCm, 0.0f, 1.0f);
-				if (RealReachFraction >= ReachApplyStartFrac)
-				{
-					QuestWristSideState.ChainReachHighFracSeconds += ReachStepSeconds;
-				}
-				else
-				{
-					QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
-				}
-				if (QuestWristSideState.ChainReachHighFracSeconds >= ReachDwellSeconds)
-				{
-					const float ReachRampAlpha = FMath::Clamp(
-						(RealReachFraction - ReachApplyStartFrac) / (ReachApplyFullFrac - ReachApplyStartFrac),
-						0.0f,
-						1.0f);
-					DesiredExtensionCm = FMath::Min(
-						FMath::Max(0.0f, RealReachFraction * AvatarFullReachCm - ChainReachNowCm),
-						ReachMaxExtensionCm) * ReachRampAlpha * ChainReachWeight;
-				}
-			}
-			else
-			{
-				QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
-			}
-			const float ReachSmoothHalfLifeSeconds =
-				DesiredExtensionCm > QuestWristSideState.ChainReachExtensionCm ? 0.45f : 0.8f;
-			QuestWristSideState.ChainReachExtensionCm = FMath::Lerp(
-				QuestWristSideState.ChainReachExtensionCm,
-				DesiredExtensionCm,
-				HalfLifeToAlpha(ReachSmoothHalfLifeSeconds, ReachStepSeconds));
-			if (QuestWristSideState.ChainReachExtensionCm > 0.05f && ChainReachNowCm > KINDA_SMALL_NUMBER)
-			{
-				const FVector ReachAxis = ChainWristOffsetNow / ChainReachNowCm;
-				const float NewReachCm = FMath::Min(
-					ChainReachNowCm + QuestWristSideState.ChainReachExtensionCm, AvatarFullReachCm);
-				WristWorld = ShoulderWorld + ReachAxis * NewReachCm;
-				if (ChainUpperLenCm > KINDA_SMALL_NUMBER && ChainLowerLenCm > KINDA_SMALL_NUMBER)
-				{
-					const FVector ElbowOffsetNow = ElbowWorld - ShoulderWorld;
-					FVector ElbowPerpDir =
-						(ElbowOffsetNow - ReachAxis * FVector::DotProduct(ElbowOffsetNow, ReachAxis)).GetSafeNormal();
-					if (ElbowPerpDir.IsNearlyZero())
-					{
-						ElbowPerpDir = FVector::CrossProduct(ReachAxis, FVector::UpVector).GetSafeNormal();
-					}
-					if (ElbowPerpDir.IsNearlyZero())
-					{
-						ElbowPerpDir = FVector::CrossProduct(ReachAxis, FVector::ForwardVector).GetSafeNormal();
-					}
-					if (!ElbowPerpDir.IsNearlyZero())
-					{
-						const float TwoBoneReachCm = FMath::Clamp(
-							NewReachCm,
-							FMath::Abs(ChainUpperLenCm - ChainLowerLenCm) + 0.1f,
-							ChainUpperLenCm + ChainLowerLenCm - 0.01f);
-						const float CosElbow = FMath::Clamp(
-							(ChainUpperLenCm * ChainUpperLenCm + TwoBoneReachCm * TwoBoneReachCm - ChainLowerLenCm * ChainLowerLenCm) /
-								(2.0f * ChainUpperLenCm * TwoBoneReachCm),
-							-1.0f,
-							1.0f);
-						const float SinElbow = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosElbow * CosElbow));
-						ElbowWorld = ShoulderWorld +
-							ReachAxis * (ChainUpperLenCm * CosElbow) +
-							ElbowPerpDir * (ChainUpperLenCm * SinElbow);
-					}
-				}
-			}
-			// Throttled evidence row (keyed timer - same starvation-proof pattern as the rescue
-			// and wrist-solve rows).
-			if ((CVarQuestWristDebug.GetValueOnAnyThread() != 0 ||
-				 CVarQuestWristTrace.GetValueOnAnyThread() != 0 ||
-				 CVarQuestHandDebug.GetValueOnAnyThread() != 0) &&
-				FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-					ReachNowSeconds, 1.0, QuestWristSideState.ChainReachExtendLastLogTimeSeconds))
-			{
-				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.ChainReachExtend: actor=%s side=%s tracked=%d frac=%.2f highS=%.2f srcLenSumCm=%.1f chainReachCm=%.1f desiredExtCm=%.1f appliedExtCm=%.1f fullReachCm=%.1f"),
-					*TargetActorName.ToString(),
-					bIsLeft ? TEXT("L") : TEXT("R"),
-					bQuestSideTrackedForArm ? 1 : 0,
-					RealReachFraction,
-					QuestWristSideState.ChainReachHighFracSeconds,
-					ChainSrcLenSumCm,
-					ChainReachNowCm,
-					DesiredExtensionCm,
-					QuestWristSideState.ChainReachExtensionCm,
-					AvatarFullReachCm);
-			}
+			ApplyMediaPipeReachExtension(ReachIn, QuestWristSideState, ElbowWorld, WristWorld);
 		}
 		else if (RuntimeStateKey != 0)
 		{
-			QuestWristSideState.ChainReachExtensionCm = 0.0f;
-			QuestWristSideState.ChainReachHighFracSeconds = 0.0f;
-			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = -1.0;
+			ResetMediaPipeReachExtension(QuestWristSideState);
 		}
 		const FVector ArmTraceWristAfterExtWorld = WristWorld;
 
