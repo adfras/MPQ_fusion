@@ -3,6 +3,8 @@
 #include "MediaPipeArmGuardPolicy.h"
 #include "MediaPipeArmTwistSolver.h"
 #include "MediaPipeBodyDiagnostics.h"
+#include "MediaPipeHeadingCorrector.h"
+#include "MediaPipePelvisAnchorCorrector.h"
 #include "MediaPipeBodyFusionDebugFormatter.h"
 #include "MediaPipeBodyFusionPoseWriteContext.h"
 #include "MediaPipeBodyFusionRuntime.h"
@@ -492,56 +494,17 @@ void FAnimNode_MediaPipePoseDriven::DrivePelvisTranslationCS(FCSPose<FCompactPos
 					}
 				}
 
-				// HMD pelvis anchor (2026-07-06): the camera's planar hip estimate drifts
-				// (take-4 referee: +5cm lateral at settle growing to +7cm over 200s vs the
-				// Epic solve's 0.8cm), and the closed-loop HMD lean then tilts the torso to
-				// keep the head under the drift-free HMD - the wearer sees a leaning avatar.
-				// Quest SLAM owns the low-frequency planar anchor: latch the pelvis<->HMD
-				// planar offset once at live-neutral settle, then slow-correct the pelvis
-				// target toward (HMD + offset). High-frequency camera motion passes through;
-				// adaptation freezes while the wearer is not upright so genuine bends are
-				// never corrected away.
-				if (CVarMediaPipePelvisHmdAnchor.GetValueOnAnyThread() != 0 && bHasCachedQuestHmdPose)
+				// Extracted verbatim to ApplyMediaPipePelvisHmdAnchor
+				// (Correctors/MediaPipePelvisAnchorCorrector; refactor/correctors Phase 3).
 				{
-					const FVector PelvisWorldRaw =
-						TargetCompTransform.TransformPosition(RefPelvisTranslationComp + TargetPelvisOffset);
-					const FVector2D PelvisXY(PelvisWorldRaw.X, PelvisWorldRaw.Y);
-					const FVector2D HmdXY(CachedQuestHmdWorld.X, CachedQuestHmdWorld.Y);
-					const float UprightMaxCm =
-						FMath::Max(CVarMediaPipePelvisHmdAnchorUprightMaxCm.GetValueOnAnyThread(), 1.0f);
-					const bool bUpright = (HmdXY - PelvisXY).Size() < UprightMaxCm;
-					if (!BodyState.bHasPelvisHmdAnchor)
-					{
-						if (BodyState.bLiveNeutralsReady && bUpright)
-						{
-							BodyState.PelvisHmdAnchorOffsetXY = PelvisXY - HmdXY;
-							BodyState.PelvisHmdAnchorCorrectionXY = FVector2D::ZeroVector;
-							BodyState.bHasPelvisHmdAnchor = true;
-						}
-					}
-					else
-					{
-						if (bUpright && DeltaSeconds > 0.0f)
-						{
-							const FVector2D DriftErrXY =
-								(HmdXY + BodyState.PelvisHmdAnchorOffsetXY) - PelvisXY;
-							const float AnchorAlpha = HalfLifeToAlpha(
-								FMath::Max(CVarMediaPipePelvisHmdAnchorHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
-								DeltaSeconds);
-							BodyState.PelvisHmdAnchorCorrectionXY =
-								FMath::Lerp(BodyState.PelvisHmdAnchorCorrectionXY, DriftErrXY, AnchorAlpha);
-							const float MaxCorrectionCm =
-								FMath::Max(CVarMediaPipePelvisHmdAnchorMaxCm.GetValueOnAnyThread(), 0.0f);
-							const float CorrectionSize = BodyState.PelvisHmdAnchorCorrectionXY.Size();
-							if (CorrectionSize > MaxCorrectionCm && CorrectionSize > KINDA_SMALL_NUMBER)
-							{
-								BodyState.PelvisHmdAnchorCorrectionXY *= MaxCorrectionCm / CorrectionSize;
-							}
-						}
-						const FVector CorrectionComp = TargetCompTransform.InverseTransformVectorNoScale(
-							FVector(BodyState.PelvisHmdAnchorCorrectionXY, 0.0f));
-						TargetPelvisOffset += CorrectionComp - FVector::DotProduct(CorrectionComp, CompUp) * CompUp;
-					}
+					FMediaPipePelvisAnchorCorrectorInputs PelvisAnchorIn;
+					PelvisAnchorIn.bHasCachedQuestHmdPose = bHasCachedQuestHmdPose;
+					PelvisAnchorIn.DeltaSeconds = DeltaSeconds;
+					PelvisAnchorIn.TargetCompTransform = TargetCompTransform;
+					PelvisAnchorIn.RefPelvisTranslationComp = RefPelvisTranslationComp;
+					PelvisAnchorIn.CachedQuestHmdWorld = CachedQuestHmdWorld;
+					PelvisAnchorIn.CompUp = CompUp;
+					ApplyMediaPipePelvisHmdAnchor(PelvisAnchorIn, BodyState, TargetPelvisOffset);
 				}
 
 				const float PelvisAlpha = HalfLifeToAlpha(PelvisTranslationHalfLifeSeconds, DeltaSeconds);
@@ -952,17 +915,10 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 		}
 	}
 
-	// Camera yaw anchor (2026-07-06): the Quest-derived body yaw carries a constant bias
-	// plus slow drift (take-4 round-3 measured +6deg at start growing to +10deg vs the
-	// Epic solve - the user sees the chest progressively "turning away"). The camera's
-	// shoulder line observes the true torso heading every frame; a low-passed closed-loop
-	// correction (updated after the pelvis write below) erases bias and drift while Quest
-	// keeps owning fast turns - same complementary architecture as the arm-direction and
-	// pelvis-anchor corrections.
-	if (CVarMediaPipeBodyYawFromCamera.GetValueOnAnyThread() != 0)
-	{
-		TargetYawDeg += BodyState.BodyYawCameraCorrectionDeg;
-	}
+	// Extracted verbatim to ApplyMediaPipeHeadingCorrection
+	// (Correctors/MediaPipeHeadingCorrector; refactor/correctors Phase 3). The learner
+	// half runs after the pelvis write below.
+	ApplyMediaPipeHeadingCorrection(BodyState, TargetYawDeg);
 
 	// Every yaw source feeds ONE rate-limited state, so source switches and tracking dropouts
 	// walk the pelvis over a fraction of a second instead of snapping it.
@@ -1074,73 +1030,31 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 		HalfLifeToAlpha(SpineRotationHalfLifeSeconds, DeltaSeconds));
 	ApplyRotationCS(CSPose, Pelvis, BodyState.SmoothedPelvisRotCS);
 
-	// Camera yaw anchor error update (REDESIGNED 2026-07-06 night). The first attempt read
-	// the converted landmark frame, which is HIP-YAW-NORMALIZED - absolute facing is removed
-	// by construction and the loop measured a constant 0 (trace-proven). The RAW MediaPipe
-	// world landmarks (PoseFrame.World: hip-origin camera-space meters, x image-right,
-	// y vertical, z depth) DO carry the wearer's facing relative to the fixed room camera:
-	// shoulder-line yaw in the camera's horizontal (x-z) plane. The camera-to-avatar frame
-	// offset is latched ONCE at live-neutral settle (both systems define their zero there);
-	// afterwards the closed loop erases accumulated yaw drift while Quest owns fast turns.
-	// Adaptation freezes when the shoulder line is too foreshortened to condition the yaw
-	// (profile views) or landmarks are unreliable.
-	if (CVarMediaPipeBodyYawFromCamera.GetValueOnAnyThread() != 0 &&
-		bHasPoseFrame && DeltaSeconds > 0.0f)
+	// Extracted verbatim to UpdateMediaPipeHeadingCorrection
+	// (Correctors/MediaPipeHeadingCorrector; refactor/correctors Phase 3). The shoulder
+	// landmark reads are hoisted here (pure); the reliability/foreshortening gates and
+	// all math stay inside the corrector.
 	{
+		FMediaPipeHeadingCorrectorInputs HeadingIn;
+		HeadingIn.bHasPoseFrame = bHasPoseFrame;
+		HeadingIn.DeltaSeconds = DeltaSeconds;
+		HeadingIn.TwistYawDeg = TwistYawDeg;
 		const int32 LsIdx = (int32)EMediaPipePoseLandmark::LeftShoulder;
 		const int32 RsIdx = (int32)EMediaPipePoseLandmark::RightShoulder;
-		if (PoseFrame.World.IsValidIndex(LsIdx) && PoseFrame.World.IsValidIndex(RsIdx) &&
-			GetLandmarkReliability(LsIdx) >= 0.3f && GetLandmarkReliability(RsIdx) >= 0.3f)
+		HeadingIn.bShoulderLandmarksValid =
+			PoseFrame.World.IsValidIndex(LsIdx) && PoseFrame.World.IsValidIndex(RsIdx);
+		if (HeadingIn.bShoulderLandmarksValid)
 		{
+			HeadingIn.LeftShoulderReliability = GetLandmarkReliability(LsIdx);
+			HeadingIn.RightShoulderReliability = GetLandmarkReliability(RsIdx);
 			const FMediaPipePoseLandmark& Ls = PoseFrame.World.Points[LsIdx];
 			const FMediaPipePoseLandmark& Rs = PoseFrame.World.Points[RsIdx];
-			const float Dx = Ls.X - Rs.X;
-			const float Dz = Ls.Z - Rs.Z;
-			const float PlanarLenM = FMath::Sqrt(Dx * Dx + Dz * Dz);
-			// Below ~18cm of planar shoulder extent the yaw is ill-conditioned (turned away
-			// or heavy occlusion): hold the correction, do not adapt.
-			if (FMath::IsFinite(PlanarLenM) && PlanarLenM > 0.18f)
-			{
-				float CamYawDeg = FMath::RadiansToDegrees(FMath::Atan2(Dz, Dx));
-				const bool bMirrorYaw = CVarMediaPipeLivePoseMirror.GetValueOnAnyThread() != 0;
-				if (bMirrorYaw)
-				{
-					CamYawDeg = -CamYawDeg;
-				}
-				if (!BodyState.bHasBodyYawCamAnchor)
-				{
-					if (BodyState.bLiveNeutralsReady)
-					{
-						BodyState.BodyYawCamAnchorDeg =
-							FMath::FindDeltaAngleDegrees(TwistYawDeg, CamYawDeg);
-						BodyState.BodyYawCameraCorrectionDeg = 0.0f;
-						BodyState.bHasBodyYawCamAnchor = true;
-					}
-				}
-				else
-				{
-					const float ErrDeg = FMath::FindDeltaAngleDegrees(
-						TwistYawDeg, CamYawDeg - BodyState.BodyYawCamAnchorDeg);
-					const float YawAlpha = HalfLifeToAlpha(
-						FMath::Max(CVarMediaPipeBodyYawFromCameraHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
-						DeltaSeconds);
-					const float MaxCorrDeg = FMath::Max(CVarMediaPipeBodyYawFromCameraMaxDeg.GetValueOnAnyThread(), 0.0f);
-					BodyState.BodyYawCameraCorrectionDeg = FMath::Clamp(
-						BodyState.BodyYawCameraCorrectionDeg + YawAlpha * ErrDeg,
-						-MaxCorrDeg, MaxCorrDeg);
-					static double LastYawAnchorLogSeconds = 0.0;
-					const double NowSeconds = FPlatformTime::Seconds();
-					if (NowSeconds - LastYawAnchorLogSeconds > 1.0)
-					{
-						LastYawAnchorLogSeconds = NowSeconds;
-						UE_LOG(LogMediaPipePose, Log,
-							TEXT("mp.BodyYawAnchor: camRaw=%.1f anchor=%.1f err=%.1f corr=%.1f twist=%.1f planarM=%.2f mirror=%d"),
-							CamYawDeg, BodyState.BodyYawCamAnchorDeg, ErrDeg,
-							BodyState.BodyYawCameraCorrectionDeg, TwistYawDeg, PlanarLenM, bMirrorYaw ? 1 : 0);
-					}
-				}
-			}
+			HeadingIn.LeftShoulderCamX = Ls.X;
+			HeadingIn.LeftShoulderCamZ = Ls.Z;
+			HeadingIn.RightShoulderCamX = Rs.X;
+			HeadingIn.RightShoulderCamZ = Rs.Z;
 		}
+		UpdateMediaPipeHeadingCorrection(HeadingIn, BodyState);
 	}
 }
 
