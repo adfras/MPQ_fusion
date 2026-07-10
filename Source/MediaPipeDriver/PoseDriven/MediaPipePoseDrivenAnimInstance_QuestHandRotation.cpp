@@ -584,7 +584,34 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 	if (QuestWristSideState.RotationCalibrationSource != 0 &&
 		QuestWristSideState.RotationCalibrationSource != QuestWristRotationSource)
 	{
+		// TRANSIENT SOURCE-FLIP GUARD (2026-07-10 worn forensics): the solve source above is
+		// per-frame data-dependent (quest basis / camera basis / forearm frame), and a hand-
+		// tracking loss degrades those for a few frames - the old immediate wipe here threw
+		// away an ACCEPTED calibration on every flicker. That also killed the held-rotation
+		// bridge (it requires bHasRotationCalibration), so the hand snapped limp with no
+		// grace, and each mid-motion re-accept baked a NEW arbitrary neutral basis (measured
+		// 2026-07-10: every Tracking->WaitingForStablePose transition coincided with
+		// questTracked=0; R hand 11.5s of handRotApplied=0 after one loss). A mismatch must
+		// now accumulate a dwell of solve-reachable frames before it may wipe; during the
+		// dwell the last rotation holds and the calibration survives. A REAL solve-mode
+		// change (console/config) still recalibrates - one second later.
+		const double SourceMismatchNowSeconds = FPlatformTime::Seconds();
+		const float SourceMismatchStepSeconds = QuestWristSideState.RotationCalibrationSourceMismatchLastTimeSeconds >= 0.0
+			? FMath::Clamp(static_cast<float>(SourceMismatchNowSeconds - QuestWristSideState.RotationCalibrationSourceMismatchLastTimeSeconds), 0.0f, 0.1f)
+			: 0.0f;
+		QuestWristSideState.RotationCalibrationSourceMismatchLastTimeSeconds = SourceMismatchNowSeconds;
+		QuestWristSideState.RotationCalibrationSourceMismatchSeconds += SourceMismatchStepSeconds;
+		if (QuestWristSideState.RotationCalibrationSourceMismatchSeconds < 1.0f &&
+			QuestWristSideState.bHasRotationCalibration)
+		{
+			return TryApplyHeldQuestHandRotation();
+		}
 		QuestWristSideState.ResetRotationCalibration();
+	}
+	else
+	{
+		QuestWristSideState.RotationCalibrationSourceMismatchSeconds = 0.0f;
+		QuestWristSideState.RotationCalibrationSourceMismatchLastTimeSeconds = -1.0;
 	}
 	QuestWristSideState.RotationCalibrationSource = QuestWristRotationSource;
 	if (bUseAnatomicalRollAxisSolve &&

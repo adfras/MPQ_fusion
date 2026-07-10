@@ -95,3 +95,58 @@ or Python — ripgrep silently returns 0 matches on these logs).
   within ~1 s of primary frames.
 - Acceptance: worn mirror test per the handoff's definition of done (arms-forward
   holds + side raises, judged ONLY on MP_LiveMetaHumanKellan).
+
+---
+
+# ROUND 2 (same day): captures falsified the loss-takeover story; row-named mechanisms
+
+The user's 01:50 UTC worn captures (vrpreview 095022 broken wrist, 095052 floppy hand)
+showed the HUD GREEN — my "the floppy wrist is the webcam loss-takeover" explanation was
+WRONG for those moments. Row extraction from the 01:49 boot (first session with un-starved
+per-actor wrist diagnostics) named the real branches:
+
+- **Both capture windows ran the APPLIED quest path**: `questTracked=1 handRotApplied=1
+  wristPalmHeld=0 wristPalmFallback=0`, semantic score 0.83–0.98, `calibrationState=
+  Tracking`, `armOwner=chainDirect`, zero CameraHandTrace transitions in-window. The
+  wrongness was constant SHAPING of the applied rotation, not ownership churn and not the
+  (now-bounded) bias — the sustained 64–72° offset in window 2 never decayed.
+- **The calibration wipe-on-flicker is the deeper defect**: every `Tracking →
+  WaitingForStablePose` transition in the boot coincided with `questTracked=0`. The
+  per-frame solve source (`bUseSemanticRollSolve`) is data-dependent; a loss degrades the
+  quest/forearm bases for a few frames, the source flips, and the source-mismatch guard
+  WIPED the accepted calibration immediately. Consequences measured: (1) the held-rotation
+  bridge requires a calibration, so the hand snapped limp with NO grace on every flicker;
+  (2) R hand spent 11.5s dangling (`handRotApplied=0`) after the 01:51:02 loss, 33% of its
+  session rows total; (3) every mid-motion re-accept baked a NEW arbitrary neutral basis —
+  the shifting constant wrist offsets seen in both captures (L re-accepted at 01:50:48.193,
+  4s before the broken-wrist capture, mid-movement).
+
+## Round-2 fixes (single build with the round-1 staged changes)
+
+1. **Palm trims OUT of candidate** (`mp.QuestWristPalmTrim*` → engine default 0): direct
+   user instruction; the 2026-07-06 gain-calibration history is preserved in the comment
+   for any future refit.
+2. **Quest-only hands on dropout** (`mp.MediaPipeHandRotationOnQuestLoss=0`,
+   `mp.MediaPipeFingersOnQuestLoss=0` in candidate): no webcam wrist takeover; dropouts
+   bridge with the forearm-local held rotation (grace 0.45s + fade 0.75s to the upstream
+   pose), fingers hold via the finger pose gate.
+3. **Transient source-flip guard** (`RotationCalibrationSourceMismatchSeconds`, keyed): a
+   solve-source mismatch must accumulate 1.0s of solve-reachable frames before it may wipe
+   the calibration; during the dwell the held path bridges and the calibration survives.
+   Restores instant resume on re-track and stops the re-anchor lottery. A real solve-mode
+   change still recalibrates one second later.
+4. **Quest-reach chain extension** (`mp.MediaPipeChainReachFromQuestHand`, candidate=1.0,
+   default 0 byte-stable): the chain retargeter rebuilds arms from body-chain DIRECTIONS at
+   fixed avatar segment lengths and its synthesized elbow never straightens (measured reach
+   avg 41–46cm, max ~52 vs avatar ~52 straight). The REAL hand-tracking wrist's distance
+   from the chain's own shoulder over the chain's own segment sum = true straightness
+   fraction; the wrist target extends radially to that fraction of avatar full reach
+   (stretch-only, 0.15s half-life smoothing, decays on hand loss), elbow re-solved with
+   the two-bone cosine rule in the existing swivel plane. Successor to the old quest-wrist
+   reach-scale calibration (`ComputeReachScaleCalibration`), which is gated off while the
+   chain owns arms. Evidence row: `mp.ChainReachExtend` (keyed throttle).
+
+Expected rows next session: `calibrationState=Tracking` surviving hand flickers (no
+`WaitingForStablePose` stretches while worn), `handRotApplied=1` on tracked frames
+throughout, `mp.ChainReachExtend` showing `frac→1.0` and `appliedExtCm>0` on full
+extensions, and no `wristRotCalibHad=0` rows outside genuine multi-second losses.

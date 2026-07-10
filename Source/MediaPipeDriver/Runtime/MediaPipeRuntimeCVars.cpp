@@ -1318,6 +1318,11 @@ namespace MediaPipeRuntimeCVars
 		0.0f,
 		TEXT("Weight (0-1) for transplanting the camera's arm DIRECTIONS (shoulder->elbow and shoulder->wrist unit vectors) onto the Quest chain's segment lengths while the chain drives the arm. The chain synthesizes hanging arms too wide: elbow/wrist 22-24cm horizontal of the shoulder vs the camera's 7-10cm; the fused avatar hung its upper arms at 34-45 deg from vertical vs the offline referee's 15-21 (take-3 MHA referee 2026-07-05, the user's most-repeated visual report). Directions are shoulder-relative per source so frame translation bias cancels. Reliability-gated with a continuously eased blend; supersedes mp.MediaPipeArmElbowSwivelFromCamera (auto-disabled while this is active). 0 preserves historical behavior (byte-stable default); the live trial layer enables it."));
 
+	TAutoConsoleVariable<float> CVarMediaPipeChainReachFromQuestHand(
+		TEXT("mp.MediaPipeChainReachFromQuestHand"),
+		0.0f,
+		TEXT("Weight (0-1) for extending the full-arm-chain wrist target to the REAL Quest hand-tracking wrist's reach while the chain drives the arm. The chain retargeter rebuilds the arm from the body-tracking chain's segment DIRECTIONS at the avatar's fixed segment lengths, and the synthesized elbow never fully straightens - rendered reach saturates ~41-46cm (max 52) while the avatar can reach ~52cm, so full extensions read as bent arms (worn verdict 2026-07-10: 'arms are not extending fully like they used to'). The real hand-tracking wrist distance from the chain's own shoulder, over the chain's own segment-length sum, gives the user's true straightness fraction; the wrist target is extended radially to that fraction of the avatar's full reach (stretch-only, smoothed, decays on hand loss) and the elbow re-solves with the two-bone cosine rule in the existing swivel plane. Replaces what the old quest-wrist solve's reach-scale calibration did before the chain path gated it off. 0 preserves historical behavior (byte-stable default); the candidate settings variant enables it."));
+
 	TAutoConsoleVariable<float> CVarMediaPipeArmElbowSwivelFromCamera(
 		TEXT("mp.MediaPipeArmElbowSwivelFromCamera"),
 		0.0f,

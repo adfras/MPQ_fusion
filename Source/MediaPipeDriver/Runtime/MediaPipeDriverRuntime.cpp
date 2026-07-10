@@ -842,18 +842,34 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// to +10deg - the user's "chest turns away" report. Camera shoulder line owns slow
 		// heading truth; Quest keeps fast turns).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeBodyYawFromCamera"), 1),
-		// Palm retarget trim about the forearm axis (take-4 user report: fused wrist angles
-		// outward on forward points). MESH-LEVEL need fitted vs the kellanized Epic solve:
-		// L +12.5 / R -6.3. The MetaHuman post-process rig redistributes forearm twist, so
-		// only a fraction of a node-level trim reaches the rendered mesh (measured gains
-		// L 0.34 / R 0.57 - asymmetric rig correctives). These COMMANDED values are
-		// gain-calibrated so the fitted amount lands at the mesh: verified round-5
-		// 2026-07-06, residual L -0.8 / R +0.4 deg (zero within noise). Refit BOTH the
-		// mesh-level need and the gains if the retarget mapping or the MetaHuman rig
-		// changes; the anim-node trace mp.PalmTrimLeak (gated on
-		// mp.MediaPipeCameraHandTrace) plus Tools palm_fit measure both ends.
-		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimLeftDeg"), 36.8f),
-		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimRightDeg"), -11.1f),
+		// Palm retarget trim about the forearm axis - PULLED from candidate 2026-07-10 on
+		// direct user instruction ("turn off the fixed twist"): with hand ownership fixed
+		// (no rescue drag, bounded bias) the tracked wrist still read as pushed sideways on
+		// forward points, and the user's baseline A/B (trims 0) felt right. Engine default 0
+		// now applies. History for a refit: mesh-level need was fitted L +12.5 / R -6.3 vs
+		// the kellanized Epic solve, rig gains L 0.34 / R 0.57, commanded 36.8 / -11.1
+		// verified round-5 2026-07-06 (residual L -0.8 / R +0.4 deg); mp.PalmTrimLeak +
+		// Tools palm_fit measure both ends if this is ever revisited.
+		// FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimLeftDeg"), 36.8f),
+		// FMediaPipeCVarSetting::MakeFloat(TEXT("mp.QuestWristPalmTrimRightDeg"), -11.1f),
+		// Quest-only hands (2026-07-10 user instruction): on a hand dropout the wrist must
+		// NOT hand itself to the webcam - the camera basis reads as a floppy wrist near the
+		// frame edge (worn screenshot, HUD R=0). With both loss features off the camera-hand
+		// latch never engages and DriveQuestHandCS's own held path bridges dropouts: the
+		// last rotation is held FOREARM-LOCAL (rides the arm, no flop) with the existing
+		// grace + fade. Fingers hold via mp.QuestFingerPoseGate on untracked frames.
+		// Trade accepted by the user: during camera-owned arms (overhead rescue) the hand
+		// keeps its last Quest pose instead of a webcam guess - the 2026-07-03 frozen-hand
+		// complaint predates the forearm-local hold and the 2026-07-10 ownership fixes.
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeHandRotationOnQuestLoss"), 0),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeFingersOnQuestLoss"), 0),
+		// Quest-reach chain extension (2026-07-10 user instruction "arms are not extending
+		// fully like they used to"): the chain's synthesized elbow never straightens, capping
+		// rendered reach ~41-46cm vs the avatar's ~52cm straight arm. The REAL hand-tracking
+		// wrist's reach fraction over the chain's own segment sum re-extends the wrist target
+		// radially (stretch-only, smoothed, elbow re-solved two-bone). This is the chain-path
+		// successor to the old quest-wrist reach-scale calibration.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeChainReachFromQuestHand"), 1.0f),
 	};
 }
 

@@ -633,6 +633,125 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			}
 		}
 
+		// QUEST-REACH EXTENSION (2026-07-10, restores what the old quest-wrist solve's
+		// reach-scale calibration provided before the chain path gated it off): the chain
+		// retargeter rebuilds the arm from the body-tracking chain's segment DIRECTIONS at the
+		// avatar's fixed segment lengths, and the synthesized elbow never fully straightens -
+		// rendered reach saturates ~41-46cm (max ~52) while the avatar's straight arm reaches
+		// ~52cm, so full extensions read as bent arms ("arms are not extending fully like they
+		// used to"). The REAL Quest hand-tracking wrist knows the true extension: its distance
+		// from the chain's own shoulder over the chain's own segment-length sum is the user's
+		// actual straightness fraction, dimensionless and frame-bias-free (both measured in the
+		// same tracking space). Map that fraction onto the avatar's full reach and extend the
+		// chain wrist radially (stretch-only), re-solving the elbow with the two-bone cosine
+		// rule in the existing swivel plane so segment lengths stay exact.
+		const float ChainReachWeight = FMath::Clamp(
+			CVarMediaPipeChainReachFromQuestHand.GetValueOnAnyThread(), 0.0f, 1.0f);
+		if (ChainReachWeight > 0.0f && RuntimeStateKey != 0)
+		{
+			const float ChainUpperLenCm = FVector::Dist(FullArmChainResult.ElbowWorld, FullArmChainResult.ShoulderWorld);
+			const float ChainLowerLenCm = FVector::Dist(FullArmChainResult.WristWorld, FullArmChainResult.ElbowWorld);
+			const float AvatarFullReachCm =
+				(ChainUpperLenCm + ChainLowerLenCm) *
+				FMath::Clamp(CVarQuestConstrainedArmMaxReachFraction.GetValueOnAnyThread(), 0.5f, 0.999f);
+			const FVector ChainSrcShoulderWorld = FullArmChainSide.UpperArm.WorldTransform.GetLocation();
+			const FVector ChainSrcElbowWorld = FullArmChainSide.LowerArm.WorldTransform.GetLocation();
+			const FVector ChainSrcWristWorld = FullArmChainSide.WristOrPalm.WorldTransform.GetLocation();
+			const float ChainSrcLenSumCm =
+				FVector::Dist(ChainSrcElbowWorld, ChainSrcShoulderWorld) +
+				FVector::Dist(ChainSrcWristWorld, ChainSrcElbowWorld);
+			const FVector RealHandWristWorld =
+				GetQuestHandPositions(QuestHands, bIsLeft)[static_cast<int32>(EHandKeypoint::Wrist)];
+			const FVector ChainWristOffsetNow = WristWorld - ShoulderWorld;
+			const float ChainReachNowCm = ChainWristOffsetNow.Size();
+			float RealReachFraction = -1.0f;
+			float DesiredExtensionCm = 0.0f;
+			if (bQuestSideTrackedForArm &&
+				ChainSrcLenSumCm > 30.0f &&
+				ChainReachNowCm > KINDA_SMALL_NUMBER &&
+				!RealHandWristWorld.ContainsNaN() &&
+				!RealHandWristWorld.IsNearlyZero())
+			{
+				const float RealReachCm = FVector::Dist(RealHandWristWorld, ChainSrcShoulderWorld);
+				RealReachFraction = FMath::Clamp(RealReachCm / ChainSrcLenSumCm, 0.0f, 1.0f);
+				DesiredExtensionCm = FMath::Max(0.0f, RealReachFraction * AvatarFullReachCm - ChainReachNowCm) * ChainReachWeight;
+			}
+			const double ReachNowSeconds = FPlatformTime::Seconds();
+			const float ReachStepSeconds = QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds >= 0.0
+				? FMath::Clamp(static_cast<float>(ReachNowSeconds - QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds), 0.0f, 0.1f)
+				: 0.0f;
+			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = ReachNowSeconds;
+			// 0.15s half-life both ways: fast enough to track a real punch-out, slow enough that
+			// a tracked-flag flicker cannot pop the wrist; hand loss decays the extension back to
+			// the bare chain smoothly.
+			QuestWristSideState.ChainReachExtensionCm = FMath::Lerp(
+				QuestWristSideState.ChainReachExtensionCm,
+				DesiredExtensionCm,
+				HalfLifeToAlpha(0.15f, ReachStepSeconds));
+			if (QuestWristSideState.ChainReachExtensionCm > 0.05f && ChainReachNowCm > KINDA_SMALL_NUMBER)
+			{
+				const FVector ReachAxis = ChainWristOffsetNow / ChainReachNowCm;
+				const float NewReachCm = FMath::Min(
+					ChainReachNowCm + QuestWristSideState.ChainReachExtensionCm, AvatarFullReachCm);
+				WristWorld = ShoulderWorld + ReachAxis * NewReachCm;
+				if (ChainUpperLenCm > KINDA_SMALL_NUMBER && ChainLowerLenCm > KINDA_SMALL_NUMBER)
+				{
+					const FVector ElbowOffsetNow = ElbowWorld - ShoulderWorld;
+					FVector ElbowPerpDir =
+						(ElbowOffsetNow - ReachAxis * FVector::DotProduct(ElbowOffsetNow, ReachAxis)).GetSafeNormal();
+					if (ElbowPerpDir.IsNearlyZero())
+					{
+						ElbowPerpDir = FVector::CrossProduct(ReachAxis, FVector::UpVector).GetSafeNormal();
+					}
+					if (ElbowPerpDir.IsNearlyZero())
+					{
+						ElbowPerpDir = FVector::CrossProduct(ReachAxis, FVector::ForwardVector).GetSafeNormal();
+					}
+					if (!ElbowPerpDir.IsNearlyZero())
+					{
+						const float TwoBoneReachCm = FMath::Clamp(
+							NewReachCm,
+							FMath::Abs(ChainUpperLenCm - ChainLowerLenCm) + 0.1f,
+							ChainUpperLenCm + ChainLowerLenCm - 0.01f);
+						const float CosElbow = FMath::Clamp(
+							(ChainUpperLenCm * ChainUpperLenCm + TwoBoneReachCm * TwoBoneReachCm - ChainLowerLenCm * ChainLowerLenCm) /
+								(2.0f * ChainUpperLenCm * TwoBoneReachCm),
+							-1.0f,
+							1.0f);
+						const float SinElbow = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosElbow * CosElbow));
+						ElbowWorld = ShoulderWorld +
+							ReachAxis * (ChainUpperLenCm * CosElbow) +
+							ElbowPerpDir * (ChainUpperLenCm * SinElbow);
+					}
+				}
+			}
+			// Throttled evidence row (keyed timer - same starvation-proof pattern as the rescue
+			// and wrist-solve rows).
+			if ((CVarQuestWristDebug.GetValueOnAnyThread() != 0 ||
+				 CVarQuestWristTrace.GetValueOnAnyThread() != 0 ||
+				 CVarQuestHandDebug.GetValueOnAnyThread() != 0) &&
+				FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+					ReachNowSeconds, 1.0, QuestWristSideState.ChainReachExtendLastLogTimeSeconds))
+			{
+				UE_LOG(LogMediaPipePose, Log,
+					TEXT("mp.ChainReachExtend: actor=%s side=%s tracked=%d frac=%.2f srcLenSumCm=%.1f chainReachCm=%.1f desiredExtCm=%.1f appliedExtCm=%.1f fullReachCm=%.1f"),
+					*TargetActorName.ToString(),
+					bIsLeft ? TEXT("L") : TEXT("R"),
+					bQuestSideTrackedForArm ? 1 : 0,
+					RealReachFraction,
+					ChainSrcLenSumCm,
+					ChainReachNowCm,
+					DesiredExtensionCm,
+					QuestWristSideState.ChainReachExtensionCm,
+					AvatarFullReachCm);
+			}
+		}
+		else if (RuntimeStateKey != 0)
+		{
+			QuestWristSideState.ChainReachExtensionCm = 0.0f;
+			QuestWristSideState.ChainReachExtensionLastUpdateTimeSeconds = -1.0;
+		}
+
 		// Torso-capsule guard (take-3 forensics 2026-07-05: the fused right wrist passed
 		// within 2.0cm of the spine axis at 66s - inside the body - while the offline referee
 		// never dipped below 14.8cm; Epic's solver enforces non-penetration, this stack had no

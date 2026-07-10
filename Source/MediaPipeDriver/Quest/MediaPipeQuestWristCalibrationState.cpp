@@ -7,6 +7,8 @@ void FQuestWristSideRuntimeState::ResetRotationCalibration()
 	bHasRotationCalibration = false;
 	RotationCalibrationBasisComp = FQuat::Identity;
 	RotationCalibrationSource = 0;
+	RotationCalibrationSourceMismatchSeconds = 0.0f;
+	RotationCalibrationSourceMismatchLastTimeSeconds = -1.0;
 	bHasRotationAnatomicalRollAxis = false;
 	RotationAnatomicalRollAxisIndex = 0;
 	RotationAnatomicalRollAxisSign = 1.0f;

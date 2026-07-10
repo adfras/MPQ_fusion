@@ -25,6 +25,16 @@ struct FQuestWristSideRuntimeState
 	bool bHasRotationCalibration = false;
 	FQuat RotationCalibrationBasisComp = FQuat::Identity;
 	uint8 RotationCalibrationSource = 0;
+	// Source-flip dwell (2026-07-10 worn forensics): the per-frame solve source flips for a
+	// few frames whenever a hand-tracking loss degrades the quest/forearm bases, and the old
+	// immediate source-mismatch wipe destroyed an ACCEPTED calibration on every flicker - the
+	// held-rotation bridge (which requires a calibration) died with it, the hand snapped limp,
+	// and mid-motion re-acceptance took seconds (R hand: 11.5s of handRotApplied=0 after one
+	// loss; 33% of the session's rows waiting) while each re-accept baked a NEW arbitrary
+	// neutral basis (the shifting constant wrist offsets). A mismatch must now accumulate
+	// this dwell before it may wipe; transient flips hold the last rotation instead.
+	float RotationCalibrationSourceMismatchSeconds = 0.0f;
+	double RotationCalibrationSourceMismatchLastTimeSeconds = -1.0;
 	bool bHasRotationAnatomicalRollAxis = false;
 	uint8 RotationAnatomicalRollAxisIndex = 0;
 	float RotationAnatomicalRollAxisSign = 1.0f;
@@ -146,6 +156,14 @@ struct FQuestWristSideRuntimeState
 	// per-actor-side timers survive resets and give every actor its own cadence.
 	double ArmRescueLastLogTimeSeconds = -1.0;
 	double QuestWristSolveLastLogTimeSeconds = -1.0;
+	// Quest-reach chain extension (mp.MediaPipeChainReachFromQuestHand, 2026-07-10): smoothed
+	// radial extension (cm) of the chain-direct wrist target toward the REAL hand-tracking
+	// wrist's reach fraction. Smoothed so tracked-flag flickers cannot pop the wrist; decays
+	// to zero when the real wrist is unavailable. Keyed for the same CacheBones reason as
+	// everything else here.
+	float ChainReachExtensionCm = 0.0f;
+	double ChainReachExtensionLastUpdateTimeSeconds = -1.0;
+	double ChainReachExtendLastLogTimeSeconds = -1.0;
 	// Wall-clock time this side's Quest hand tracked flag was last TRUE (2026-07-09): the
 	// tracked flag flickers sub-second at the FOV edge, and a single dropped frame let the
 	// rescue's untracked clause and the camera-hand latch seize a hand mid side-raise
