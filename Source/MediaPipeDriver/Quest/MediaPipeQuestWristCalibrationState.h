@@ -203,6 +203,11 @@ struct FQuestWristSideRuntimeState
 	// magnitude-clamped via mp.MediaPipeArmDirectionFromCameraMaxDeg.
 	FVector ArmDirLearnLastChainWristWorld = FVector::ZeroVector;
 	double ArmDirLearnLastTimeSeconds = -1.0;
+	// Motion fade on correction APPLICATION (2026-07-10 round 6): a standing-bias correction
+	// contributes nothing during fast motion - 11 of 13 residual jump events fired mid-move,
+	// where the frozen correction's displacement scales/swings with the moving chain. Full
+	// below 20cm/s, zero above 60, smoothed so the fade itself never steps.
+	float ArmDirMotionFadeAlpha = 0.0f;
 	// Jump-attribution tracer baselines (mp.ArmJumpTrace, 2026-07-10): previous frame's wrist
 	// target at each solve stage (raw chain / after direction correction / after reach
 	// extension / final). Residual motion of the final target vs the raw chain isolates

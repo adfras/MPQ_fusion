@@ -212,3 +212,22 @@ application), and **quiet-gated learning** (keyed chain-wrist speed baseline; le
 below 15cm/s — standing bias is a standing phenomenon). Drift row gained `spdCmS=` and
 `quiet=`. Expected next session: elbow/wristCorrDeg ≤20 always, 10s wander in single
 digits at quiet standing, `mp.ArmJumpTrace` events attributed to `direction` near zero.
+
+## Round 6 (same day): residuals quantified — two leaks in the bounded corrector
+
+Post-round-5 tracers: 13 jump events (was 34), ALL direction-attributed, worst residual
+3.0cm (was 22.6); correction angles clamp-saturated at exactly 20.0° with 14–16°/10s
+wander (was 63–93°) — the user still felt lighter jumps + drift, and the rows agree.
+Two leaks named by event timing:
+1. **11/13 events fired during fast movement** (source motion 6–16cm/frame): learning is
+   quiet-gated, but the frozen correction keeps APPLYING, and a fixed 20° rotation's
+   displacement scales/swings with the moving chain. Fix: application fades with arm
+   speed (full ≤20cm/s, zero ≥60cm/s, 0.2s-half-life smoothed; unknown speed = fast) —
+   a standing-bias correction contributes nothing mid-move, per the original
+   complementary design (the chain owns fast motion).
+2. **2/13 events at near-zero motion with the correction stepping ~1.3cm/frame** — the
+   0.8s learner stepping when its target shifts during quiet holds, and re-learning a
+   different correction per held pose (the wander behind the drift). Fix: learner tau
+   0.8s → 3.0s.
+Drift row gained `applyAlpha=`. Expected next session: near-zero direction-attributed
+jump events; wander in single digits; drift readable as a slow, small settle only.
