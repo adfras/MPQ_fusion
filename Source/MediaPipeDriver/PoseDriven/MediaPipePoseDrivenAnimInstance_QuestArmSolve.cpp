@@ -1,6 +1,7 @@
 #include "MediaPipePoseDrivenAnimInstance.h"
 
 #include "MediaPipeArmDirectionCorrector.h"
+#include "MediaPipeArmLossOverride.h"
 #include "MediaPipeArmGuardPolicy.h"
 #include "MediaPipeArmTwistSolver.h"
 #include "MediaPipeBodyDiagnostics.h"
@@ -326,160 +327,37 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		!bBodyFusionPoseWriteActive &&
 		!bTrackingFusionReplayActive)
 	{
-		const float RescueMinReliability = FMath::Clamp(
-			CVarMediaPipeArmOverheadRescueMinReliability.GetValueOnAnyThread(), 0.0f, 1.0f);
-		const float RescueReliability = bHasMediaPipeArmWorld
+		// Extracted verbatim to FMediaPipeArmLossOverride::Update
+		// (Correctors/MediaPipeArmLossOverride; refactor/correctors Phase 6). Inputs are
+		// the exact locals the inline block read; the wall clock is hoisted here.
+		FMediaPipeArmLossOverrideInputs RescueIn;
+		RescueIn.bIsLeft = bIsLeft;
+		RescueIn.TargetActorName = TargetActorName;
+		RescueIn.bHasMediaPipeArmWorld = bHasMediaPipeArmWorld;
+		RescueIn.RescueReliability = bHasMediaPipeArmWorld
 			? FMath::Min3(
 				GetLandmarkReliability(ShoulderLm),
 				GetLandmarkReliability(ElbowLm),
 				GetLandmarkReliability(WristLm))
 			: 0.0f;
-		const float RescueWristAboveShoulderCm =
-			MediaPipeSourceWristWorld.Z - MediaPipeSourceShoulderWorld.Z;
-		// The Quest's tracked flag CANNOT be trusted overhead: measured 2026-07-02, hands sag
-		// with questTracked=1 throughout while the runtime synthesizes. Fire the rescue either
-		// on a true dropout OR when the camera's wrist sits far ABOVE where the Quest put the
-		// hand - the divergence measures the Quest being wrong directly. When the chain is
-		// stale the comparator is the previous frame's APPLIED quest wrist (LastTrackedQuestArm),
-		// so a tracked-but-synthesizing hand tracker is caught the same way as the body chain.
-		const double RescueNowWallSeconds = FPlatformTime::Seconds();
-		const bool bHasRecentTrackedQuestWristForDivergence =
-			QuestWristSideState.bHasLastTrackedQuestArmPose &&
-			QuestWristSideState.LastTrackedQuestArmTimeSeconds >= 0.0 &&
-			RescueNowWallSeconds - QuestWristSideState.LastTrackedQuestArmTimeSeconds <= 0.5;
-		// Shoulder-relative divergence (2026-07-04 take-2 parity forensics): the camera landmarks
-		// and the Quest chain live in frames whose origins disagree (~-90 cm constant camera-below-
-		// chain bias measured while the sources visibly agreed), so the absolute-Z compare could
-		// never reach the camera-above-chain threshold and a 6 s chain dropout went unrescued.
-		// Comparing each wrist against its OWN source's shoulder cancels any translation bias;
-		// scale between the frames measured 1:1, so the differenced signal is trustworthy.
-		const bool bRescueShoulderRelDivergence =
-			CVarMediaPipeArmRescueShoulderRelDivergence.GetValueOnAnyThread() != 0;
-		const float RescueQuestDivergenceCm =
-			bMetaHumanFullArmChainFresh
-				? (bRescueShoulderRelDivergence
-					? ((MediaPipeSourceWristWorld.Z - MediaPipeSourceShoulderWorld.Z) -
-						(FullArmChainResult.WristWorld.Z - FullArmChainResult.ShoulderWorld.Z))
-					: (MediaPipeSourceWristWorld.Z - FullArmChainResult.WristWorld.Z))
-				: (bHasRecentTrackedQuestWristForDivergence
-					? (MediaPipeSourceWristWorld.Z - QuestWristSideState.LastTrackedQuestArmWristWorld.Z)
-					: 0.0f);
-		// Chain-above veto (2026-07-04, MHA-referee forensics): a dropped hand flag with a FRESH
-		// chain sitting far ABOVE the camera wrist means the camera is the low/wrong one - taking
-		// the arm there dragged it 25->52 cm off the offline reference in the early-take windows.
-		// Entry-only veto on the untracked clause; the divergence trigger (camera above chain) and
-		// the fully-gone path (chain stale) are untouched, so a camera-seen RAISED arm still wins.
-		const float RescueChainAboveVetoCm =
-			CVarMediaPipeArmOverheadRescueChainAboveVetoCm.GetValueOnAnyThread();
-		const bool bChainAboveVeto =
-			RescueChainAboveVetoCm > 0.0f &&
-			bMetaHumanFullArmChainFresh &&
-			RescueQuestDivergenceCm <= -RescueChainAboveVetoCm;
-		const bool bRescueDivergenceTriggered =
-			(bMetaHumanFullArmChainFresh || bHasRecentTrackedQuestWristForDivergence) &&
-			RescueQuestDivergenceCm >= CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread();
-		// Flicker grace (2026-07-09): the untracked clauses coast through sub-second tracked-flag
-		// drops (Quest stays the hand authority); the divergence trigger keeps bypassing the
-		// grace because it is direct camera evidence the Quest pose is WRONG, not merely gone.
-		const bool bQuestArmWrongOrLost =
-			(!bQuestSideRecentlyTrackedForArm && !bChainAboveVeto) || bRescueDivergenceTriggered;
-		// USER RULE (2026-07-02): never hold an arm against the camera. When the Quest side is
-		// FULLY gone (hand untracked AND chain stale), any camera detection takes the arm - no
-		// reliability floor, no overhead-region requirement (measured: overhead MediaPipe
-		// reliability drops to 0.2-0.4 at the top of frame, well under the old 0.5 floor, and
-		// the rescue refused arms it could plainly see).
-		const bool bQuestArmFullyGone = !bQuestSideRecentlyTrackedForArm && !bMetaHumanFullArmChainFresh;
-		// A bias-free (shoulder-relative) divergence against a FRESH chain is direct evidence the
-		// chain is wrong wherever the arm is - the measured take-2 dropout held the raised arm at
-		// SHOULDER height, which the overhead gate refused. Untracked-clause and legacy absolute
-		// triggers keep the overhead gate: their signals are only trustworthy overhead.
-		const bool bRescueBypassOverheadGate =
-			bRescueShoulderRelDivergence && bRescueDivergenceTriggered && bMetaHumanFullArmChainFresh;
-		const bool bRescueConditions =
-			bHasMediaPipeArmWorld &&
-			(bQuestArmFullyGone
-				? RescueReliability >= 0.05f
-				: (bQuestArmWrongOrLost &&
-					RescueReliability >= RescueMinReliability &&
-					(bRescueBypassOverheadGate ||
-						RescueWristAboveShoulderCm >=
-							CVarMediaPipeArmOverheadRescueWristAboveShoulderCm.GetValueOnAnyThread())));
-
-		// Per-condition diagnostic (throttled): names which gate blocks the rescue so the
-		// worn-headset verdict can be matched against data instead of guesses.
-		// Throttle lives in the KEYED side state (2026-07-10): the DiagnosticsState node member
-		// is wiped by CacheBones every frame in live VR, so the "1 Hz" row emitted at frame rate
-		// (3,522 rows/side in the 2026-07-10 worn session). This block already requires
-		// RuntimeStateKey != 0, so the keyed write is safe.
-		{
-			double& LastRescueLogTimeSeconds = QuestWristSideState.ArmRescueLastLogTimeSeconds;
-			const double RescueNowSeconds = FPlatformTime::Seconds();
-			if (FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(RescueNowSeconds, 1.0, LastRescueLogTimeSeconds))
-			{
-				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.ArmOverheadRescue: actor=%s side=%s active=%d conditions=%d hasMpArm=%d questTracked=%d chainFresh=%d divergenceCm=%.1f (min=%.1f shoulderRel=%d) rel=%.2f (min=%.2f) wristAboveShoulderCm=%.1f (min=%.1f) dirAlpha=%.2f enterS=%.2f exitS=%.2f node=%llu key=%u dt=%.4f resets=%u"),
-					*TargetActorName.ToString(),
-					bIsLeft ? TEXT("L") : TEXT("R"),
-					QuestWristSideState.bArmRescueActive ? 1 : 0,
-					bRescueConditions ? 1 : 0,
-					bHasMediaPipeArmWorld ? 1 : 0,
-					bQuestSideTrackedForArm ? 1 : 0,
-					bMetaHumanFullArmChainFresh ? 1 : 0,
-					RescueQuestDivergenceCm,
-					CVarMediaPipeArmOverheadRescueDivergenceCm.GetValueOnAnyThread(),
-					bRescueShoulderRelDivergence ? 1 : 0,
-					RescueReliability,
-					RescueMinReliability,
-					RescueWristAboveShoulderCm,
-					CVarMediaPipeArmOverheadRescueWristAboveShoulderCm.GetValueOnAnyThread(),
-					QuestWristSideState.ArmDirectionBlendAlpha,
-					QuestWristSideState.ArmRescueEnterSeconds,
-					QuestWristSideState.ArmRescueExitSeconds,
-					NodeDiagSerial,
-					RuntimeStateKey,
-					DeltaSeconds,
-					PoseStateResetCount);
-			}
-		}
-		// Wall-clock dwell accumulation: DeltaSeconds reaches this solve as 0 on evaluations
-		// that ran without a paired update (measured: enterS never moved off 0.00), so the
-		// dwell steps from the keyed state's own last-update timestamp instead.
-		float RescueStepSeconds = QuestWristSideState.ArmRescueLastUpdateTimeSeconds >= 0.0
-			? static_cast<float>(RescueNowWallSeconds - QuestWristSideState.ArmRescueLastUpdateTimeSeconds)
-			: FMath::Max(DeltaSeconds, CachedDeltaTimeSeconds);
-		RescueStepSeconds = FMath::Clamp(RescueStepSeconds, 0.0f, 0.10f);
-		QuestWristSideState.ArmRescueLastUpdateTimeSeconds = RescueNowWallSeconds;
-		if (bRescueConditions)
-		{
-			QuestWristSideState.ArmRescueExitSeconds = 0.0f;
-			QuestWristSideState.ArmRescueEnterSeconds += RescueStepSeconds;
-			if (QuestWristSideState.ArmRescueEnterSeconds >= 0.15f)
-			{
-				QuestWristSideState.bArmRescueActive = true;
-			}
-		}
-		else
-		{
-			// DECAY the entry dwell instead of hard-resetting it: the Quest tracked flag
-			// flickers at frame rate near the FOV edge, and a hard reset let a single tracked
-			// frame erase the dwell forever - conditions held for seconds while the rescue
-			// never latched (measured 2026-07-02). With decay, majority-true flicker still
-			// accumulates; solidly-false conditions still drain to zero.
-			QuestWristSideState.ArmRescueEnterSeconds = FMath::Max(
-				QuestWristSideState.ArmRescueEnterSeconds - RescueStepSeconds * 0.5f, 0.0f);
-			QuestWristSideState.ArmRescueExitSeconds += RescueStepSeconds;
-			if (QuestWristSideState.ArmRescueExitSeconds >= 0.3f)
-			{
-				QuestWristSideState.bArmRescueActive = false;
-			}
-		}
+		RescueIn.bQuestSideTrackedForArm = bQuestSideTrackedForArm;
+		RescueIn.bQuestSideRecentlyTrackedForArm = bQuestSideRecentlyTrackedForArm;
+		RescueIn.bMetaHumanFullArmChainFresh = bMetaHumanFullArmChainFresh;
+		RescueIn.CamShoulderWorld = MediaPipeSourceShoulderWorld;
+		RescueIn.CamWristWorld = MediaPipeSourceWristWorld;
+		RescueIn.ChainResultShoulderWorld = FullArmChainResult.ShoulderWorld;
+		RescueIn.ChainResultWristWorld = FullArmChainResult.WristWorld;
+		RescueIn.NowSeconds = FPlatformTime::Seconds();
+		RescueIn.FallbackDeltaSeconds = FMath::Max(DeltaSeconds, CachedDeltaTimeSeconds);
+		RescueIn.NodeDiagSerial = NodeDiagSerial;
+		RescueIn.RuntimeStateKey = RuntimeStateKey;
+		RescueIn.DeltaSeconds = DeltaSeconds;
+		RescueIn.PoseStateResetCount = PoseStateResetCount;
+		FMediaPipeArmLossOverride::Update(RescueIn, QuestWristSideState);
 	}
 	else if (RuntimeStateKey != 0)
 	{
-		QuestWristSideState.bArmRescueActive = false;
-		QuestWristSideState.ArmRescueEnterSeconds = 0.0f;
-		QuestWristSideState.ArmRescueExitSeconds = 0.0f;
-		QuestWristSideState.ArmRescueLastUpdateTimeSeconds = -1.0;
+		FMediaPipeArmLossOverride::Reset(QuestWristSideState);
 	}
 	const bool bMediaPipeArmRescue = QuestWristSideState.bArmRescueActive && bHasMediaPipeArmWorld;
 	if (bMediaPipeArmRescue)
