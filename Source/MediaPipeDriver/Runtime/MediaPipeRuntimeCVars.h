@@ -357,4 +357,8 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipePoseYawAlignMaxSpeedDegreesPerSecond;
 	extern TAutoConsoleVariable<float> CVarMediaPipePoseYawAlignRejectJumpDegrees;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeTorsoDebug;
+	// Tracking-quality tracers (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11; report-only).
+	extern TAutoConsoleVariable<int32> CVarFootSkateTrace;
+	extern TAutoConsoleVariable<int32> CVarWristLimitTrace;
+	extern TAutoConsoleVariable<int32> CVarWebcamAgeTrace;
 }

@@ -561,6 +561,11 @@ struct FMediaPipeFootContactSideRuntimeState
 	int32 FloorBucketIndex = 0;
 	bool bFloorBucketsInit = false;
 
+	// mp.FootSkateTrace row throttle (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11). Keyed
+	// here (not a node member) so live CacheBones resets cannot turn the 4 Hz row into
+	// frame-rate spam - the mp.ArmOverheadRescue 3,522-rows/side lesson.
+	double FootSkateTraceLastLogTimeSeconds = -1.0;
+
 	void Reset()
 	{
 		*this = FMediaPipeFootContactSideRuntimeState();

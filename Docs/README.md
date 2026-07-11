@@ -41,6 +41,10 @@ historical unless this index marks them active.
   (timestamped residuals, wrist anatomical clamp, foreshortening Z-distrust, foot
   contact + lock, learned-prior bake-off) — research-derived, phased, desk-gated,
   one worn acceptance at the end.
+- `tracking_quality_baseline/`: the plan's Phase-0 before-numbers (2026-07-11, branch
+  `feature/tracking-quality`): the mined 2026-07-10 acceptance-session fingerprint plus
+  captures taken with the mp.FootSkateTrace / mp.WristLimitTrace / mp.WebcamAgeTrace
+  tracers armed. Regenerate summaries with `Tools/mine_tracking_quality_baseline.py`.
 - `REFACTOR_PLAN.md`: the phased structural refactor and cleanup plan (gates, evidence,
   execution log). Read this before moving, deleting, or restructuring anything.
 - `refactor_baseline/`: the corrector-refactor reference (2026-07-10, branch

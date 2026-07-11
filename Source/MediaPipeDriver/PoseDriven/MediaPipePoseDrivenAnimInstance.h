@@ -743,6 +743,10 @@ private:
 	void DriveArmTwistBonesCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveLegCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
 	void EmitLegScaffoldDiagnostics(float DeltaSeconds);
+	// mp.WristLimitTrace (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11): report-only
+	// swing/twist-vs-anatomical-envelope row for the FINAL hand rotation, called at
+	// every wrist write site (quest/held/camera). No pose mutation; keyed throttles.
+	void EmitWristLimitTrace(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FQuat& FinalHandRotCS, const FVector& ForearmAxisComp, const TCHAR* SourceTag);
 };
 
 USTRUCT()

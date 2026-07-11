@@ -17,6 +17,7 @@
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeStage2ShoulderEvidence.h"
 #include "MediaPipeTrackingFusionDatasetReplay.h"
+#include "MediaPipeTrackingQualityMetrics.h"
 #include "MediaPipeQuestHandDebugReporter.h"
 #include "MediaPipeQuestHandCompareDiagnostics.h"
 #include "MediaPipeQuestFingerSolver.h"
@@ -969,6 +970,56 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 			bCurrentSourceFootNearFloor ? 1 : 0,
 			SideLegState.LastFootLiftCm);
 	};
+	// mp.FootSkateTrace (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11): report-only foot-skate
+	// scoreboard row, called at the same completion points as the debug row above so the
+	// rendered-ankle reading reflects THIS frame's written bones. Source-side metrics
+	// (contact label, speeds, lift) come from the contact block earlier in this function.
+	// planarSpdCmS while grounded=1 is the Phase 0/4 skate number; ankleVsPlantedCm < 0 is
+	// the rendered penetration proxy (written ankle below the rig's planted ankle height).
+	// Only writes: the keyed log throttle - never the key-0 bucket, never a node member.
+	auto EmitFootSkateTraceIfRequested = [&](const TCHAR* SolvePath)
+	{
+		if (CVarFootSkateTrace.GetValueOnAnyThread() == 0 || RuntimeStateKey == 0)
+		{
+			return;
+		}
+		const double TraceNowSeconds = FPlatformTime::Seconds();
+		if (!FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+			TraceNowSeconds, 0.25, FootContactSideState.FootSkateTraceLastLogTimeSeconds))
+		{
+			return;
+		}
+		float AnkleVsPlantedCm = 0.0f;
+		bool bHasRenderedAnkleReading = false;
+		if (bHasRefFootFloorZ && FootBone.IsValidToEvaluate())
+		{
+			const float RefAnkleHeightAboveFloorComp = RefAnklePosComp.Z - RefBallPosComp.Z;
+			const float PlantedAnkleZComp = RefFootFloorZComp + RefAnkleHeightAboveFloorComp;
+			const float WrittenAnkleZComp =
+				CSPose.GetComponentSpaceTransform(FootBone.CachedCompactPoseIndex).GetTranslation().Z;
+			AnkleVsPlantedCm = WrittenAnkleZComp - PlantedAnkleZComp;
+			bHasRenderedAnkleReading = true;
+		}
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.FootSkateTrace: actor=%s side=%s path=%s grounded=%d nearFloor=%d plantLock=%d liftCm=%.1f planarSpdCmS=%.1f vertSpdCmS=%.1f upSpdCmS=%.1f ankleVsPlantedCm=%.2f penetrCm=%.2f hasAnkleRead=%d srcFloorZ=%.1f hasSrcFloor=%d keyed=%d key=%u"),
+			*TargetActorName.ToString(),
+			bIsLeft ? TEXT("L") : TEXT("R"),
+			SolvePath,
+			bCurrentSourceFootGrounded ? 1 : 0,
+			bCurrentSourceFootNearFloor ? 1 : 0,
+			bFootPlantLocked ? 1 : 0,
+			HeightAboveObservedFloorCm,
+			FootPlanarSpeedCmPerSecond,
+			FootVerticalSpeedCmPerSecond,
+			FootUpwardSpeedCmPerSecond,
+			AnkleVsPlantedCm,
+			bHasRenderedAnkleReading ? FMath::Max(0.0f, -AnkleVsPlantedCm) : -1.0f,
+			bHasRenderedAnkleReading ? 1 : 0,
+			ObservedSourceFloorZ,
+			bHasObservedSourceFloor ? 1 : 0,
+			bUseKeyedFootContactState ? 1 : 0,
+			RuntimeStateKey);
+	};
 	if (bDoLegIK && RefThighLen > KINDA_SMALL_NUMBER && RefCalfLen > KINDA_SMALL_NUMBER)
 	{
 		if (!ThighBone.IsValidToEvaluate() || !CalfBone.IsValidToEvaluate())
@@ -1176,6 +1227,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 
 		EmitLegSolveDebugIfRequested(TEXT("IK"));
+		EmitFootSkateTraceIfRequested(TEXT("IK"));
 		return;
 	}
 
@@ -1187,6 +1239,7 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		ApplyFootBasis(RotAlpha);
 	}
 	EmitLegSolveDebugIfRequested(TEXT("DirectSegment"));
+	EmitFootSkateTraceIfRequested(TEXT("DirectSegment"));
 }
 
 void FAnimNode_MediaPipePoseDriven::EmitLegScaffoldDiagnostics(float DeltaSeconds)

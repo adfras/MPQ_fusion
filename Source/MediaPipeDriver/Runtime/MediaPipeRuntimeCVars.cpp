@@ -1752,4 +1752,24 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeTorsoDebug"),
 		0,
 		TEXT("When non-zero, log the live MediaPipe torso basis and the clamped basis used by Manny once per second."));
+
+	// --- Tracking-quality tracers (Docs/TRACKING_QUALITY_PLAN.md Phase 0, 2026-07-11).
+	// Report-only rows, armed manually per session like mp.MediaPipeCameraHandTrace;
+	// deliberately NOT in any settings-variant list. Throttles live in the keyed
+	// runtime stores (per actor+side), never in node members.
+
+	TAutoConsoleVariable<int32> CVarFootSkateTrace(
+		TEXT("mp.FootSkateTrace"),
+		0,
+		TEXT("When non-zero, emit per-foot mp.FootSkateTrace rows from the leg solve: provisional contact label (height+velocity), planar/vertical foot speed, lift above the observed source floor, and rendered-ankle penetration below the rig's planted height. The foot-skate scoreboard for TRACKING_QUALITY_PLAN Phase 0/4; report-only, no behavior change."));
+
+	TAutoConsoleVariable<int32> CVarWristLimitTrace(
+		TEXT("mp.WristLimitTrace"),
+		0,
+		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
+
+	TAutoConsoleVariable<int32> CVarWebcamAgeTrace(
+		TEXT("mp.WebcamAgeTrace"),
+		0,
+		TEXT("When non-zero, emit mp.WebcamAgeTrace rows at the arm-direction corrector call site: webcam measurement age at solve time (capture timestamp vs now), the conditioner's forward-prediction horizon, the effective residual age, and the camera-vs-chain direction residuals the corrector currently computes against the CURRENT pose - the number TRACKING_QUALITY_PLAN Phase 1 (timestamp-aligned residuals) is expected to shrink during motion. Report-only, no behavior change."));
 }

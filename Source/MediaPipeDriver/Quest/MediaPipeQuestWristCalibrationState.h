@@ -156,6 +156,14 @@ struct FQuestWristSideRuntimeState
 	// per-actor-side timers survive resets and give every actor its own cadence.
 	double ArmRescueLastLogTimeSeconds = -1.0;
 	double QuestWristSolveLastLogTimeSeconds = -1.0;
+	// Tracking-quality tracer throttles (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11):
+	// mp.WristLimitTrace (1 Hz status row + 4 Hz out-of-range event rows) and
+	// mp.WebcamAgeTrace (4 Hz). Keyed per actor-side for the same CacheBones /
+	// cross-actor starvation reasons as the throttles above; like them, deliberately
+	// not cleared by Reset().
+	double WristLimitTraceLastLogTimeSeconds = -1.0;
+	double WristLimitTraceLastEventLogTimeSeconds = -1.0;
+	double WebcamAgeTraceLastLogTimeSeconds = -1.0;
 	// Quest-reach chain extension (mp.MediaPipeChainReachFromQuestHand, 2026-07-10): smoothed
 	// radial extension (cm) of the chain-direct wrist target toward the REAL hand-tracking
 	// wrist's reach fraction. Smoothed so tracked-flag flickers cannot pop the wrist; decays
