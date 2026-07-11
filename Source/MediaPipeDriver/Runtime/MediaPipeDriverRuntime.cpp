@@ -889,6 +889,14 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// plane (elevation/raise cue preserved; the rejected 2026-06-13 reference-stance
 		// stabilizer stays off). AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeForeshortenZDistrust"), 1),
+		// Foot contact + lock (TRACKING_QUALITY_PLAN Phase 4, 2026-07-11): hysteresis+
+		// dwell contact detector plus a world-pinned rendered foot solved through the
+		// existing scaffold-corrected leg chain (cm-bounded re-anchor, 10cm hard cap,
+		// eased release). The live direct-segment path had NO plant subsystem. Detector
+		// thresholds stay at engine defaults, live-tunable from the panel.
+		// AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootContactDetect"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootLock"), 1),
 	};
 }
 

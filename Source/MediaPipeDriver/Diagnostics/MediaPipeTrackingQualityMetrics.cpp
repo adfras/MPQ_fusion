@@ -228,6 +228,99 @@ namespace MediaPipeTrackingQualityMetrics
 		return 1.0f - (1.0f - ForeshortenMinReliabilityScale) * FMath::Clamp(DistrustAlpha, 0.0f, 1.0f);
 	}
 
+	bool UpdateFootContactDetector(
+		FFootContactDetectorState& InOutState,
+		const FFootContactDetectorConfig& Config,
+		const float HeightAboveFloorCm,
+		const float PlanarSpeedCmS,
+		const float UpSpeedCmS,
+		const bool bMeasurementTrusted,
+		const float DeltaSeconds)
+	{
+		if (!bMeasurementTrusted || DeltaSeconds <= 0.0f)
+		{
+			// Frozen: a dropout/distrusted ankle must neither plant nor unplant a foot.
+			return InOutState.bContact;
+		}
+		const float Dt = FMath::Min(DeltaSeconds, 0.1f);
+		if (!InOutState.bContact)
+		{
+			const bool bAcquireConditions =
+				HeightAboveFloorCm <= Config.AcquireHeightCm &&
+				PlanarSpeedCmS <= Config.AcquireSpeedCmS &&
+				UpSpeedCmS <= Config.AcquireUpSpeedCmS;
+			if (bAcquireConditions)
+			{
+				InOutState.EnterDwellSeconds += Dt;
+				if (InOutState.EnterDwellSeconds >= Config.EnterDwellSeconds)
+				{
+					InOutState.bContact = true;
+					InOutState.EnterDwellSeconds = 0.0f;
+					InOutState.ExitDwellSeconds = 0.0f;
+				}
+			}
+			else
+			{
+				InOutState.EnterDwellSeconds = 0.0f;
+			}
+		}
+		else
+		{
+			const bool bReleaseConditions =
+				HeightAboveFloorCm >= Config.ReleaseHeightCm ||
+				PlanarSpeedCmS >= Config.ReleaseSpeedCmS ||
+				UpSpeedCmS >= Config.ReleaseUpSpeedCmS;
+			if (bReleaseConditions)
+			{
+				InOutState.ExitDwellSeconds += Dt;
+				if (InOutState.ExitDwellSeconds >= Config.ExitDwellSeconds)
+				{
+					InOutState.bContact = false;
+					InOutState.EnterDwellSeconds = 0.0f;
+					InOutState.ExitDwellSeconds = 0.0f;
+				}
+			}
+			else
+			{
+				InOutState.ExitDwellSeconds = 0.0f;
+			}
+		}
+		return InOutState.bContact;
+	}
+
+	FVector ReanchorPinToward(
+		const FVector& PinWorld, const FVector& UnlockedWorld, const float BudgetCmPerSec, const float DeltaSeconds)
+	{
+		if (BudgetCmPerSec <= 0.0f || DeltaSeconds <= 0.0f)
+		{
+			return PinWorld;
+		}
+		const FVector ToUnlocked = UnlockedWorld - PinWorld;
+		const double DistCm = ToUnlocked.Size();
+		const double StepCm = static_cast<double>(BudgetCmPerSec) * FMath::Min(DeltaSeconds, 0.1f);
+		if (DistCm <= StepCm)
+		{
+			return UnlockedWorld;
+		}
+		return PinWorld + ToUnlocked * (StepCm / DistCm);
+	}
+
+	FVector ClampPinCorrection(
+		const FVector& PinWorld, const FVector& UnlockedWorld, const float MaxCorrectionCm)
+	{
+		if (MaxCorrectionCm <= 0.0f)
+		{
+			return UnlockedWorld;
+		}
+		const FVector Correction = PinWorld - UnlockedWorld;
+		const double DistCm = Correction.Size();
+		if (DistCm <= MaxCorrectionCm)
+		{
+			return PinWorld;
+		}
+		return UnlockedWorld + Correction * (static_cast<double>(MaxCorrectionCm) / DistCm);
+	}
+
 	FVector BlendPlanarHeadingTowardSagittal(
 		const FVector& DirWorld, const FVector& SagittalAxisWorld, const float Alpha)
 	{

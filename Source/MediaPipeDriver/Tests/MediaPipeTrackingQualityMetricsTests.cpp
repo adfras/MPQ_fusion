@@ -417,4 +417,178 @@ bool FMediaPipeTrackingQualityForeshortenRatioGeometryTest::RunTest(const FStrin
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityFootContactWalkTest,
+	"TestingKit5.MediaPipe.TrackingQuality.FootContact.WalkCycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityFootContactWalkTest::RunTest(const FString& Parameters)
+{
+	const FFootContactDetectorConfig Config;
+	FFootContactDetectorState State;
+	const float Dt = 1.0f / 72.0f;
+	int32 Transitions = 0;
+	bool bPrev = State.bContact;
+	auto Feed = [&](const int32 Frames, const float HeightCm, const float SpdCmS, const float UpCmS)
+	{
+		for (int32 i = 0; i < Frames; ++i)
+		{
+			UpdateFootContactDetector(State, Config, HeightCm, SpdCmS, UpCmS, true, Dt);
+			if (State.bContact != bPrev)
+			{
+				++Transitions;
+				bPrev = State.bContact;
+			}
+		}
+	};
+	// Two clean gait cycles: stance (low, slow) then swing (high, fast).
+	for (int32 Cycle = 0; Cycle < 2; ++Cycle)
+	{
+		Feed(40, 1.0f, 5.0f, 2.0f);   // stance ~0.55s
+		TestTrue(TEXT("Stance latches contact"), State.bContact);
+		Feed(30, 15.0f, 80.0f, 40.0f); // swing ~0.42s
+		TestFalse(TEXT("Swing releases contact"), State.bContact);
+	}
+	TestEqual(TEXT("Exactly four transitions over two cycles"), Transitions, 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityFootContactWeightShiftTest,
+	"TestingKit5.MediaPipe.TrackingQuality.FootContact.WeightShiftStaysPlanted",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityFootContactWeightShiftTest::RunTest(const FString& Parameters)
+{
+	const FFootContactDetectorConfig Config;
+	FFootContactDetectorState State;
+	const float Dt = 1.0f / 72.0f;
+	// Latch at rest.
+	for (int32 i = 0; i < 20; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 0.5f, 3.0f, 1.0f, true, Dt);
+	}
+	TestTrue(TEXT("Latched at rest"), State.bContact);
+	// Weight shift: speed swells to 30 cm/s (above acquire 15, below release 40) with
+	// small height bumps below the release height. The planted foot must stay planted.
+	for (int32 i = 0; i < 150; ++i)
+	{
+		const float Phase = static_cast<float>(i) / 150.0f;
+		const float Spd = 30.0f * FMath::Sin(Phase * PI);
+		const float Height = 2.0f + 2.5f * FMath::Sin(Phase * PI); // peaks 4.5 < release 7
+		UpdateFootContactDetector(State, Config, Height, Spd, 3.0f, true, Dt);
+		if (!State.bContact)
+		{
+			break;
+		}
+	}
+	TestTrue(TEXT("Weight shift never unplants the foot"), State.bContact);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityFootContactFlutterTest,
+	"TestingKit5.MediaPipe.TrackingQuality.FootContact.FlutterNoChatter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityFootContactFlutterTest::RunTest(const FString& Parameters)
+{
+	const FFootContactDetectorConfig Config;
+	FFootContactDetectorState State;
+	const float Dt = 1.0f / 72.0f;
+	for (int32 i = 0; i < 20; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 0.5f, 3.0f, 1.0f, true, Dt);
+	}
+	TestTrue(TEXT("Latched before flutter"), State.bContact);
+	// Deliberate flutter around the ACQUIRE height threshold (3.5 <-> 4.5 around 4):
+	// hysteresis means nothing here may release (release needs 7).
+	int32 Transitions = 0;
+	bool bPrev = State.bContact;
+	for (int32 i = 0; i < 300; ++i)
+	{
+		UpdateFootContactDetector(State, Config, (i % 2 == 0) ? 3.5f : 4.5f, 5.0f, 2.0f, true, Dt);
+		if (State.bContact != bPrev) { ++Transitions; bPrev = State.bContact; }
+	}
+	TestEqual(TEXT("Acquire-threshold flutter causes zero transitions"), Transitions, 0);
+	// Flutter ACROSS the release speed threshold (35 <-> 45 around 40) with every
+	// excursion shorter than the exit dwell (single frames at 72Hz << 0.08s): the dwell
+	// must absorb it.
+	for (int32 i = 0; i < 300; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 1.0f, (i % 2 == 0) ? 35.0f : 45.0f, 2.0f, true, Dt);
+		if (State.bContact != bPrev) { ++Transitions; bPrev = State.bContact; }
+	}
+	TestEqual(TEXT("Sub-dwell release-speed flutter causes zero transitions"), Transitions, 0);
+	// A SUSTAINED release condition still releases (the dwell is a filter, not a wall).
+	for (int32 i = 0; i < 20; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 10.0f, 60.0f, 30.0f, true, Dt);
+	}
+	TestFalse(TEXT("Sustained lift releases"), State.bContact);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityFootContactFreezeTest,
+	"TestingKit5.MediaPipe.TrackingQuality.FootContact.UntrustedFreeze",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityFootContactFreezeTest::RunTest(const FString& Parameters)
+{
+	const FFootContactDetectorConfig Config;
+	FFootContactDetectorState State;
+	const float Dt = 1.0f / 72.0f;
+	for (int32 i = 0; i < 20; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 0.5f, 3.0f, 1.0f, true, Dt);
+	}
+	TestTrue(TEXT("Latched"), State.bContact);
+	// Distrusted frames scream "airborne" - the frozen machine must NOT release (a
+	// webcam dropout unplanting a standing foot is exactly the failure this prevents).
+	for (int32 i = 0; i < 200; ++i)
+	{
+		UpdateFootContactDetector(State, Config, 50.0f, 200.0f, 100.0f, false, Dt);
+	}
+	TestTrue(TEXT("Distrusted frames never release"), State.bContact);
+	// And an unlatched machine fed perfect-looking but distrusted contact must not latch.
+	FFootContactDetectorState Fresh;
+	for (int32 i = 0; i < 200; ++i)
+	{
+		UpdateFootContactDetector(Fresh, Config, 0.5f, 1.0f, 0.5f, false, Dt);
+	}
+	TestFalse(TEXT("Distrusted frames never latch"), Fresh.bContact);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityFootLockPinMathTest,
+	"TestingKit5.MediaPipe.TrackingQuality.FootLock.PinClampAndReanchor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityFootLockPinMathTest::RunTest(const FString& Parameters)
+{
+	const FVector Unlocked(100.0, 50.0, 10.0);
+	// Correction inside the cap passes through untouched.
+	const FVector NearPin = Unlocked + FVector(4.0, 3.0, 0.0); // 5cm
+	TestTrue(TEXT("In-cap pin untouched"),
+		ClampPinCorrection(NearPin, Unlocked, 10.0f).Equals(NearPin, 1e-6));
+	// Correction beyond the cap clamps to exactly the cap distance, same direction.
+	const FVector FarPin = Unlocked + FVector(30.0, 0.0, 0.0);
+	const FVector Capped = ClampPinCorrection(FarPin, Unlocked, 10.0f);
+	TestEqual(TEXT("Over-cap pin clamps to the cap"), (Capped - Unlocked).Size(), 10.0, 0.001);
+	TestTrue(TEXT("Clamp preserves direction"), Capped.X > Unlocked.X && FMath::IsNearlyZero(Capped.Y - Unlocked.Y, 0.001));
+	// Re-anchor moves at most budget*dt toward the target and converges without
+	// overshoot.
+	FVector Pin = Unlocked + FVector(10.0, 0.0, 0.0);
+	Pin = ReanchorPinToward(Pin, Unlocked, 2.0f, 0.1f); // 0.2cm step
+	TestEqual(TEXT("Re-anchor step is budget*dt"), (Pin - Unlocked).Size(), 9.8, 0.001);
+	for (int32 i = 0; i < 10000; ++i)
+	{
+		Pin = ReanchorPinToward(Pin, Unlocked, 2.0f, 0.1f);
+	}
+	TestTrue(TEXT("Re-anchor converges exactly, no overshoot"), Pin.Equals(Unlocked, 1e-6));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

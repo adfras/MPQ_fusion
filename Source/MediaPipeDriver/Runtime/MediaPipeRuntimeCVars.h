@@ -368,4 +368,15 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarWristTwistRangeDeg;
 	extern TAutoConsoleVariable<float> CVarWristSwingRangeDeg;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeForeshortenZDistrust;
+	extern TAutoConsoleVariable<int32> CVarFootContactDetect;
+	extern TAutoConsoleVariable<float> CVarFootContactAcquireHeightCm;
+	extern TAutoConsoleVariable<float> CVarFootContactReleaseHeightCm;
+	extern TAutoConsoleVariable<float> CVarFootContactAcquireSpeedCmS;
+	extern TAutoConsoleVariable<float> CVarFootContactReleaseSpeedCmS;
+	extern TAutoConsoleVariable<float> CVarFootContactEnterDwellSeconds;
+	extern TAutoConsoleVariable<float> CVarFootContactExitDwellSeconds;
+	extern TAutoConsoleVariable<int32> CVarFootLock;
+	extern TAutoConsoleVariable<float> CVarFootLockMaxCorrectionCm;
+	extern TAutoConsoleVariable<float> CVarFootLockReanchorCmPerSec;
+	extern TAutoConsoleVariable<float> CVarFootLockReleaseBlendSeconds;
 }

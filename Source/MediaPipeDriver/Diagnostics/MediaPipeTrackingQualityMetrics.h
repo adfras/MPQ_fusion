@@ -131,4 +131,55 @@ namespace MediaPipeTrackingQualityMetrics
 	// is world +Z (UE world space of the converted landmark cloud).
 	MEDIAPIPEDRIVER_API FVector BlendPlanarHeadingTowardSagittal(
 		const FVector& DirWorld, const FVector& SagittalAxisWorld, float Alpha);
+
+	// --- Foot contact detector (TRACKING_QUALITY_PLAN Phase 4a, 2026-07-11).
+	// Height + velocity thresholds with HYSTERESIS (separate acquire/release values)
+	// and ENTRY/EXIT DWELLS - the bias-eraser switch recipe in full: every one of the
+	// six July regressions that involved a discrete switch came from a single shared
+	// threshold or a missing dwell. Pure function; state lives in the caller's KEYED
+	// store. An untrusted measurement (P3-distrusted / unreliable ankle) FREEZES the
+	// state machine - a webcam dropout must not unplant a standing foot.
+
+	struct FFootContactDetectorConfig
+	{
+		float AcquireHeightCm = 4.0f;
+		float ReleaseHeightCm = 7.0f;
+		float AcquireSpeedCmS = 15.0f;
+		float ReleaseSpeedCmS = 40.0f;
+		float AcquireUpSpeedCmS = 10.0f;
+		float ReleaseUpSpeedCmS = 25.0f;
+		float EnterDwellSeconds = 0.10f;
+		float ExitDwellSeconds = 0.08f;
+	};
+
+	struct FFootContactDetectorState
+	{
+		bool bContact = false;
+		float EnterDwellSeconds = 0.0f;
+		float ExitDwellSeconds = 0.0f;
+	};
+
+	// Advances the detector one sample. Returns the (possibly latched/unlatched)
+	// contact flag. bMeasurementTrusted=false freezes dwells and the latch.
+	MEDIAPIPEDRIVER_API bool UpdateFootContactDetector(
+		FFootContactDetectorState& InOutState,
+		const FFootContactDetectorConfig& Config,
+		float HeightAboveFloorCm,
+		float PlanarSpeedCmS,
+		float UpSpeedCmS,
+		bool bMeasurementTrusted,
+		float DeltaSeconds);
+
+	// --- Foot lock helpers (TRACKING_QUALITY_PLAN Phase 4b, 2026-07-11). Pure pieces
+	// of the pin: the re-anchor budget (cm-bounded drift absorption) and the correction
+	// cap (a bad contact label must never drag a leg more than this).
+
+	// Moves the pinned position toward the unlocked target by at most
+	// BudgetCmPerSec * Dt (slow drift absorption without visible slide).
+	MEDIAPIPEDRIVER_API FVector ReanchorPinToward(
+		const FVector& PinWorld, const FVector& UnlockedWorld, float BudgetCmPerSec, float DeltaSeconds);
+
+	// Clamps the pin so the applied correction (pin - unlocked) never exceeds MaxCm.
+	MEDIAPIPEDRIVER_API FVector ClampPinCorrection(
+		const FVector& PinWorld, const FVector& UnlockedWorld, float MaxCorrectionCm);
 }

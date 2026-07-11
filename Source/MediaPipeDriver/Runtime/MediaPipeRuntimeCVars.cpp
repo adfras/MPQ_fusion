@@ -1768,6 +1768,72 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
 
+	// Foot contact + lock (TRACKING_QUALITY_PLAN Phase 4, 2026-07-11). 4a: per-foot
+	// contact detector - height above the observed source floor + planar/upward ankle
+	// velocity, with HYSTERESIS (separate acquire/release thresholds) and entry/exit
+	// DWELLS (the bias-eraser switch recipe; the live direct-segment leg path has no
+	// plant subsystem at all - the June plant lock exists only on the IK path, which
+	// the live trial runs disabled). The detector consumes the Phase-3-cleaned ankle
+	// reliability and FREEZES on distrusted frames. 4b: while in contact the rendered
+	// foot pins at its contact-entry world position (cm-bounded re-anchor for slow
+	// drift, hard cap on the applied correction so a bad label can never drag a leg),
+	// solved through the EXISTING leg chain - two-bone to the pin with the
+	// scaffold-corrected directions as the plane/pole, eased release.
+	TAutoConsoleVariable<int32> CVarFootContactDetect(
+		TEXT("mp.FootContactDetect"),
+		0,
+		TEXT("When non-zero, run the per-foot contact detector (height + velocity, hysteresis + dwells, keyed state, frozen on distrusted measurements). Report-only by itself - mp.FootSkateTrace rows carry the contact state; mp.FootLock consumes it. TRACKING_QUALITY_PLAN Phase 4a; default 0."));
+
+	TAutoConsoleVariable<float> CVarFootContactAcquireHeightCm(
+		TEXT("mp.FootContactAcquireHeightCm"),
+		4.0f,
+		TEXT("Contact acquire: foot must be within this height (cm) above the observed source floor. Release uses mp.FootContactReleaseHeightCm (hysteresis)."));
+
+	TAutoConsoleVariable<float> CVarFootContactReleaseHeightCm(
+		TEXT("mp.FootContactReleaseHeightCm"),
+		7.0f,
+		TEXT("Contact release: foot leaving contact must exceed this height (cm) above the observed source floor (or the release speed thresholds)."));
+
+	TAutoConsoleVariable<float> CVarFootContactAcquireSpeedCmS(
+		TEXT("mp.FootContactAcquireSpeedCmS"),
+		15.0f,
+		TEXT("Contact acquire: planar foot speed (cm/s) must be at or below this."));
+
+	TAutoConsoleVariable<float> CVarFootContactReleaseSpeedCmS(
+		TEXT("mp.FootContactReleaseSpeedCmS"),
+		40.0f,
+		TEXT("Contact release: planar foot speed (cm/s) at or above this releases contact (with the exit dwell)."));
+
+	TAutoConsoleVariable<float> CVarFootContactEnterDwellSeconds(
+		TEXT("mp.FootContactEnterDwellSeconds"),
+		0.10f,
+		TEXT("Seconds the acquire conditions must hold before contact latches."));
+
+	TAutoConsoleVariable<float> CVarFootContactExitDwellSeconds(
+		TEXT("mp.FootContactExitDwellSeconds"),
+		0.08f,
+		TEXT("Seconds the release conditions must hold before contact unlatches."));
+
+	TAutoConsoleVariable<int32> CVarFootLock(
+		TEXT("mp.FootLock"),
+		0,
+		TEXT("When non-zero (and mp.FootContactDetect is on), pin each in-contact rendered foot at its contact-entry world position: two-bone solve to the pin through the scaffold-corrected leg directions, cm-bounded re-anchor, hard correction cap, eased release. TRACKING_QUALITY_PLAN Phase 4b; default 0."));
+
+	TAutoConsoleVariable<float> CVarFootLockMaxCorrectionCm(
+		TEXT("mp.FootLockMaxCorrectionCm"),
+		10.0f,
+		TEXT("Hard cap (cm) on the pin correction - a bad contact label can never drag a leg further than this."));
+
+	TAutoConsoleVariable<float> CVarFootLockReanchorCmPerSec(
+		TEXT("mp.FootLockReanchorCmPerSec"),
+		2.0f,
+		TEXT("Slow re-anchor budget (cm/s): the pin drifts toward the raw solve at most this fast, absorbing source drift without visible slide."));
+
+	TAutoConsoleVariable<float> CVarFootLockReleaseBlendSeconds(
+		TEXT("mp.FootLockReleaseBlendSeconds"),
+		0.25f,
+		TEXT("Easing window (seconds) blending the leg back to the raw solve after contact release."));
+
 	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11). ManiPose
 	// insight, pragmatic form: 2D->3D lifting is ill-posed exactly when a limb segment's
 	// IMAGE-PLANE length collapses (segment pointing into the camera's depth axis). The

@@ -5,6 +5,7 @@
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseHistoryRing.h"
 #include "MediaPipeQuestFingerSolver.h"
+#include "MediaPipeTrackingQualityMetrics.h"
 
 static constexpr int32 MediaPipeQuestStateFingerBoneCount = 19;
 static constexpr int32 MediaPipeQuestStateMetacarpalOffset = 15;
@@ -572,6 +573,30 @@ struct FMediaPipeFootContactSideRuntimeState
 	// here (not a node member) so live CacheBones resets cannot turn the 4 Hz row into
 	// frame-rate spam - the mp.ArmOverheadRescue 3,522-rows/side lesson.
 	double FootSkateTraceLastLogTimeSeconds = -1.0;
+
+	// Foot contact detector (TRACKING_QUALITY_PLAN Phase 4a, 2026-07-11,
+	// mp.FootContactDetect): hysteresis + dwell state machine over height/velocity,
+	// frozen on distrusted measurements. Keyed for the CacheBones reason; written only
+	// while the detector CVar is armed.
+	MediaPipeTrackingQualityMetrics::FFootContactDetectorState ContactDetector;
+	double ContactDetectLastUpdateTimeSeconds = -1.0;
+
+	// Foot lock (Phase 4b, mp.FootLock): world-space pin captured at contact entry,
+	// cm-bounded re-anchor, eased release. Written only while the lock CVar is armed.
+	bool bFootLockEngaged = false;
+	FVector FootLockPinWorld = FVector::ZeroVector;
+	// 1 while locked; decays over mp.FootLockReleaseBlendSeconds after release so the
+	// leg blends back to the raw solve instead of snapping.
+	float FootLockReleaseAlpha = 0.0f;
+	double FootLockLastUpdateTimeSeconds = -1.0;
+
+	// Rendered-ankle speed tracer support (Phase 4a: the >=80% skate-reduction
+	// scoreboard measures the WRITTEN foot, not the source landmarks). Updated only
+	// while mp.FootSkateTrace is armed.
+	bool bHasPrevRenderedAnkle = false;
+	FVector PrevRenderedAnkleWorld = FVector::ZeroVector;
+	double PrevRenderedSampleTimeSeconds = -1.0;
+	float LastRenderedAnkleSpdCmS = -1.0f;
 
 	void Reset()
 	{

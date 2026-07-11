@@ -528,6 +528,50 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	bCurrentSourceFootGrounded = bAcquireGrounded || (bFootPlantLocked && bFootShouldStayPlanted);
 	bCurrentSourceFootNearFloor = bNearObservedFloorForRelease;
 
+	// Foot contact detector (TRACKING_QUALITY_PLAN Phase 4a, 2026-07-11): hysteresis +
+	// dwell state machine over the same source-side signals as the provisional label
+	// above, consuming the Phase-3-cleaned ankle reliability (a distrusted or dropped
+	// ankle FREEZES the machine - a webcam dropout must not unplant a standing foot).
+	// Keyed state, written only while armed; mp.FootLock consumes the latch below and
+	// FootSkateTrace reports it. Live matters: the June plant lock exists only on the
+	// IK path, and the live trial runs the direct-segment path - this detector is the
+	// first contact subsystem that path has had.
+	const bool bFootContactDetectArmed =
+		CVarFootContactDetect.GetValueOnAnyThread() != 0 && RuntimeStateKey != 0;
+	bool bDetectorContact = false;
+	if (bFootContactDetectArmed)
+	{
+		MediaPipeTrackingQualityMetrics::FFootContactDetectorConfig DetectorConfig;
+		DetectorConfig.AcquireHeightCm = CVarFootContactAcquireHeightCm.GetValueOnAnyThread();
+		DetectorConfig.ReleaseHeightCm = CVarFootContactReleaseHeightCm.GetValueOnAnyThread();
+		DetectorConfig.AcquireSpeedCmS = CVarFootContactAcquireSpeedCmS.GetValueOnAnyThread();
+		DetectorConfig.ReleaseSpeedCmS = CVarFootContactReleaseSpeedCmS.GetValueOnAnyThread();
+		DetectorConfig.EnterDwellSeconds = CVarFootContactEnterDwellSeconds.GetValueOnAnyThread();
+		DetectorConfig.ExitDwellSeconds = CVarFootContactExitDwellSeconds.GetValueOnAnyThread();
+		const double DetectNowSeconds = FPlatformTime::Seconds();
+		const float DetectDt = FootContactSideState.ContactDetectLastUpdateTimeSeconds >= 0.0
+			? FMath::Clamp(
+				static_cast<float>(DetectNowSeconds - FootContactSideState.ContactDetectLastUpdateTimeSeconds),
+				0.0f, 0.1f)
+			: (1.0f / 72.0f);
+		FootContactSideState.ContactDetectLastUpdateTimeSeconds = DetectNowSeconds;
+		const int32 DetectAnkleLm = bIsLeft
+			? (int32)EMediaPipePoseLandmark::LeftAnkle
+			: (int32)EMediaPipePoseLandmark::RightAnkle;
+		const bool bMeasurementTrusted =
+			bHadPrevFootSample &&
+			bHasObservedSourceFloor &&
+			GetLandmarkReliability(DetectAnkleLm) >= 0.3f;
+		bDetectorContact = MediaPipeTrackingQualityMetrics::UpdateFootContactDetector(
+			FootContactSideState.ContactDetector,
+			DetectorConfig,
+			HeightAboveObservedFloorCm,
+			FootPlanarSpeedCmPerSecond,
+			FootUpwardSpeedCmPerSecond,
+			bMeasurementTrusted,
+			DetectDt);
+	}
+
 	// --- Grounded-leg metric flexion correction (MediaPipe intent + Quest/HMD scaffold) ---
 	// When this foot is at or near its observed source floor, correct the monocular flexion
 	// magnitude toward the knee bend that realizes the fused scaffold pelvis drop on this
@@ -1026,27 +1070,54 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 		float AnkleVsPlantedCm = 0.0f;
 		bool bHasRenderedAnkleReading = false;
+		float RenderedPlanarSpdCmS = -1.0f;
 		if (bHasRefFootFloorZ && FootBone.IsValidToEvaluate())
 		{
 			const float RefAnkleHeightAboveFloorComp = RefAnklePosComp.Z - RefBallPosComp.Z;
 			const float PlantedAnkleZComp = RefFootFloorZComp + RefAnkleHeightAboveFloorComp;
-			const float WrittenAnkleZComp =
-				CSPose.GetComponentSpaceTransform(FootBone.CachedCompactPoseIndex).GetTranslation().Z;
-			AnkleVsPlantedCm = WrittenAnkleZComp - PlantedAnkleZComp;
+			const FVector WrittenAnkleComp =
+				CSPose.GetComponentSpaceTransform(FootBone.CachedCompactPoseIndex).GetTranslation();
+			AnkleVsPlantedCm = static_cast<float>(WrittenAnkleComp.Z) - PlantedAnkleZComp;
 			bHasRenderedAnkleReading = true;
+			// Rendered-ankle planar speed over the throttle window (Phase 4a: the >=80%
+			// skate-reduction scoreboard judges the WRITTEN foot, not the source
+			// landmarks). Averaged across the 0.25s row cadence - comparable between
+			// A/B runs; only updated while the trace is armed.
+			const FVector WrittenAnkleWorld = TargetCompTransform.TransformPosition(WrittenAnkleComp);
+			if (FootContactSideState.bHasPrevRenderedAnkle &&
+				FootContactSideState.PrevRenderedSampleTimeSeconds >= 0.0)
+			{
+				const float RenderDt = static_cast<float>(
+					TraceNowSeconds - FootContactSideState.PrevRenderedSampleTimeSeconds);
+				if (RenderDt > KINDA_SMALL_NUMBER && RenderDt <= 2.0f)
+				{
+					RenderedPlanarSpdCmS = FVector2D(
+						WrittenAnkleWorld.X - FootContactSideState.PrevRenderedAnkleWorld.X,
+						WrittenAnkleWorld.Y - FootContactSideState.PrevRenderedAnkleWorld.Y).Size() / RenderDt;
+				}
+			}
+			FootContactSideState.bHasPrevRenderedAnkle = true;
+			FootContactSideState.PrevRenderedAnkleWorld = WrittenAnkleWorld;
+			FootContactSideState.PrevRenderedSampleTimeSeconds = TraceNowSeconds;
+			FootContactSideState.LastRenderedAnkleSpdCmS = RenderedPlanarSpdCmS;
 		}
 		UE_LOG(LogMediaPipePose, Log,
-			TEXT("mp.FootSkateTrace: actor=%s side=%s path=%s grounded=%d nearFloor=%d plantLock=%d liftCm=%.1f planarSpdCmS=%.1f vertSpdCmS=%.1f upSpdCmS=%.1f ankleVsPlantedCm=%.2f penetrCm=%.2f hasAnkleRead=%d srcFloorZ=%.1f hasSrcFloor=%d keyed=%d key=%u"),
+			TEXT("mp.FootSkateTrace: actor=%s side=%s path=%s grounded=%d nearFloor=%d plantLock=%d contact=%d detectOn=%d lockOn=%d lockAlpha=%.2f liftCm=%.1f planarSpdCmS=%.1f vertSpdCmS=%.1f upSpdCmS=%.1f renderedSpdCmS=%.1f ankleVsPlantedCm=%.2f penetrCm=%.2f hasAnkleRead=%d srcFloorZ=%.1f hasSrcFloor=%d keyed=%d key=%u"),
 			*TargetActorName.ToString(),
 			bIsLeft ? TEXT("L") : TEXT("R"),
 			SolvePath,
 			bCurrentSourceFootGrounded ? 1 : 0,
 			bCurrentSourceFootNearFloor ? 1 : 0,
 			bFootPlantLocked ? 1 : 0,
+			FootContactSideState.ContactDetector.bContact ? 1 : 0,
+			bFootContactDetectArmed ? 1 : 0,
+			FootContactSideState.bFootLockEngaged ? 1 : 0,
+			FootContactSideState.FootLockReleaseAlpha,
 			HeightAboveObservedFloorCm,
 			FootPlanarSpeedCmPerSecond,
 			FootVerticalSpeedCmPerSecond,
 			FootUpwardSpeedCmPerSecond,
+			RenderedPlanarSpdCmS,
 			AnkleVsPlantedCm,
 			bHasRenderedAnkleReading ? FMath::Max(0.0f, -AnkleVsPlantedCm) : -1.0f,
 			bHasRenderedAnkleReading ? 1 : 0,
@@ -1267,8 +1338,116 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 	}
 
 	const float RotAlpha = HalfLifeToAlpha(LegIKRotationHalfLifeSeconds, DeltaSeconds);
-	ApplyLegRotation(RefThighDir, DesiredThighComp, RefThighComp, RefThighBasisComp, bHasSmoothedThighRotCS, SmoothedThighRotCS, ThighBone, RotAlpha);
-	ApplyLegRotation(RefCalfDir, DesiredCalfComp, RefCalfComp, RefCalfBasisComp, bHasSmoothedCalfRotCS, SmoothedCalfRotCS, CalfBone, RotAlpha);
+	FVector FinalThighComp = DesiredThighComp;
+	FVector FinalCalfComp = DesiredCalfComp;
+	// Foot lock (TRACKING_QUALITY_PLAN Phase 4b, 2026-07-11): while the Phase-4a
+	// detector holds contact, pin the RENDERED ankle at its contact-entry world
+	// position and solve the leg to the pin through the EXISTING chain - a two-bone
+	// solve fed with the scaffold-corrected desired directions as the plane/pole (the
+	// same knee conventions as the IK path; flexion redistribution upstream already
+	// shaped DesiredThigh/CalfComp, so the scaffold is honored, not bypassed). The pin
+	// re-anchors toward the raw solve at a cm/s budget (slow drift absorption), the
+	// applied correction is HARD-CAPPED (a bad contact label can never drag a leg),
+	// and release eases the leg back over a blend window instead of snapping.
+	if (CVarFootLock.GetValueOnAnyThread() != 0 && bFootContactDetectArmed &&
+		ThighBone.IsValidToEvaluate() && CalfBone.IsValidToEvaluate() &&
+		RefThighLen > KINDA_SMALL_NUMBER && RefCalfLen > KINDA_SMALL_NUMBER)
+	{
+		FMediaPipeFootContactSideRuntimeState& LockState = FootContactSideState;
+		const double LockNowSeconds = FPlatformTime::Seconds();
+		const float LockDt = LockState.FootLockLastUpdateTimeSeconds >= 0.0
+			? FMath::Clamp(
+				static_cast<float>(LockNowSeconds - LockState.FootLockLastUpdateTimeSeconds), 0.0f, 0.1f)
+			: (1.0f / 72.0f);
+		LockState.FootLockLastUpdateTimeSeconds = LockNowSeconds;
+		const FVector LockHipPosComp =
+			CSPose.GetComponentSpaceTransform(ThighBone.CachedCompactPoseIndex).GetTranslation();
+		const FVector UnlockedAnkleComp =
+			LockHipPosComp + DesiredThighComp * RefThighLen + DesiredCalfComp * RefCalfLen;
+		const FVector UnlockedAnkleWorld = TargetCompTransform.TransformPosition(UnlockedAnkleComp);
+		if (bDetectorContact)
+		{
+			if (!LockState.bFootLockEngaged)
+			{
+				LockState.bFootLockEngaged = true;
+				LockState.FootLockPinWorld = UnlockedAnkleWorld;
+			}
+			else
+			{
+				LockState.FootLockPinWorld = MediaPipeTrackingQualityMetrics::ReanchorPinToward(
+					LockState.FootLockPinWorld,
+					UnlockedAnkleWorld,
+					CVarFootLockReanchorCmPerSec.GetValueOnAnyThread(),
+					LockDt);
+			}
+			LockState.FootLockReleaseAlpha = 1.0f;
+		}
+		else
+		{
+			LockState.bFootLockEngaged = false;
+			if (LockState.FootLockReleaseAlpha > 0.0f)
+			{
+				const float ReleaseBlendSeconds =
+					FMath::Max(CVarFootLockReleaseBlendSeconds.GetValueOnAnyThread(), 0.0f);
+				LockState.FootLockReleaseAlpha = ReleaseBlendSeconds <= KINDA_SMALL_NUMBER
+					? 0.0f
+					: FMath::Max(0.0f, LockState.FootLockReleaseAlpha - LockDt / ReleaseBlendSeconds);
+			}
+		}
+		const float LockAlpha = LockState.FootLockReleaseAlpha;
+		if (LockAlpha > KINDA_SMALL_NUMBER)
+		{
+			const FVector CappedPinWorld = MediaPipeTrackingQualityMetrics::ClampPinCorrection(
+				LockState.FootLockPinWorld,
+				UnlockedAnkleWorld,
+				CVarFootLockMaxCorrectionCm.GetValueOnAnyThread());
+			const FVector TargetAnkleWorld =
+				FMath::Lerp(UnlockedAnkleWorld, CappedPinWorld, static_cast<double>(LockAlpha));
+			const FVector TargetAnkleComp = TargetCompTransform.InverseTransformPosition(TargetAnkleWorld);
+			FVector ToTarget = TargetAnkleComp - LockHipPosComp;
+			float Dist = ToTarget.Size();
+			if (Dist > KINDA_SMALL_NUMBER)
+			{
+				const float MaxReach = (RefThighLen + RefCalfLen) * 0.999f;
+				const float MinReach = FMath::Max(FMath::Abs(RefThighLen - RefCalfLen) + 1.0f, 1.0f);
+				Dist = FMath::Clamp(Dist, MinReach, MaxReach);
+				const FVector DirToTarget = ToTarget.GetSafeNormal();
+				const float L1 = RefThighLen;
+				const float L2 = RefCalfLen;
+				const float CosHip = FMath::Clamp(
+					((L1 * L1) + (Dist * Dist) - (L2 * L2)) / (2.0f * L1 * Dist), -1.0f, 1.0f);
+				const float SinHip = FMath::Sqrt(FMath::Max(0.0f, 1.0f - (CosHip * CosHip)));
+				const FVector DesiredLegPlaneNormal =
+					FVector::CrossProduct(DesiredThighComp, DesiredCalfComp).GetSafeNormal();
+				const FVector DirPerp =
+					(DesiredThighComp - FVector::DotProduct(DesiredThighComp, DirToTarget) * DirToTarget).GetSafeNormal();
+				FVector Pole = FVector::CrossProduct(DesiredLegPlaneNormal, DirToTarget).GetSafeNormal();
+				if (Pole.IsNearlyZero())
+				{
+					Pole = DirPerp;
+				}
+				if (!DirPerp.IsNearlyZero() && FVector::DotProduct(DirPerp, Pole) < 0.0f)
+				{
+					Pole *= -1.0f;
+				}
+				if (!Pole.IsNearlyZero())
+				{
+					const FVector KneeAxisBase = LockHipPosComp + DirToTarget * (L1 * CosHip);
+					const FVector KneePos = KneeAxisBase + Pole * (L1 * SinHip);
+					const FVector SolvedThigh = (KneePos - LockHipPosComp).GetSafeNormal();
+					const FVector SolvedCalf =
+						(LockHipPosComp + DirToTarget * Dist - KneePos).GetSafeNormal();
+					if (!SolvedThigh.IsNearlyZero() && !SolvedCalf.IsNearlyZero())
+					{
+						FinalThighComp = SolvedThigh;
+						FinalCalfComp = SolvedCalf;
+					}
+				}
+			}
+		}
+	}
+	ApplyLegRotation(RefThighDir, FinalThighComp, RefThighComp, RefThighBasisComp, bHasSmoothedThighRotCS, SmoothedThighRotCS, ThighBone, RotAlpha);
+	ApplyLegRotation(RefCalfDir, FinalCalfComp, RefCalfComp, RefCalfBasisComp, bHasSmoothedCalfRotCS, SmoothedCalfRotCS, CalfBone, RotAlpha);
 	if (bCanDriveFoot && bDriveFootRotationForSide)
 	{
 		ApplyFootBasis(RotAlpha);
