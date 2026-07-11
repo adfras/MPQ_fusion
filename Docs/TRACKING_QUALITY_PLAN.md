@@ -188,6 +188,51 @@ fail stay dark with their rows archived.
 - Worn verdict on the mirror: "better", specifically during the standing-mirror
   inspection leg.
 
+## Phase 5 memo — learned-prior bake-off: NO-GO for now (blocked on licensed assets), everything else verified ready (2026-07-11)
+
+Verdict: **no-go for integration planning until a supervised bake-off session runs**;
+**go on every axis that could be verified without licensed assets.** No live wiring
+exists or is proposed (per plan).
+
+What was verified ready:
+- **Inputs: COMPATIBLE, 100% coverage.** The schema-v2 replay cache carries exactly
+  HMD-Poser's HMD+hands sparse set: head 6DOF (`hmd.loc/quat`) and both wrist 6DOF
+  (Quest hand keypoint 0 `keypoints_world` + `keypoint_quats`) - 6,162 samples, 210.0s,
+  29.34 Hz, head/leftWrist/rightWrist coverage 100.0%/100.0%/100.0%.
+  `Tools/export_learned_prior_inputs.py` extracts them to .npz (UE conventions kept;
+  the AMASS-frame conversion + 60 Hz resample belong to the future harness and are
+  documented in the tool header). The v1 cache is wrist-position-only - the v2 cache
+  is REQUIRED.
+- **Model availability:** HMD-Poser official repo (github.com/Pico-AI-Team/HMD-Poser,
+  MIT) ships the pretrained checkpoint in-repo (`pretrained_model_protocol1.pt`);
+  PyTorch only, no ONNX export provided (we would export ourselves or score directly
+  in torch - equivalent for an offline bake-off).
+- **Runtime:** local Python has torch 2.6.0+cu124 and onnxruntime 1.20.1 with the CPU
+  provider only - which sidesteps the documented DirectML device-hang class entirely
+  for this offline evaluation (CPU is ample for a 205 Hz-class model over 210s).
+
+The blocker:
+- Decoding HMD-Poser's output into comparable joint positions requires the **SMPL+H
+  body model with DMPL blendshapes**, registration-gated at mano.is.tue.mpg.de /
+  smpl.is.tue.mpg.de (personal account, license forbids redistribution). Creating
+  accounts is outside what an agent may do on the user's behalf, so a numbers-in-hand
+  score could not be produced this session.
+
+Unblock path (one short session once Alan registers and downloads):
+1. Place SMPL+H (+DMPL) under a local `body_models/` dir and clone the HMD-Poser repo.
+2. Convert `learned_prior_sparse_inputs_*.npz` to the model's frame (cm->m, Z-up-LH ->
+   Y-up-RH, 29.34 -> 60 Hz resample) and run chunked offline inference (CPU).
+3. Regress SMPL-H joints, map to knee/ankle/elbow/wrist directions, and score against
+   the recorded solve with the existing scoreboard conventions
+   (`compare_replay_measurements.py` metrics; `mha_take_score.py` referee style).
+4. Write the numbers into this memo and re-issue the go/no-go for the "sixth corrector"
+   integration plan (bounded, faded, quiet-gated contract as specified).
+
+Risk note for the future integration decision: HMD-Poser is trained on AMASS bodies at
+60 Hz with clean 6DOF; our wrists are Quest hand-tracking (dropout-prone at FOV edges -
+the July arc's whole subject). Any integration must treat the prior's output as a
+PROPOSAL through the standard corrector contract, exactly as the plan already states.
+
 ## Execution log (branch feature/tracking-quality, base = a4fb16e)
 
 Gates per phase: build clean (editor closed, fast wrapper), automation count only grows
@@ -199,7 +244,8 @@ as baseline-dir addenda when taken; the capture-independent gate evidence is lis
 | ----- | ------ | ----- | ----------- |
 | 0 | 89cf5b4 | 169/169 | mp.FootSkateTrace / mp.WristLimitTrace / mp.WebcamAgeTrace (report-only, keyed throttles, default 0, not in variant lists); Diagnostics/MediaPipeTrackingQualityMetrics + 5 unit tests (incl. L/R parity); Tools/mine_tracking_quality_baseline.py; Docs/tracking_quality_baseline/ with the mined 2026-07-10 acceptance fingerprint (cross-checks REFACTOR_PLAN 9.2 exactly) + a 150s replay -game smoke run: 1049 FootSkate rows (planted planar speed p50 4.0-4.6 / p90 18-20 / max 33 cm/s), 312 WristLimit rows (12-13 out-of-envelope events/side, twist excess to 46 deg). WebcamAgeTrace has no replay rows by construction (live-only call site); fresh desk capture pending. |
 | 1 | f63be4a | 176/176 | mp.MediaPipeTimestampAlignedResiduals (default 0, candidate 1): keyed ~250ms history rings (Correctors/MediaPipePoseHistoryRing.h; arm chain ring in FQuestWristSideRuntimeState, applied-yaw ring in FMediaPipeBodySolverState); arm-direction + heading LEARNERS compare measurements against the ring pose at capture-ts + conditioner-prediction (per-frame measured, no assumed constant); Apply() untouched; WebcamAgeTrace row gains aligned=/alElbowResidDeg=/alWristResidDeg=/histN=. Proofs: 6 refactor goldens byte-identical disarmed; corrector-level bit-equivalence asserts (aligned==current == unaligned); synthetic latency-ghost batteries pinned in tracking_quality_baseline/goldens/ (unaligned integrates the ghost, aligned stays <0.1 deg / <0.05 deg); 5 ring unit tests (interpolation, wraparound eviction, fallback contract, non-monotonic refusal, effective-time). Live A/B awaits the flag-on desk capture. Shrug/pelvis/reach correctors exempt with reasons (same-frame camera-only evidence; no webcam in loop; quest-vs-chain already dwell-protected). |
-| 4 | (this commit) | 189/189 | mp.FootContactDetect + 6 panel-tunable threshold/dwell CVars, mp.FootLock + cap/re-anchor/release CVars (all default 0; candidate arms detect+lock at engine-default tunables). 4a detector: hysteresis (4/7cm height, 15/40cm/s speed) + entry/exit dwells (0.10/0.08s), keyed FMediaPipeFootContactSideRuntimeState, FROZEN on distrusted frames (consumes the Phase-3-cleaned ankle reliability) - the live direct-segment leg path had NO plant subsystem (the June plant lock is IK-path-only and live runs UseLegIK=0). FootSkateTrace gains contact=/detectOn=/lockOn=/lockAlpha=/renderedSpdCmS= (the scoreboard judges the WRITTEN foot). 4b lock: world pin at contact entry, 2cm/s re-anchor budget, 10cm hard cap, eased 0.25s release, solved through the existing chain (two-bone to the pin with the scaffold-corrected directions as plane/pole - flexion redistribution upstream is honored). Proofs: +5 unit tests (walk cycle latching, weight shift stays planted, threshold flutter = ZERO transitions, distrusted freeze never plants/unplants, pin cap+re-anchor exactness). Replay A/B (150s x2, leg blocks): planted rendered-foot speed p90 16.6 -> 2.0 cm/s (-88%, gate >=80%), p50 floored at exactly the 2.0cm/s re-anchor budget by design; penetration NOT regressed (p99 1.64 -> 1.48, max 5.91 -> 2.20 cm); contact transitions gait-scale (19 vs 24 per 150s). Live scripted weight-shift capture pending (batched). One commit for 4a+4b: both sub-features share the header/LegSolve surface and a full-module rebuild costs ~35min; the plan's two-sub-commit allowance was traded for one verified build. |
+| 5 | (this commit) | 189/189 (no code) | OFFLINE-ONLY bake-off feasibility executed to the licensed-asset boundary: v2-cache sparse inputs verified 100% covered and exported (Tools/export_learned_prior_inputs.py -> learned_prior_sparse_inputs_20260711.npz, 6162 samples / 210s / 29.34Hz); HMD-Poser repo+checkpoint verified available (MIT, in-repo .pt); runtime verified (torch 2.6 + onnxruntime CPU - DML hang class moot). SMPL+H/DMPL body model is registration-gated (personal MPI account; no redistribution), so numbers-in-hand scoring is deferred to a supervised session - full unblock recipe in the Phase 5 memo above. NO live wiring (per plan). |
+| 4 | 8e211d3 | 189/189 | mp.FootContactDetect + 6 panel-tunable threshold/dwell CVars, mp.FootLock + cap/re-anchor/release CVars (all default 0; candidate arms detect+lock at engine-default tunables). 4a detector: hysteresis (4/7cm height, 15/40cm/s speed) + entry/exit dwells (0.10/0.08s), keyed FMediaPipeFootContactSideRuntimeState, FROZEN on distrusted frames (consumes the Phase-3-cleaned ankle reliability) - the live direct-segment leg path had NO plant subsystem (the June plant lock is IK-path-only and live runs UseLegIK=0). FootSkateTrace gains contact=/detectOn=/lockOn=/lockAlpha=/renderedSpdCmS= (the scoreboard judges the WRITTEN foot). 4b lock: world pin at contact entry, 2cm/s re-anchor budget, 10cm hard cap, eased 0.25s release, solved through the existing chain (two-bone to the pin with the scaffold-corrected directions as plane/pole - flexion redistribution upstream is honored). Proofs: +5 unit tests (walk cycle latching, weight shift stays planted, threshold flutter = ZERO transitions, distrusted freeze never plants/unplants, pin cap+re-anchor exactness). Replay A/B (150s x2, leg blocks): planted rendered-foot speed p90 16.6 -> 2.0 cm/s (-88%, gate >=80%), p50 floored at exactly the 2.0cm/s re-anchor budget by design; penetration NOT regressed (p99 1.64 -> 1.48, max 5.91 -> 2.20 cm); contact transitions gait-scale (19 vs 24 per 150s). Live scripted weight-shift capture pending (batched). One commit for 4a+4b: both sub-features share the header/LegSolve surface and a full-module rebuild costs ~35min; the plan's two-sub-commit allowance was traded for one verified build. |
 | 3 | fec24fe | 184/184 | mp.MediaPipeForeshortenZDistrust (default 0, candidate 1) + mp.ForeshortenTrace: per-segment IMAGE-PLANE foreshorten ratio (current planar length / decaying-max planar length from the RAW camera-space landmarks - the suspect Z never feeds its own distrust), asymmetric engage/release smoothing, keyed FMediaPipeForeshortenRuntimeState, updated at BOTH frame-ingest paths (live + replay). Consumers: (a) GetLandmarkReliability - the single reliability choke for the arm-direction learn/vote, hand-rotation arm gate, and leg stabilizer when enabled - scales knee/ankle/elbow/wrist reliability by the chain-max distrust (floor 0.25); (b) the leg solve eases a foreshortened segment's ill-conditioned PLANAR HEADING toward the sagittal plane, preserving the re-pitched elevation (the raise cue) - stateless target, bounded alpha, before the anatomical clamps. NOTE: the plan's literal leg consumer (mp.MediaPipeLegReliabilityStabilize) is OFF by user acceptance 2026-06-13, so the sagittal ease is the leg-side consumer; the rejected reference-stance stabilizer stays off. Proofs: +5 unit tests (ratio==cos(theta) synthetic geometry, distrust mapping, decaying max, asymmetric smoothing, sagittal blend incl. bit-passthrough at alpha 0); replay A/B over the dataset leg blocks: thigh ratio collapses to 0.01-0.04 with alpha 1.0 on the recorded toward-camera raises while the shin stays trusted (r>=0.34) - the distrust fires exactly on the documented class. "Visibly steadier Manny legs" stays with the knee-raise desk capture (webcam-only visual gate by design). One suite run hit the known queued-quit race (HeadingAlignedGolden started but cut off; passed solo + in the final 184/184 run). |
 | 2 | 53bc55f | 179/179 | mp.WristAnatomicalClamp (default 0, candidate 1) + mp.WristTwistRangeDeg 90 / mp.WristSwingRangeDeg 85 (engine defaults = the Phase 0 report-only constants, live-tunable): ApplyWristLimitClampAndTrace is the LAST op before all three wrist bone writes (quest/held/camera), clamping swing/twist vs the neutral wrist on the current forearm; in-range frames pass through BIT-EXACTLY (unit-asserted); clamped frames never feed learners (continuity/hold/handover state keeps the unclamped value; smoothing states update pre-clamp). WristLimitTrace rows gain clamped=/rangeT=/rangeS=. Proofs: +3 unit tests (clamp exactness lands ON the range with the other component intact; in-range bit-passthrough; L/R parity - mirrored axis clamps to the physically identical rotation). Desk A/B on the canonical replay (150s x2, live parity): clamp OFF = 61 out-of-envelope frames, 0 caught; clamp ON = 64/64 caught, zero escapes, in-range population unchanged. The clamped class (twist to ~136 deg, swing to ~94) matches the documented 2026-07-09 20-130 deg flap class; the raw 07-09 session logs have rotated out of Saved/Logs, so the historical tie is via RESOLUTION_2026-07-09/10 numbers + the replay's own out-of-envelope frames. |
 
