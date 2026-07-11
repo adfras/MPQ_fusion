@@ -272,4 +272,149 @@ bool FMediaPipeTrackingQualityWebcamAgeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityForeshortenMappingTest,
+	"TestingKit5.MediaPipe.TrackingQuality.Foreshorten.DistrustMapping",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityForeshortenMappingTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("In-plane ratio trusts"), MapForeshortenRatioToDistrust(0.70f, 0.35f, 0.60f), 0.0f, 0.001f);
+	TestEqual(TEXT("At-high ratio trusts"), MapForeshortenRatioToDistrust(0.60f, 0.35f, 0.60f), 0.0f, 0.001f);
+	TestEqual(TEXT("Midpoint half-distrusts"), MapForeshortenRatioToDistrust(0.475f, 0.35f, 0.60f), 0.5f, 0.001f);
+	TestEqual(TEXT("At-low ratio fully distrusts"), MapForeshortenRatioToDistrust(0.35f, 0.35f, 0.60f), 1.0f, 0.001f);
+	TestEqual(TEXT("Below-low clamps to 1"), MapForeshortenRatioToDistrust(0.10f, 0.35f, 0.60f), 1.0f, 0.001f);
+
+	TestEqual(TEXT("Scale at zero distrust is 1"), ForeshortenReliabilityScale(0.0f), 1.0f, 0.001f);
+	TestEqual(TEXT("Scale at full distrust hits the floor"),
+		ForeshortenReliabilityScale(1.0f), ForeshortenMinReliabilityScale, 0.001f);
+	TestEqual(TEXT("Scale interpolates"),
+		ForeshortenReliabilityScale(0.5f), 0.5f * (1.0f + ForeshortenMinReliabilityScale), 0.001f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityForeshortenDecayingMaxTest,
+	"TestingKit5.MediaPipe.TrackingQuality.Foreshorten.DecayingMax",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityForeshortenDecayingMaxTest::RunTest(const FString& Parameters)
+{
+	bool bHas = false;
+	float MaxVal = 0.0f;
+	TestEqual(TEXT("First observation seeds"), UpdateDecayingMaxLength(bHas, MaxVal, 0.40f, 0.033f, 0.02f), 0.40f, 0.0001f);
+	TestTrue(TEXT("Estimate flag set"), bHas);
+	TestEqual(TEXT("Larger observation grows instantly"), UpdateDecayingMaxLength(bHas, MaxVal, 0.50f, 0.033f, 0.02f), 0.50f, 0.0001f);
+	// A smaller observation decays the max at 2%/s: after 1s, 0.50 -> 0.49.
+	TestEqual(TEXT("Smaller observation decays slowly"), UpdateDecayingMaxLength(bHas, MaxVal, 0.10f, 1.0f, 0.02f), 0.49f, 0.0001f);
+	// The decay floors at the observation itself.
+	for (int32 i = 0; i < 200; ++i)
+	{
+		UpdateDecayingMaxLength(bHas, MaxVal, 0.10f, 1.0f, 0.02f);
+	}
+	TestTrue(TEXT("Decay floors at the observed value"), MaxVal >= 0.10f - 0.0001f);
+	// Invalid observations leave the estimate untouched.
+	const float Before = MaxVal;
+	UpdateDecayingMaxLength(bHas, MaxVal, -1.0f, 1.0f, 0.02f);
+	TestEqual(TEXT("Invalid observation ignored"), MaxVal, Before, 0.0001f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityForeshortenSmoothingTest,
+	"TestingKit5.MediaPipe.TrackingQuality.Foreshorten.AsymmetricSmoothing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityForeshortenSmoothingTest::RunTest(const FString& Parameters)
+{
+	// Per-step dt clamps at 0.1s (pause guard), so span a half-life in sub-clamp steps -
+	// exponential decay composes exactly across steps.
+	float Engaging = 0.0f;
+	for (int32 i = 0; i < 2; ++i)
+	{
+		Engaging = UpdateForeshortenDistrustAlpha(Engaging, 1.0f, ForeshortenEngageHalfLifeSeconds * 0.5f);
+	}
+	TestEqual(TEXT("One engage half-life (2 steps) halves the gap"), Engaging, 0.5f, 0.001f);
+	float Releasing = 1.0f;
+	for (int32 i = 0; i < 5; ++i)
+	{
+		Releasing = UpdateForeshortenDistrustAlpha(Releasing, 0.0f, ForeshortenReleaseHalfLifeSeconds * 0.2f);
+	}
+	TestEqual(TEXT("One release half-life (5 steps) halves the gap"), Releasing, 0.5f, 0.001f);
+	// Same sub-clamp dt: engaging moves further than releasing (fast in, slow out).
+	const float EngageDelta = UpdateForeshortenDistrustAlpha(0.0f, 1.0f, 0.08f) - 0.0f;
+	const float ReleaseDelta = 1.0f - UpdateForeshortenDistrustAlpha(1.0f, 0.0f, 0.08f);
+	TestTrue(
+		FString::Printf(TEXT("Engage (%.3f) faster than release (%.3f)"), EngageDelta, ReleaseDelta),
+		EngageDelta > ReleaseDelta);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityForeshortenSagittalBlendTest,
+	"TestingKit5.MediaPipe.TrackingQuality.Foreshorten.SagittalBlend",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityForeshortenSagittalBlendTest::RunTest(const FString& Parameters)
+{
+	const FVector Forward(1.0, 0.0, 0.0);
+	// 45-deg off-sagittal heading, downward-pointing segment; full blend must land the
+	// planar heading exactly on forward with the vertical component preserved.
+	const FVector Dir = FVector(1.0, 1.0, -1.0).GetSafeNormal();
+	const FVector Blended = BlendPlanarHeadingTowardSagittal(Dir, Forward, 1.0f);
+	TestEqual(TEXT("Vertical component preserved"), Blended.Z, Dir.Z, 0.001);
+	TestEqual(TEXT("Off-axis planar component removed"), Blended.Y, 0.0, 0.001);
+	TestTrue(TEXT("Heading lands on +forward"), Blended.X > 0.0);
+	TestEqual(TEXT("Output stays unit length"), Blended.Size(), 1.0, 0.001);
+
+	// Backward-leaning segment blends toward -forward (nearest signed direction), never
+	// through zero.
+	const FVector BackDir = FVector(-1.0, 0.2, -0.5).GetSafeNormal();
+	const FVector BackBlended = BlendPlanarHeadingTowardSagittal(BackDir, Forward, 1.0f);
+	TestTrue(TEXT("Backward heading blends to -forward"), BackBlended.X < 0.0);
+	TestEqual(TEXT("Backward vertical preserved"), BackBlended.Z, BackDir.Z, 0.001);
+
+	// Alpha 0: BIT-identical passthrough (the disarmed/trusted contract).
+	const FVector Untouched = BlendPlanarHeadingTowardSagittal(Dir, Forward, 0.0f);
+	TestEqual(TEXT("X bits identical at alpha 0"), FMath::AsUInt(Untouched.X), FMath::AsUInt(Dir.X));
+	TestEqual(TEXT("Y bits identical at alpha 0"), FMath::AsUInt(Untouched.Y), FMath::AsUInt(Dir.Y));
+	TestEqual(TEXT("Z bits identical at alpha 0"), FMath::AsUInt(Untouched.Z), FMath::AsUInt(Dir.Z));
+
+	// Half blend moves the heading part-way, monotonic between input and target.
+	const FVector Half = BlendPlanarHeadingTowardSagittal(Dir, Forward, 0.5f);
+	TestTrue(TEXT("Half blend keeps some off-axis component"), Half.Y > 0.0 && Half.Y < Dir.Y);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityForeshortenRatioGeometryTest,
+	"TestingKit5.MediaPipe.TrackingQuality.Foreshorten.RatioGeometry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityForeshortenRatioGeometryTest::RunTest(const FString& Parameters)
+{
+	// Synthetic geometry: a segment of true length L at angle theta out of the image
+	// plane projects to planar length L*cos(theta). With the decaying max holding L
+	// (learned while in-plane), ratio == cos(theta).
+	const float TrueLen = 0.44f;
+	bool bHas = false;
+	float MaxVal = 0.0f;
+	UpdateDecayingMaxLength(bHas, MaxVal, TrueLen, 0.033f, 0.02f);
+	for (const float ThetaDeg : { 0.0f, 30.0f, 53.13f, 70.0f })
+	{
+		const float Planar = TrueLen * FMath::Cos(FMath::DegreesToRadians(ThetaDeg));
+		const float Ratio = Planar / MaxVal;
+		TestEqual(
+			FString::Printf(TEXT("Ratio equals cos(theta) at %.1f deg"), ThetaDeg),
+			Ratio, FMath::Cos(FMath::DegreesToRadians(ThetaDeg)), 0.001f);
+	}
+	// 70 deg out of plane (cos ~0.342) is below the Low threshold: full distrust.
+	TestEqual(TEXT("70-deg raise fully distrusts"),
+		MapForeshortenRatioToDistrust(0.342f, ForeshortenRatioLow, ForeshortenRatioHigh), 1.0f, 0.01f);
+	// In-plane: zero distrust.
+	TestEqual(TEXT("In-plane fully trusts"),
+		MapForeshortenRatioToDistrust(1.0f, ForeshortenRatioLow, ForeshortenRatioHigh), 0.0f, 0.001f);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

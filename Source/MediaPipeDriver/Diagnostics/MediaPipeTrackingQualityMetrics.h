@@ -84,4 +84,51 @@ namespace MediaPipeTrackingQualityMetrics
 	// NaN-free negative values are treated as "no prediction".
 	MEDIAPIPEDRIVER_API float ComputeEffectiveWebcamAgeMs(
 		double CaptureTimestampSeconds, double NowSeconds, float PredictionHorizonMs);
+
+	// --- Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11).
+	// ManiPose insight, pragmatic form: 2D->3D lifting is ill-posed exactly when a limb
+	// segment's IMAGE-PLANE length collapses (segment pointing into the depth axis). The
+	// ratio uses only image-plane geometry - the segment's current planar length over
+	// its decaying-max planar length - so the suspect Z never feeds its own distrust.
+
+	// Ratio thresholds: fully trusted at/above High, fully distrusted at/below Low
+	// (planar length = |cos(angle out of image plane)| * true length, so Low 0.35 is
+	// ~70 deg out of plane, High 0.60 is ~53 deg). Generous on purpose.
+	constexpr float ForeshortenRatioLow = 0.35f;
+	constexpr float ForeshortenRatioHigh = 0.60f;
+	// Reliability is scaled down to at most this floor when fully distrusted - low
+	// enough to close the correctors' >=0.6 learn gates, high enough that presence
+	// gates elsewhere keep seeing the landmark.
+	constexpr float ForeshortenMinReliabilityScale = 0.25f;
+	// Asymmetric smoothing of the distrust alpha: engage fast (garbage Z hurts within
+	// a couple of frames), release slow (regaining trust cheaply re-flaps).
+	constexpr float ForeshortenEngageHalfLifeSeconds = 0.12f;
+	constexpr float ForeshortenReleaseHalfLifeSeconds = 0.35f;
+
+	// Decaying-max length estimator (the planar-max counterpart of the leg solve's
+	// decaying-min repitch length): grows to the observed maximum instantly, decays
+	// slowly so stale maxima cannot pin the ratio down forever.
+	MEDIAPIPEDRIVER_API float UpdateDecayingMaxLength(
+		bool& bInOutHasEstimate, float& InOutMaxValue, float Observed, float DeltaSeconds, float DecayPerSec);
+
+	// Maps a foreshorten ratio to a raw distrust target in [0,1] using the Low/High
+	// thresholds (1 = fully foreshortened / distrust, 0 = fully in-plane / trust).
+	MEDIAPIPEDRIVER_API float MapForeshortenRatioToDistrust(float Ratio, float RatioLow, float RatioHigh);
+
+	// Advances the smoothed distrust alpha toward the target with the asymmetric
+	// engage/release half-lives above.
+	MEDIAPIPEDRIVER_API float UpdateForeshortenDistrustAlpha(
+		float CurrentAlpha, float TargetDistrust, float DeltaSeconds);
+
+	// Reliability multiplier for a landmark whose limb chain carries the given
+	// (max-over-chain) distrust alpha: 1 at alpha 0, ForeshortenMinReliabilityScale at 1.
+	MEDIAPIPEDRIVER_API float ForeshortenReliabilityScale(float DistrustAlpha);
+
+	// Eases a world-space segment direction's PLANAR heading toward the nearest signed
+	// sagittal axis (+-SagittalAxisWorld, horizontal) by Alpha, preserving the planar
+	// magnitude (and therefore the vertical component / elevation - the image-reliable
+	// raise cue). Alpha <= 0 returns the input untouched (bit-exact). The vertical axis
+	// is world +Z (UE world space of the converted landmark cloud).
+	MEDIAPIPEDRIVER_API FVector BlendPlanarHeadingTowardSagittal(
+		const FVector& DirWorld, const FVector& SagittalAxisWorld, float Alpha);
 }

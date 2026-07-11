@@ -170,4 +170,92 @@ namespace MediaPipeTrackingQualityMetrics
 		const float PredMs = FMath::Max(PredictionHorizonMs, 0.0f);
 		return AgeMs - PredMs;
 	}
+
+	float UpdateDecayingMaxLength(
+		bool& bInOutHasEstimate, float& InOutMaxValue, const float Observed,
+		const float DeltaSeconds, const float DecayPerSec)
+	{
+		if (!FMath::IsFinite(Observed) || Observed <= 0.0f)
+		{
+			return bInOutHasEstimate ? InOutMaxValue : 0.0f;
+		}
+		if (!bInOutHasEstimate)
+		{
+			bInOutHasEstimate = true;
+			InOutMaxValue = Observed;
+			return InOutMaxValue;
+		}
+		if (Observed >= InOutMaxValue)
+		{
+			InOutMaxValue = Observed;
+		}
+		else if (DecayPerSec > 0.0f && DeltaSeconds > 0.0f)
+		{
+			InOutMaxValue = FMath::Max(
+				Observed,
+				InOutMaxValue * FMath::Max(0.0f, 1.0f - DecayPerSec * DeltaSeconds));
+		}
+		return InOutMaxValue;
+	}
+
+	float MapForeshortenRatioToDistrust(const float Ratio, const float RatioLow, const float RatioHigh)
+	{
+		if (!FMath::IsFinite(Ratio))
+		{
+			return 0.0f;
+		}
+		const float Low = FMath::Min(RatioLow, RatioHigh);
+		const float High = FMath::Max(RatioHigh, Low + KINDA_SMALL_NUMBER);
+		return FMath::Clamp((High - Ratio) / (High - Low), 0.0f, 1.0f);
+	}
+
+	float UpdateForeshortenDistrustAlpha(
+		const float CurrentAlpha, const float TargetDistrust, const float DeltaSeconds)
+	{
+		const float Target = FMath::Clamp(TargetDistrust, 0.0f, 1.0f);
+		const float HalfLife = Target > CurrentAlpha
+			? ForeshortenEngageHalfLifeSeconds
+			: ForeshortenReleaseHalfLifeSeconds;
+		const float Dt = FMath::Clamp(DeltaSeconds, 0.0f, 0.1f);
+		const float Alpha = HalfLife <= KINDA_SMALL_NUMBER
+			? 1.0f
+			: 1.0f - FMath::Pow(0.5f, Dt / HalfLife);
+		return FMath::Clamp(FMath::Lerp(CurrentAlpha, Target, Alpha), 0.0f, 1.0f);
+	}
+
+	float ForeshortenReliabilityScale(const float DistrustAlpha)
+	{
+		return 1.0f - (1.0f - ForeshortenMinReliabilityScale) * FMath::Clamp(DistrustAlpha, 0.0f, 1.0f);
+	}
+
+	FVector BlendPlanarHeadingTowardSagittal(
+		const FVector& DirWorld, const FVector& SagittalAxisWorld, const float Alpha)
+	{
+		if (Alpha <= KINDA_SMALL_NUMBER)
+		{
+			return DirWorld;
+		}
+		const FVector Planar(DirWorld.X, DirWorld.Y, 0.0);
+		FVector Axis(SagittalAxisWorld.X, SagittalAxisWorld.Y, 0.0);
+		Axis = Axis.GetSafeNormal();
+		const double PlanarSize = Planar.Size();
+		if (PlanarSize <= KINDA_SMALL_NUMBER || Axis.IsNearlyZero())
+		{
+			return DirWorld;
+		}
+		// Nearest signed sagittal direction: a backward-pointing segment blends toward
+		// backward, never through zero (no 180-degree pops at the seam).
+		const FVector AxisSigned = FVector::DotProduct(Planar, Axis) >= 0.0 ? Axis : -Axis;
+		const FVector TargetPlanar = AxisSigned * PlanarSize;
+		FVector NewPlanar = FMath::Lerp(Planar, TargetPlanar, static_cast<double>(FMath::Clamp(Alpha, 0.0f, 1.0f)));
+		const FVector NewPlanarDir = NewPlanar.GetSafeNormal();
+		if (NewPlanarDir.IsNearlyZero())
+		{
+			return DirWorld;
+		}
+		// Preserve the planar magnitude so the vertical component (elevation - the
+		// image-reliable raise cue) is untouched.
+		NewPlanar = NewPlanarDir * PlanarSize;
+		return FVector(NewPlanar.X, NewPlanar.Y, DirWorld.Z).GetSafeNormal();
+	}
 }

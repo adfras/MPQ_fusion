@@ -1768,6 +1768,29 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
 
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11). ManiPose
+	// insight, pragmatic form: 2D->3D lifting is ill-posed exactly when a limb segment's
+	// IMAGE-PLANE length collapses (segment pointing into the camera's depth axis). The
+	// per-segment ratio (current planar length / decaying-max planar length) uses only
+	// image-plane geometry - the suspect Z never feeds its own distrust. Distrust scales
+	// the landmark reliability fed to the solver's gates (arm-direction learn/vote, hand
+	// arm gate, leg stabilizer when enabled) and eases foreshortened LEG segment planar
+	// headings toward the sagittal plane (the azimuth is the ill-conditioned part; the
+	// image-reliable elevation - the raise cue - is preserved). NOTE: the leg solve's
+	// only reliability consumer (mp.MediaPipeLegReliabilityStabilize) is OFF by user
+	// acceptance (2026-06-13, full-extent legs), so the sagittal ease is the leg-side
+	// consumer of this signal - stateless target, bounded by the smoothed alpha, no
+	// learning, asymmetric engage/release smoothing.
+	TAutoConsoleVariable<int32> CVarMediaPipeForeshortenZDistrust(
+		TEXT("mp.MediaPipeForeshortenZDistrust"),
+		0,
+		TEXT("When non-zero, per-limb-segment image-plane foreshortening scales down the landmark reliability fed to Z consumers (dwell-smoothed, floor 0.25) and eases foreshortened leg segment planar headings toward the sagittal plane (elevation preserved). TRACKING_QUALITY_PLAN Phase 3; default 0 = no distrust."));
+
+	TAutoConsoleVariable<int32> CVarForeshortenTrace(
+		TEXT("mp.ForeshortenTrace"),
+		0,
+		TEXT("When non-zero, emit per-actor mp.ForeshortenTrace rows (4 Hz, keyed throttle): per limb segment the image-plane foreshorten ratio, the smoothed distrust alpha, and the applied reliability scale. Report-only; the distrust itself is gated by mp.MediaPipeForeshortenZDistrust."));
+
 	// Anatomical wrist clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11). Swing-twist
 	// guardrail on the FINAL wrist rotation, the LAST op before the bone write at every
 	// wrist write site (quest/held/camera - the same three sites the palm trim covers).

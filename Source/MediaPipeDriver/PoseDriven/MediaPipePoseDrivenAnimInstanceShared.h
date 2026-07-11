@@ -90,6 +90,7 @@ struct FPoseYawAlignRuntimeState
 FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeStateForKey(uint32 Key);
 FQuestWristRuntimeState& GetQuestWristRuntimeStateForKey(uint32 Key);
 FMediaPipeFootContactRuntimeState& GetFootContactRuntimeStateForKey(uint32 Key);
+FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeStateForKey(uint32 Key);
 
 namespace
 {
@@ -148,6 +149,11 @@ namespace
 	FMediaPipeFootContactRuntimeState& GetFootContactRuntimeState(uint32 Key)
 	{
 		return GetFootContactRuntimeStateForKey(Key);
+	}
+
+	FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeState(uint32 Key)
+	{
+		return GetForeshortenRuntimeStateForKey(Key);
 	}
 
 	void ResetFootContactRuntimeState(uint32 Key)

@@ -591,6 +591,52 @@ struct FMediaPipeFootContactRuntimeState
 	}
 };
 
+// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11). Keyed
+// (per-component) segment-foreshortening state: decaying-max image-plane lengths and
+// the smoothed distrust alphas per limb segment. Keyed for the CacheBones reason -
+// smoothed alphas and length maxima are cross-frame state; node members are wiped every
+// live frame. Written ONLY while mp.MediaPipeForeshortenZDistrust is armed.
+enum EMediaPipeForeshortenSegment : uint8
+{
+	MediaPipeForeshortenSegment_Thigh = 0,
+	MediaPipeForeshortenSegment_Shin = 1,
+	MediaPipeForeshortenSegment_UpperArm = 2,
+	MediaPipeForeshortenSegment_Forearm = 3,
+	MediaPipeForeshortenSegment_Count = 4,
+};
+
+struct FMediaPipeForeshortenSegmentState
+{
+	bool bHasPlanarMax = false;
+	// Decaying-max image-plane segment length (raw camera-space units).
+	float PlanarMax = 0.0f;
+	// Smoothed distrust alpha: 0 = trusted (in-plane), 1 = fully foreshortened.
+	float DistrustAlpha = 0.0f;
+	// Last raw ratio (trace evidence).
+	float LastRatio = 1.0f;
+};
+
+struct FMediaPipeForeshortenSideState
+{
+	FMediaPipeForeshortenSegmentState Segments[MediaPipeForeshortenSegment_Count];
+};
+
+struct FMediaPipeForeshortenRuntimeState
+{
+	FMediaPipeForeshortenSideState Left;
+	FMediaPipeForeshortenSideState Right;
+	// New-frame dedup + wall-clock step (DeltaSeconds can be 0 in Evaluate).
+	int64 LastPoseTimestampUs = -1;
+	double LastUpdateTimeSeconds = -1.0;
+	// mp.ForeshortenTrace throttle (keyed, per actor).
+	double ForeshortenTraceLastLogTimeSeconds = -1.0;
+
+	void Reset()
+	{
+		*this = FMediaPipeForeshortenRuntimeState();
+	}
+};
+
 struct FMediaPipeQuestWristSideSolverState
 {
 	bool bHasQuestWristCalibration = false;

@@ -751,6 +751,14 @@ private:
 	// only) - callers write the returned value to the bone and must NOT store it into
 	// any cross-frame/learner state (clamped frames never teach anything).
 	FQuat ApplyWristLimitClampAndTrace(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FQuat& FinalHandRotCS, const FVector& ForearmAxisComp, const TCHAR* SourceTag);
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11): per-new-
+	// frame update of the keyed per-segment distrust alphas (image-plane ratios from the
+	// RAW camera-space landmarks), plus the mp.ForeshortenTrace row. No-op unless
+	// mp.MediaPipeForeshortenZDistrust is armed and RuntimeStateKey != 0.
+	void UpdateForeshortenDistrust();
+	// Reliability multiplier for a landmark from the max distrust along its limb chain;
+	// 1.0 whenever the feature is disarmed (GetLandmarkReliability stays byte-identical).
+	float GetForeshortenReliabilityScaleForLandmark(int32 LmIdx) const;
 };
 
 USTRUCT()

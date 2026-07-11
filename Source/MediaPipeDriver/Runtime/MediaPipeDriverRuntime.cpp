@@ -883,6 +883,12 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// (mp.WristTwistRangeDeg 90 / mp.WristSwingRangeDeg 85), live-tunable.
 		// AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.WristAnatomicalClamp"), 1),
+		// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11):
+		// image-plane-only foreshorten ratio per limb segment scales the reliability fed
+		// to Z consumers and eases foreshortened leg planar headings toward the sagittal
+		// plane (elevation/raise cue preserved; the rejected 2026-06-13 reference-stance
+		// stabilizer stays off). AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeForeshortenZDistrust"), 1),
 	};
 }
 

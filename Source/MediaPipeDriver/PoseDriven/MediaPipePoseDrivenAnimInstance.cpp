@@ -17,6 +17,7 @@
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeStage2ShoulderEvidence.h"
 #include "MediaPipeTrackingFusionDatasetReplay.h"
+#include "MediaPipeTrackingQualityMetrics.h"
 #include "MediaPipeQuestHandDebugReporter.h"
 #include "MediaPipeQuestHandCaptureReplayTooling.h"
 #include "MediaPipeQuestHandCompareDiagnostics.h"
@@ -110,6 +111,13 @@ FMediaPipeFootContactRuntimeState& GetFootContactRuntimeStateForKey(const uint32
 {
 	static FCriticalSection Lock;
 	static TMap<uint32, TUniquePtr<FMediaPipeFootContactRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
+
+FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FMediaPipeForeshortenRuntimeState>> Store;
 	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
 }
 
@@ -599,6 +607,10 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 			PoseHands = FMediaPipeRawHandPair();
 			PoseHandsTimestampUs = PoseFrame.TimestampUs;
 			bHasPoseHands = false;
+			// Foreshortening -> Z-distrust (Phase 3, 2026-07-11): the replay path is a
+			// second frame-ingest entry; keep the distrust current here too so replay
+			// A/B evidence matches live behavior. No-op while disarmed.
+			UpdateForeshortenDistrust();
 		}
 		else
 		{
@@ -984,6 +996,11 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	}
 
 	bHasPoseFrame = true;
+
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11): update
+	// the keyed per-segment distrust from this NEW measurement (ratios only change with
+	// new frames). Runs after every frame member above is final; no-op while disarmed.
+	UpdateForeshortenDistrust();
 }
 
 FVector FAnimNode_MediaPipePoseDriven::LerpNormalized(const FVector& A, const FVector& B, float Alpha)
@@ -1200,18 +1217,169 @@ float FAnimNode_MediaPipePoseDriven::GetLandmarkReliability(int32 LmIdx) const
 		return 0.0f;
 	}
 
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11): this
+	// function is the single reliability choke point for the solver's gates (arm
+	// direction learn/vote, hand-rotation arm gate, shrug/heading inputs, the leg
+	// stabilizer when enabled), so the per-segment distrust scale applies here.
+	// Returns exactly 1.0 while the feature CVar is 0 - the legacy value is untouched.
+	const float ForeshortenScale = GetForeshortenReliabilityScaleForLandmark(LmIdx);
+
 	const FMediaPipePoseLandmark& WorldLm = PoseFrame.World.Points[LmIdx];
 	const FMediaPipePoseLandmark& NormalizedLm = PoseFrame.Normalized.Points[LmIdx];
 	const float ExplicitReliability = FMath::Max(WorldLm.Reliability, NormalizedLm.Reliability);
 	if (ExplicitReliability > 0.0f || PoseFrame.bSourceConditioned)
 	{
-		return FMath::Clamp(ExplicitReliability, 0.0f, 1.0f);
+		return FMath::Clamp(ExplicitReliability, 0.0f, 1.0f) * ForeshortenScale;
 	}
 
 	return FMath::Clamp(
 		FMath::Max(WorldLm.Visibility * WorldLm.Presence, NormalizedLm.Visibility * NormalizedLm.Presence),
 		0.0f,
-		1.0f);
+		1.0f) * ForeshortenScale;
+}
+
+float FAnimNode_MediaPipePoseDriven::GetForeshortenReliabilityScaleForLandmark(const int32 LmIdx) const
+{
+	if (CVarMediaPipeForeshortenZDistrust.GetValueOnAnyThread() == 0 || RuntimeStateKey == 0)
+	{
+		return 1.0f;
+	}
+	const FMediaPipeForeshortenRuntimeState& FS = GetForeshortenRuntimeState(RuntimeStateKey);
+	// A corrupted proximal segment corrupts everything distal to it: max over the chain.
+	auto ChainAlpha = [](const FMediaPipeForeshortenSideState& Side, const int32 SegA, const int32 SegB = -1)
+	{
+		float MaxAlpha = Side.Segments[SegA].DistrustAlpha;
+		if (SegB >= 0)
+		{
+			MaxAlpha = FMath::Max(MaxAlpha, Side.Segments[SegB].DistrustAlpha);
+		}
+		return MaxAlpha;
+	};
+	float DistrustAlpha = 0.0f;
+	switch (static_cast<EMediaPipePoseLandmark>(LmIdx))
+	{
+	case EMediaPipePoseLandmark::LeftKnee:
+		DistrustAlpha = ChainAlpha(FS.Left, MediaPipeForeshortenSegment_Thigh);
+		break;
+	case EMediaPipePoseLandmark::RightKnee:
+		DistrustAlpha = ChainAlpha(FS.Right, MediaPipeForeshortenSegment_Thigh);
+		break;
+	case EMediaPipePoseLandmark::LeftAnkle:
+	case EMediaPipePoseLandmark::LeftHeel:
+	case EMediaPipePoseLandmark::LeftFootIndex:
+		DistrustAlpha = ChainAlpha(FS.Left, MediaPipeForeshortenSegment_Thigh, MediaPipeForeshortenSegment_Shin);
+		break;
+	case EMediaPipePoseLandmark::RightAnkle:
+	case EMediaPipePoseLandmark::RightHeel:
+	case EMediaPipePoseLandmark::RightFootIndex:
+		DistrustAlpha = ChainAlpha(FS.Right, MediaPipeForeshortenSegment_Thigh, MediaPipeForeshortenSegment_Shin);
+		break;
+	case EMediaPipePoseLandmark::LeftElbow:
+		DistrustAlpha = ChainAlpha(FS.Left, MediaPipeForeshortenSegment_UpperArm);
+		break;
+	case EMediaPipePoseLandmark::RightElbow:
+		DistrustAlpha = ChainAlpha(FS.Right, MediaPipeForeshortenSegment_UpperArm);
+		break;
+	case EMediaPipePoseLandmark::LeftWrist:
+		DistrustAlpha = ChainAlpha(FS.Left, MediaPipeForeshortenSegment_UpperArm, MediaPipeForeshortenSegment_Forearm);
+		break;
+	case EMediaPipePoseLandmark::RightWrist:
+		DistrustAlpha = ChainAlpha(FS.Right, MediaPipeForeshortenSegment_UpperArm, MediaPipeForeshortenSegment_Forearm);
+		break;
+	default:
+		return 1.0f;
+	}
+	return MediaPipeTrackingQualityMetrics::ForeshortenReliabilityScale(DistrustAlpha);
+}
+
+void FAnimNode_MediaPipePoseDriven::UpdateForeshortenDistrust()
+{
+	const bool bFeatureArmed = CVarMediaPipeForeshortenZDistrust.GetValueOnAnyThread() != 0;
+	const bool bTraceArmed = CVarForeshortenTrace.GetValueOnAnyThread() != 0;
+	if ((!bFeatureArmed && !bTraceArmed) || RuntimeStateKey == 0 || !bHasPoseFrame)
+	{
+		return;
+	}
+	FMediaPipeForeshortenRuntimeState& FS = GetForeshortenRuntimeState(RuntimeStateKey);
+	if (PoseFrame.TimestampUs == FS.LastPoseTimestampUs)
+	{
+		// Same measurement re-ingested: ratios cannot have changed.
+		return;
+	}
+	FS.LastPoseTimestampUs = PoseFrame.TimestampUs;
+	const double NowSeconds = FPlatformTime::Seconds();
+	const float StepSeconds = FS.LastUpdateTimeSeconds >= 0.0
+		? FMath::Clamp(static_cast<float>(NowSeconds - FS.LastUpdateTimeSeconds), 0.0f, 0.1f)
+		: (1.0f / 30.0f);
+	FS.LastUpdateTimeSeconds = NowSeconds;
+
+	// RAW camera-space landmarks (hip-origin, x image-right, y vertical, z depth): the
+	// image plane is x-y, so the planar length uses no Z at all - the suspect depth
+	// never feeds its own distrust. Decay 2%/s on the planar max tracks slow scale
+	// drift without letting one inflated sample pin ratios down.
+	constexpr float PlanarMaxDecayPerSec = 0.02f;
+	auto UpdateSegment = [&](FMediaPipeForeshortenSegmentState& Segment,
+		const EMediaPipePoseLandmark FromLm, const EMediaPipePoseLandmark ToLm)
+	{
+		const int32 FromIdx = static_cast<int32>(FromLm);
+		const int32 ToIdx = static_cast<int32>(ToLm);
+		if (!PoseFrame.World.IsValidIndex(FromIdx) || !PoseFrame.World.IsValidIndex(ToIdx))
+		{
+			// Unmeasured segment: hold the alpha (release smoothing resumes on data).
+			return;
+		}
+		const FMediaPipePoseLandmark& From = PoseFrame.World.Points[FromIdx];
+		const FMediaPipePoseLandmark& To = PoseFrame.World.Points[ToIdx];
+		const float Dx = To.X - From.X;
+		const float Dy = To.Y - From.Y;
+		const float PlanarLen = FMath::Sqrt(Dx * Dx + Dy * Dy);
+		const float PlanarMax = MediaPipeTrackingQualityMetrics::UpdateDecayingMaxLength(
+			Segment.bHasPlanarMax, Segment.PlanarMax, PlanarLen, StepSeconds, PlanarMaxDecayPerSec);
+		if (PlanarMax <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+		Segment.LastRatio = FMath::Clamp(PlanarLen / PlanarMax, 0.0f, 1.0f);
+		const float TargetDistrust = MediaPipeTrackingQualityMetrics::MapForeshortenRatioToDistrust(
+			Segment.LastRatio,
+			MediaPipeTrackingQualityMetrics::ForeshortenRatioLow,
+			MediaPipeTrackingQualityMetrics::ForeshortenRatioHigh);
+		Segment.DistrustAlpha = MediaPipeTrackingQualityMetrics::UpdateForeshortenDistrustAlpha(
+			Segment.DistrustAlpha, TargetDistrust, StepSeconds);
+	};
+	UpdateSegment(FS.Left.Segments[MediaPipeForeshortenSegment_Thigh], EMediaPipePoseLandmark::LeftHip, EMediaPipePoseLandmark::LeftKnee);
+	UpdateSegment(FS.Left.Segments[MediaPipeForeshortenSegment_Shin], EMediaPipePoseLandmark::LeftKnee, EMediaPipePoseLandmark::LeftAnkle);
+	UpdateSegment(FS.Left.Segments[MediaPipeForeshortenSegment_UpperArm], EMediaPipePoseLandmark::LeftShoulder, EMediaPipePoseLandmark::LeftElbow);
+	UpdateSegment(FS.Left.Segments[MediaPipeForeshortenSegment_Forearm], EMediaPipePoseLandmark::LeftElbow, EMediaPipePoseLandmark::LeftWrist);
+	UpdateSegment(FS.Right.Segments[MediaPipeForeshortenSegment_Thigh], EMediaPipePoseLandmark::RightHip, EMediaPipePoseLandmark::RightKnee);
+	UpdateSegment(FS.Right.Segments[MediaPipeForeshortenSegment_Shin], EMediaPipePoseLandmark::RightKnee, EMediaPipePoseLandmark::RightAnkle);
+	UpdateSegment(FS.Right.Segments[MediaPipeForeshortenSegment_UpperArm], EMediaPipePoseLandmark::RightShoulder, EMediaPipePoseLandmark::RightElbow);
+	UpdateSegment(FS.Right.Segments[MediaPipeForeshortenSegment_Forearm], EMediaPipePoseLandmark::RightElbow, EMediaPipePoseLandmark::RightWrist);
+
+	if (bTraceArmed && FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+		NowSeconds, 0.25, FS.ForeshortenTraceLastLogTimeSeconds))
+	{
+		auto SideText = [](const FMediaPipeForeshortenSideState& Side)
+		{
+			return FString::Printf(
+				TEXT("thigh(r=%.2f a=%.2f) shin(r=%.2f a=%.2f) upper(r=%.2f a=%.2f) fore(r=%.2f a=%.2f)"),
+				Side.Segments[MediaPipeForeshortenSegment_Thigh].LastRatio,
+				Side.Segments[MediaPipeForeshortenSegment_Thigh].DistrustAlpha,
+				Side.Segments[MediaPipeForeshortenSegment_Shin].LastRatio,
+				Side.Segments[MediaPipeForeshortenSegment_Shin].DistrustAlpha,
+				Side.Segments[MediaPipeForeshortenSegment_UpperArm].LastRatio,
+				Side.Segments[MediaPipeForeshortenSegment_UpperArm].DistrustAlpha,
+				Side.Segments[MediaPipeForeshortenSegment_Forearm].LastRatio,
+				Side.Segments[MediaPipeForeshortenSegment_Forearm].DistrustAlpha);
+		};
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.ForeshortenTrace: actor=%s armed=%d L[%s] R[%s] key=%u"),
+			*TargetActorName.ToString(),
+			bFeatureArmed ? 1 : 0,
+			*SideText(FS.Left),
+			*SideText(FS.Right),
+			RuntimeStateKey);
+	}
 }
 
 

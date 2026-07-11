@@ -291,6 +291,41 @@ void FAnimNode_MediaPipePoseDriven::DriveLegCS(FCSPose<FCompactPose>& CSPose, bo
 		}
 	}
 
+	// Foreshortening -> Z-distrust, leg consumer (TRACKING_QUALITY_PLAN Phase 3,
+	// 2026-07-11): when a leg segment's IMAGE-PLANE length collapses (pointing into the
+	// camera - the documented right-knee-toward-camera raise), its planar heading is the
+	// ill-conditioned part (Z noise swings the azimuth) while the re-pitched elevation
+	// above stays image-reliable. Ease the planar heading toward the nearest sagittal
+	// direction by the smoothed keyed distrust alpha: raises stay full-height raises,
+	// the azimuth stops wobbling, and the rejected reference-stance stabilizer
+	// (mp.MediaPipeLegReliabilityStabilize, off 2026-06-13) stays off. The blend target
+	// is stateless (current torso forward), the alpha is bounded [0,1] and
+	// asymmetrically smoothed at the source - the bias-eraser recipe with nothing to
+	// learn. Runs BEFORE the adduction clamp so anatomical bounds still apply last.
+	if (CVarMediaPipeForeshortenZDistrust.GetValueOnAnyThread() != 0 && RuntimeStateKey != 0)
+	{
+		const FVector SagittalSeedWorld = bHasLegTorsoBasis
+			? LegForwardWorld
+			: TargetCompTransform.TransformVectorNoScale(FVector::ForwardVector);
+		const FVector SagittalAxisWorld =
+			FVector(SagittalSeedWorld.X, SagittalSeedWorld.Y, 0.0).GetSafeNormal();
+		if (!SagittalAxisWorld.IsNearlyZero())
+		{
+			const FMediaPipeForeshortenRuntimeState& ForeshortenState =
+				GetForeshortenRuntimeState(RuntimeStateKey);
+			const FMediaPipeForeshortenSideState& ForeshortenSide =
+				bIsLeft ? ForeshortenState.Left : ForeshortenState.Right;
+			DesiredThighWorld = MediaPipeTrackingQualityMetrics::BlendPlanarHeadingTowardSagittal(
+				DesiredThighWorld,
+				SagittalAxisWorld,
+				ForeshortenSide.Segments[MediaPipeForeshortenSegment_Thigh].DistrustAlpha);
+			DesiredCalfWorld = MediaPipeTrackingQualityMetrics::BlendPlanarHeadingTowardSagittal(
+				DesiredCalfWorld,
+				SagittalAxisWorld,
+				ForeshortenSide.Segments[MediaPipeForeshortenSegment_Shin].DistrustAlpha);
+		}
+	}
+
 	// Anatomical adduction bound: with the reliability stabilizer off (full-extent legs),
 	// monocular drift walks the knees into each other (observed live 2026-07-02). Bounding the
 	// thigh's travel past vertical toward the midline stops that without damping any other
