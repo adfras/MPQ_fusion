@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MediaPipePoseDiagnostics.h"
+#include "MediaPipePoseHistoryRing.h"
 
 struct FQuestHandRotationTrace;
 
@@ -164,6 +165,13 @@ struct FQuestWristSideRuntimeState
 	double WristLimitTraceLastLogTimeSeconds = -1.0;
 	double WristLimitTraceLastEventLogTimeSeconds = -1.0;
 	double WebcamAgeTraceLastLogTimeSeconds = -1.0;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): recent RAW
+	// chain arm poses (pre-correction shoulder/elbow/wrist) so the arm-direction learner
+	// can compare a webcam measurement against the chain at the measurement's effective
+	// capture time. Pushed ONLY while mp.MediaPipeTimestampAlignedResiduals=1 (byte-inert
+	// disarmed). Keyed for the CacheBones reason; not touched by Reset() - entries
+	// self-invalidate within the ~250ms window.
+	MediaPipePoseHistory::FMediaPipeArmChainHistoryRing ArmChainHistory;
 	// Quest-reach chain extension (mp.MediaPipeChainReachFromQuestHand, 2026-07-10): smoothed
 	// radial extension (cm) of the chain-direct wrist target toward the REAL hand-tracking
 	// wrist's reach fraction. Smoothed so tracked-flag flickers cannot pop the wrist; decays

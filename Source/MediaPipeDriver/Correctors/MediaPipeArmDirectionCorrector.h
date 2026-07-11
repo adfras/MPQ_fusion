@@ -47,6 +47,18 @@ struct FMediaPipeArmDirectionCorrectorInputs
 	// where the original block consumed it.
 	bool bHasOtherShoulderWorld = false;
 	FVector OtherShoulderWorld = FVector::ZeroVector;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): the RAW
+	// chain arm as it was at this measurement's effective capture time, sampled from the
+	// keyed history ring at the call site ONLY while mp.MediaPipeTimestampAlignedResiduals
+	// is 1 and history covers the timestamp (degenerate/short-history cases stay false).
+	// When set, the LEARNER's chain-side directions come from these positions - the
+	// camera is compared against the pose it actually saw, not the ~80-130ms-newer one.
+	// Application, the quiet gate's speed source, and everything else are untouched;
+	// when false the code path is character-identical to the golden-locked original.
+	bool bHasAlignedChainArm = false;
+	FVector AlignedChainShoulderWorld = FVector::ZeroVector;
+	FVector AlignedChainElbowWorld = FVector::ZeroVector;
+	FVector AlignedChainWristWorld = FVector::ZeroVector;
 };
 
 // Mutates the keyed side state and the chain elbow/wrist targets exactly as the

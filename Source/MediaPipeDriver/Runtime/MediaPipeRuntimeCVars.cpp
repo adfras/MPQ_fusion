@@ -1768,6 +1768,20 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
 
+	// Timestamp-aligned corrector residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11).
+	// Out-of-sequence-measurement fix: a webcam measurement is ~80-130ms old at fuse time,
+	// so comparing it against the CURRENT pose manufactures phantom residuals during motion
+	// (the transient class behind the July arm arc). When 1, the arm-direction and heading
+	// learners compare each measurement against the buffered pose at the measurement's own
+	// effective capture time (capture timestamp + conditioner forward prediction; rings in
+	// the keyed store / body-solver state). Apply() is unchanged - corrections still apply
+	// to the current pose. Default 0 = byte-identical legacy behavior; candidate variant
+	// arms it for the Phase 6 worn A/B.
+	TAutoConsoleVariable<int32> CVarMediaPipeTimestampAlignedResiduals(
+		TEXT("mp.MediaPipeTimestampAlignedResiduals"),
+		0,
+		TEXT("When non-zero, corrector learners (arm direction, heading) compare webcam measurements against the buffered solved pose at the measurement's effective capture time instead of the current pose. Application of corrections is unchanged. TRACKING_QUALITY_PLAN Phase 1; default 0 = legacy current-pose residuals."));
+
 	TAutoConsoleVariable<int32> CVarWebcamAgeTrace(
 		TEXT("mp.WebcamAgeTrace"),
 		0,

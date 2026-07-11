@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "MediaPipeBodySolverMath.h"
 #include "MediaPipePoseDiagnostics.h"
+#include "MediaPipePoseHistoryRing.h"
 #include "MediaPipeQuestFingerSolver.h"
 
 static constexpr int32 MediaPipeQuestStateFingerBoneCount = 19;
@@ -62,6 +63,12 @@ struct FMediaPipeBodySolverState
 	float BodyYawCameraCorrectionDeg = 0.0f;
 	bool bHasBodyYawCamAnchor = false;
 	float BodyYawCamAnchorDeg = 0.0f;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): recent
+	// APPLIED body yaw so the heading learner can compare the camera's shoulder-line yaw
+	// against the yaw at the measurement's effective capture time. Pushed ONLY while
+	// mp.MediaPipeTimestampAlignedResiduals=1 (byte-inert disarmed). Lives here beside
+	// the corrector state it serves (this struct's live survival is field-proven).
+	MediaPipePoseHistory::FMediaPipeYawHistoryRing AppliedYawHistory;
 	// Fusion-path clavicle shrug (DriveClavicleShrugCS): per-side asymmetric rest reference
 	// (camera shoulder height above hip-mid, cm; sentinel -10000 = unset) and the smoothed
 	// applied lift sine. Keyed store: node members are wiped by CacheBones in live sessions.

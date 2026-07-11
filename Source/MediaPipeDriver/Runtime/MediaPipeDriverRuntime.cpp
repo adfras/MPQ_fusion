@@ -870,6 +870,12 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// radially (stretch-only, smoothed, elbow re-solved two-bone). This is the chain-path
 		// successor to the old quest-wrist reach-scale calibration.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeChainReachFromQuestHand"), 1.0f),
+		// Timestamp-aligned corrector residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11):
+		// arm-direction + heading learners compare each webcam measurement against the
+		// buffered pose at the measurement's own effective capture time (OOSM fix) instead
+		// of the ~80-130ms-newer current pose; application unchanged. Byte-identical at the
+		// engine default 0. AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeTimestampAlignedResiduals"), 1),
 	};
 }
 

@@ -188,6 +188,18 @@ fail stay dark with their rows archived.
 - Worn verdict on the mirror: "better", specifically during the standing-mirror
   inspection leg.
 
+## Execution log (branch feature/tracking-quality, base = a4fb16e)
+
+Gates per phase: build clean (editor closed, fast wrapper), automation count only grows
+(164 at plan start), goldens byte-identical disarmed, phase scoreboard evidence. Desk
+captures requiring a person at the webcam are batched (one request per phase) and land
+as baseline-dir addenda when taken; the capture-independent gate evidence is listed.
+
+| Phase | Commit | Tests | What landed |
+| ----- | ------ | ----- | ----------- |
+| 0 | 89cf5b4 | 169/169 | mp.FootSkateTrace / mp.WristLimitTrace / mp.WebcamAgeTrace (report-only, keyed throttles, default 0, not in variant lists); Diagnostics/MediaPipeTrackingQualityMetrics + 5 unit tests (incl. L/R parity); Tools/mine_tracking_quality_baseline.py; Docs/tracking_quality_baseline/ with the mined 2026-07-10 acceptance fingerprint (cross-checks REFACTOR_PLAN 9.2 exactly) + a 150s replay -game smoke run: 1049 FootSkate rows (planted planar speed p50 4.0-4.6 / p90 18-20 / max 33 cm/s), 312 WristLimit rows (12-13 out-of-envelope events/side, twist excess to 46 deg). WebcamAgeTrace has no replay rows by construction (live-only call site); fresh desk capture pending. |
+| 1 | (this commit) | 176/176 | mp.MediaPipeTimestampAlignedResiduals (default 0, candidate 1): keyed ~250ms history rings (Correctors/MediaPipePoseHistoryRing.h; arm chain ring in FQuestWristSideRuntimeState, applied-yaw ring in FMediaPipeBodySolverState); arm-direction + heading LEARNERS compare measurements against the ring pose at capture-ts + conditioner-prediction (per-frame measured, no assumed constant); Apply() untouched; WebcamAgeTrace row gains aligned=/alElbowResidDeg=/alWristResidDeg=/histN=. Proofs: 6 refactor goldens byte-identical disarmed; corrector-level bit-equivalence asserts (aligned==current == unaligned); synthetic latency-ghost batteries pinned in tracking_quality_baseline/goldens/ (unaligned integrates the ghost, aligned stays <0.1 deg / <0.05 deg); 5 ring unit tests (interpolation, wraparound eviction, fallback contract, non-monotonic refusal, effective-time). Live A/B awaits the flag-on desk capture. Shrug/pelvis/reach correctors exempt with reasons (same-frame camera-only evidence; no webcam in loop; quest-vs-chain already dwell-protected). |
+
 ## Explicitly out of scope (parked with reasons)
 
 - Live integration of a learned prior — gated on the Phase 5 memo.

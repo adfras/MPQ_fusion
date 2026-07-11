@@ -1055,6 +1055,30 @@ void FAnimNode_MediaPipePoseDriven::DriveLivePelvisLeanTwistCS(FCSPose<FCompactP
 			HeadingIn.RightShoulderCamX = Rs.X;
 			HeadingIn.RightShoulderCamZ = Rs.Z;
 		}
+		// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): buffer
+		// the applied yaw and hand the learner the yaw at the measurement's effective
+		// capture time (same pattern as the arm-direction call site; pushes only while
+		// the CVar is armed, so the disarmed path writes nothing).
+		if (CVarMediaPipeTimestampAlignedResiduals.GetValueOnAnyThread() != 0)
+		{
+			MediaPipePoseHistory::FYawHistorySample YawNowSample;
+			YawNowSample.YawDeg = TwistYawDeg;
+			BodyState.AppliedYawHistory.Push(FPlatformTime::Seconds(), YawNowSample);
+			double EffectiveMeasTimeSeconds = 0.0;
+			if (bHasPoseFrame &&
+				MediaPipePoseHistory::TryGetEffectiveMeasurementTimeSeconds(
+					static_cast<double>(PoseFrame.TimestampUs) * 1.0e-6,
+					PoseFrame.ConditioningDiagnostics.PredictionHorizonMs,
+					EffectiveMeasTimeSeconds))
+			{
+				MediaPipePoseHistory::FYawHistorySample AlignedYawSample;
+				if (BodyState.AppliedYawHistory.TrySample(EffectiveMeasTimeSeconds, AlignedYawSample))
+				{
+					HeadingIn.bHasAlignedTwistYawDeg = true;
+					HeadingIn.AlignedTwistYawDeg = AlignedYawSample.YawDeg;
+				}
+			}
+		}
 		UpdateMediaPipeHeadingCorrection(HeadingIn, BodyState);
 	}
 }

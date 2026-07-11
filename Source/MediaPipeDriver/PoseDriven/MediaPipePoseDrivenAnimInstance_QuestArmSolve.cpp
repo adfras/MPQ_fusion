@@ -444,6 +444,42 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			DirIn.bHasOtherShoulderWorld =
 				IsMeasured(DirOtherShoulderLmIdx) &&
 				TryGetLmWorld(DirOtherShoulderLmIdx, DirIn.OtherShoulderWorld);
+			// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): push
+			// the RAW chain arm into the keyed history ring, then look up the chain at this
+			// measurement's effective capture time (capture timestamp + conditioner forward
+			// prediction). Pushes and lookups run ONLY while the CVar is armed, so the
+			// disarmed path writes nothing and the corrector sees inputs identical to the
+			// golden-locked original. Degenerate aligned offsets (<1cm) stay unaligned.
+			if (CVarMediaPipeTimestampAlignedResiduals.GetValueOnAnyThread() != 0)
+			{
+				MediaPipePoseHistory::FArmChainHistorySample ChainNowSample;
+				ChainNowSample.ShoulderWorld = ShoulderWorld;
+				ChainNowSample.ElbowWorld = ElbowWorld;
+				ChainNowSample.WristWorld = WristWorld;
+				QuestWristSideState.ArmChainHistory.Push(DirIn.NowSeconds, ChainNowSample);
+				double EffectiveMeasTimeSeconds = 0.0;
+				if (DirIn.bHasMediaPipeArmWorld &&
+					bHasPoseFrame &&
+					MediaPipePoseHistory::TryGetEffectiveMeasurementTimeSeconds(
+						static_cast<double>(PoseFrame.TimestampUs) * 1.0e-6,
+						PoseFrame.ConditioningDiagnostics.PredictionHorizonMs,
+						EffectiveMeasTimeSeconds))
+				{
+					MediaPipePoseHistory::FArmChainHistorySample AlignedSample;
+					if (QuestWristSideState.ArmChainHistory.TrySample(EffectiveMeasTimeSeconds, AlignedSample))
+					{
+						const FVector AlignedElbowOffset = AlignedSample.ElbowWorld - AlignedSample.ShoulderWorld;
+						const FVector AlignedWristOffset = AlignedSample.WristWorld - AlignedSample.ShoulderWorld;
+						if (!AlignedElbowOffset.IsNearlyZero(1.0) && !AlignedWristOffset.IsNearlyZero(1.0))
+						{
+							DirIn.bHasAlignedChainArm = true;
+							DirIn.AlignedChainShoulderWorld = AlignedSample.ShoulderWorld;
+							DirIn.AlignedChainElbowWorld = AlignedSample.ElbowWorld;
+							DirIn.AlignedChainWristWorld = AlignedSample.WristWorld;
+						}
+					}
+				}
+			}
 			// mp.WebcamAgeTrace (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11): report-only row
 			// emitted BEFORE the corrector so the residuals are the raw camera-vs-chain
 			// disagreement against the CURRENT pose (pre-correction), on EVERY reliable frame
@@ -497,8 +533,31 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							QuestWristSideState.ArmDirLearnLastChainWristWorld) / SpeedDtSeconds;
 					}
 				}
+				// Aligned residuals (Phase 1): same camera dirs against the history-ring chain
+				// pose - the raw-vs-aligned pair in ONE row is the Phase 1 gate instrument.
+				float AlignedElbowResidDeg = -1.0f;
+				float AlignedWristResidDeg = -1.0f;
+				if (DirIn.bHasAlignedChainArm && DirIn.bHasMediaPipeArmWorld)
+				{
+					const FVector AlChainElbowDir =
+						(DirIn.AlignedChainElbowWorld - DirIn.AlignedChainShoulderWorld).GetSafeNormal();
+					const FVector AlChainWristDir =
+						(DirIn.AlignedChainWristWorld - DirIn.AlignedChainShoulderWorld).GetSafeNormal();
+					const FVector AlCamElbowDir = (DirIn.CamElbowWorld - DirIn.CamShoulderWorld).GetSafeNormal();
+					const FVector AlCamWristDir = (DirIn.CamWristWorld - DirIn.CamShoulderWorld).GetSafeNormal();
+					if (!AlChainElbowDir.IsNearlyZero() && !AlCamElbowDir.IsNearlyZero())
+					{
+						AlignedElbowResidDeg = FMath::RadiansToDegrees(FMath::Acos(
+							FMath::Clamp(FVector::DotProduct(AlChainElbowDir, AlCamElbowDir), -1.0f, 1.0f)));
+					}
+					if (!AlChainWristDir.IsNearlyZero() && !AlCamWristDir.IsNearlyZero())
+					{
+						AlignedWristResidDeg = FMath::RadiansToDegrees(FMath::Acos(
+							FMath::Clamp(FVector::DotProduct(AlChainWristDir, AlCamWristDir), -1.0f, 1.0f)));
+					}
+				}
 				UE_LOG(LogMediaPipePose, Log,
-					TEXT("mp.WebcamAgeTrace: actor=%s side=%s ageMs=%.1f srcAgeMs=%.1f predMs=%.1f effAgeMs=%.1f predicted=%d rel=%.2f hasMpArm=%d elbowResidDeg=%.1f wristResidDeg=%.1f spdCmS=%.1f quiet=%d engaged=%d key=%u"),
+					TEXT("mp.WebcamAgeTrace: actor=%s side=%s ageMs=%.1f srcAgeMs=%.1f predMs=%.1f effAgeMs=%.1f predicted=%d rel=%.2f hasMpArm=%d elbowResidDeg=%.1f wristResidDeg=%.1f spdCmS=%.1f quiet=%d engaged=%d aligned=%d alElbowResidDeg=%.1f alWristResidDeg=%.1f histN=%d key=%u"),
 					*TargetActorName.ToString(),
 					bIsLeft ? TEXT("L") : TEXT("R"),
 					AgeMs,
@@ -513,6 +572,10 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 					AgeTraceSpdCmS,
 					(AgeTraceSpdCmS >= 0.0f && AgeTraceSpdCmS <= 15.0f) ? 1 : 0,
 					QuestWristSideState.bArmDirCameraVoteEngaged ? 1 : 0,
+					DirIn.bHasAlignedChainArm ? 1 : 0,
+					AlignedElbowResidDeg,
+					AlignedWristResidDeg,
+					QuestWristSideState.ArmChainHistory.Count,
 					RuntimeStateKey);
 			}
 			ApplyMediaPipeArmDirectionCorrection(DirIn, QuestWristSideState, ElbowWorld, WristWorld);

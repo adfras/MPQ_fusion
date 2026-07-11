@@ -66,12 +66,20 @@ void UpdateMediaPipeHeadingCorrection(
 				{
 					CamYawDeg = -CamYawDeg;
 				}
+				// Timestamp-aligned residuals (Phase 1, 2026-07-11): measure the camera's
+				// shoulder-line yaw against the yaw APPLIED at the measurement's effective
+				// capture time when the call site supplied it - during turns the current
+				// yaw is ~80-130ms ahead of what the camera saw and the difference would
+				// integrate as phantom drift. False = the golden-locked original compare.
+				const float LearnTwistYawDeg = In.bHasAlignedTwistYawDeg
+					? In.AlignedTwistYawDeg
+					: In.TwistYawDeg;
 				if (!BodyState.bHasBodyYawCamAnchor)
 				{
 					if (BodyState.bLiveNeutralsReady)
 					{
 						BodyState.BodyYawCamAnchorDeg =
-							FMath::FindDeltaAngleDegrees(In.TwistYawDeg, CamYawDeg);
+							FMath::FindDeltaAngleDegrees(LearnTwistYawDeg, CamYawDeg);
 						BodyState.BodyYawCameraCorrectionDeg = 0.0f;
 						BodyState.bHasBodyYawCamAnchor = true;
 					}
@@ -79,7 +87,7 @@ void UpdateMediaPipeHeadingCorrection(
 				else
 				{
 					const float ErrDeg = FMath::FindDeltaAngleDegrees(
-						In.TwistYawDeg, CamYawDeg - BodyState.BodyYawCamAnchorDeg);
+						LearnTwistYawDeg, CamYawDeg - BodyState.BodyYawCamAnchorDeg);
 					const float YawAlpha = FBoundedCorrectorState::HalfLifeToAlpha(
 						FMath::Max(CVarMediaPipeBodyYawFromCameraHalfLifeSeconds.GetValueOnAnyThread(), 0.1f),
 						In.DeltaSeconds);
