@@ -37,6 +37,10 @@ historical unless this index marks them active.
 
 ## Structure / Cleanup Work
 
+- `TRACKING_QUALITY_PLAN.md`: the ACTIVE 2026-07 plan for stability/realism upgrades
+  (timestamped residuals, wrist anatomical clamp, foreshortening Z-distrust, foot
+  contact + lock, learned-prior bake-off) — research-derived, phased, desk-gated,
+  one worn acceptance at the end.
 - `REFACTOR_PLAN.md`: the phased structural refactor and cleanup plan (gates, evidence,
   execution log). Read this before moving, deleting, or restructuring anything.
 - `refactor_baseline/`: the corrector-refactor reference (2026-07-10, branch
