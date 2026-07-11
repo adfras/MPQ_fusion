@@ -26,8 +26,8 @@ or clones.
 
 | Path (relative to project root) | Size | Why you need it |
 | --- | --- | --- |
-| `Content\MetaHumans\` | **7.8 GB** | **Kellan — the mirror avatar. Without this, nothing works.** |
-| `Content\Characters\` | 126 MB | Manny (the debug avatar). |
+| `Content\MetaHumans\` | **7.8 GB** | **The entire MetaHuman cast: Kellan (the mirror avatar), Maria, Wallace, Emory, Hudson, Payton, plus the shared `Common` assets they all depend on. Without this, nothing works and there is nothing to showcase.** |
+| `Content\Characters\` | 126 MB | Manny (the debug avatar — also part of the showcase). |
 | `Content\MHAGroundTruth\` | 298 MB | Ground-truth capture assets. |
 | `Content\__ExternalActors__\` + `Content\__ExternalObjects__\` | 5 MB | Actor data for the MCPBench maps (the mirror/preview-room maps do NOT need these, they carry their actors internally). |
 | `Content\Input\`, `LevelPrototyping\`, `ThirdPerson\`, `Variant_*`, `CaptureManager\`, `Collections\`, `Developers\` | small | Template + input assets; the copy command below brings them automatically. |
