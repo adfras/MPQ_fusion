@@ -1768,6 +1768,29 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
 
+	// Anatomical wrist clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11). Swing-twist
+	// guardrail on the FINAL wrist rotation, the LAST op before the bone write at every
+	// wrist write site (quest/held/camera - the same three sites the palm trim covers).
+	// A guardrail against anatomically impossible frames (the 2026-07-09 20-130deg flap
+	// class), NOT a stylistic limit: ranges are generous (Kenwright twist-and-swing;
+	// ECCV 2020 biomech hand constraints). Clamped frames never feed any learner - the
+	// clamp writes only the pose, never state; continuity/hold state keeps the unclamped
+	// value. Clamp events emit on mp.WristLimitTrace with the pre-clamp excess.
+	TAutoConsoleVariable<int32> CVarWristAnatomicalClamp(
+		TEXT("mp.WristAnatomicalClamp"),
+		0,
+		TEXT("When non-zero, clamp the final wrist rotation's twist (about the forearm axis) and swing (cone from the neutral wrist pose on the current forearm) to the anatomical ranges below, as the last operation before the wrist bone write. Guardrail only; in-range frames pass through bit-exactly. TRACKING_QUALITY_PLAN Phase 2; default 0 = no clamp."));
+
+	TAutoConsoleVariable<float> CVarWristTwistRangeDeg(
+		TEXT("mp.WristTwistRangeDeg"),
+		90.0f,
+		TEXT("Anatomical twist envelope (degrees, +-) about the forearm axis for mp.WristAnatomicalClamp - pronation/supination expressed at the hand-vs-lowerarm joint of the two-bone rig. Generous by design (biomech ~85-90)."));
+
+	TAutoConsoleVariable<float> CVarWristSwingRangeDeg(
+		TEXT("mp.WristSwingRangeDeg"),
+		85.0f,
+		TEXT("Anatomical swing-cone envelope (degrees) away from the neutral wrist pose for mp.WristAnatomicalClamp - flexion/extension (~80/70) and radial/ulnar deviation (~20/30) bounded by the widest direction as a single cone. Generous by design."));
+
 	// Timestamp-aligned corrector residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11).
 	// Out-of-sequence-measurement fix: a webcam measurement is ~80-130ms old at fuse time,
 	// so comparing it against the CURRENT pose manufactures phantom residuals during motion

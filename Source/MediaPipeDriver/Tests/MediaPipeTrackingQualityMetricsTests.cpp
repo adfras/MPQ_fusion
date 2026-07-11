@@ -147,6 +147,107 @@ bool FMediaPipeTrackingQualityWristLimitDegenerateAxisTest::RunTest(const FStrin
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityWristClampExactnessTest,
+	"TestingKit5.MediaPipe.TrackingQuality.WristClamp.Exactness",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityWristClampExactnessTest::RunTest(const FString& Parameters)
+{
+	const FWristScenario S;
+	FWristLimitSample Sample;
+	FQuat Clamped = FQuat::Identity;
+
+	// Twist 100 with range 90: clamps to exactly 90; the 20-deg swing survives intact.
+	TestTrue(TEXT("Twist-clamp computes"), ComputeClampedWristRotation(
+		S.FinalFor(100.0f, 20.0f, FVector(0.0f, 1.0f, 0.0f)),
+		S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, Sample, Clamped));
+	TestTrue(TEXT("Pre-clamp sample flags out-of-range"), Sample.bOutOfRange);
+	TestEqual(TEXT("Pre-clamp excess reported"), Sample.TwistExcessDeg, 10.0f, 0.05f);
+	FWristLimitSample PostSample;
+	TestTrue(TEXT("Post-clamp sample computes"), ComputeWristLimitSample(
+		Clamped, S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, PostSample));
+	TestEqual(TEXT("Clamped twist lands ON the range"), PostSample.TwistDeg, 90.0f, 0.05f);
+	TestEqual(TEXT("Swing survives the twist clamp"), PostSample.SwingDeg, 20.0f, 0.05f);
+	TestFalse(TEXT("Clamped frame is inside the envelope"), PostSample.bOutOfRange);
+
+	// Swing 95 with range 85: clamps to exactly 85; the -50-deg twist survives intact.
+	TestTrue(TEXT("Swing-clamp computes"), ComputeClampedWristRotation(
+		S.FinalFor(-50.0f, 95.0f, FVector(0.0f, 0.0f, 1.0f)),
+		S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, Sample, Clamped));
+	TestTrue(TEXT("Pre-clamp swing sample flags out-of-range"), Sample.bOutOfRange);
+	TestTrue(TEXT("Post-clamp swing sample computes"), ComputeWristLimitSample(
+		Clamped, S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, PostSample));
+	TestEqual(TEXT("Clamped swing lands ON the range"), PostSample.SwingDeg, 85.0f, 0.05f);
+	TestEqual(TEXT("Twist survives the swing clamp"), PostSample.TwistDeg, -50.0f, 0.05f);
+	TestFalse(TEXT("Swing-clamped frame is inside the envelope"), PostSample.bOutOfRange);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityWristClampPassthroughTest,
+	"TestingKit5.MediaPipe.TrackingQuality.WristClamp.InRangeBitPassthrough",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityWristClampPassthroughTest::RunTest(const FString& Parameters)
+{
+	// The write-site byte-identity contract: an in-range frame must come back
+	// BIT-IDENTICAL, not just nearly-equal - no recompose, no normalize.
+	const FWristScenario S;
+	const FQuat Input = S.FinalFor(35.0f, 20.0f, FVector(0.0f, 1.0f, 0.0f));
+	FWristLimitSample Sample;
+	FQuat Clamped = FQuat::Identity;
+	TestTrue(TEXT("In-range clamp computes"), ComputeClampedWristRotation(
+		Input, S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, Sample, Clamped));
+	TestFalse(TEXT("Sample in range"), Sample.bOutOfRange);
+	TestEqual(TEXT("X bits identical"), FMath::AsUInt(Clamped.X), FMath::AsUInt(Input.X));
+	TestEqual(TEXT("Y bits identical"), FMath::AsUInt(Clamped.Y), FMath::AsUInt(Input.Y));
+	TestEqual(TEXT("Z bits identical"), FMath::AsUInt(Clamped.Z), FMath::AsUInt(Input.Z));
+	TestEqual(TEXT("W bits identical"), FMath::AsUInt(Clamped.W), FMath::AsUInt(Input.W));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeTrackingQualityWristClampParityTest,
+	"TestingKit5.MediaPipe.TrackingQuality.WristClamp.LeftRightParity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeTrackingQualityWristClampParityTest::RunTest(const FString& Parameters)
+{
+	// Same out-of-range delta clamped about the flipped (right-side) forearm axis must
+	// clamp the mirrored twist to the mirrored bound with identical magnitudes - the
+	// thumb-parity lesson applied to the clamp.
+	const FWristScenario S;
+	FWristScenario SR = S;
+	SR.ForearmAxis = FVector(-1.0f, 0.0f, 0.0f);
+
+	FWristLimitSample SampleL;
+	FWristLimitSample SampleR;
+	FQuat ClampedL = FQuat::Identity;
+	FQuat ClampedR = FQuat::Identity;
+	// The same physical rotation: twist +100 about +X is twist -100 about -X.
+	const FQuat Final = S.FinalFor(100.0f, 30.0f, FVector(0.0f, 1.0f, 0.0f));
+	TestTrue(TEXT("Left clamp computes"), ComputeClampedWristRotation(
+		Final, S.LowerArmRotCS, S.RefLowerArmComp, S.RefHandComp, S.ForearmAxis,
+		90.0f, 85.0f, SampleL, ClampedL));
+	TestTrue(TEXT("Right clamp computes"), ComputeClampedWristRotation(
+		Final, SR.LowerArmRotCS, SR.RefLowerArmComp, SR.RefHandComp, SR.ForearmAxis,
+		90.0f, 85.0f, SampleR, ClampedR));
+	TestEqual(TEXT("Twist reads mirrored"), SampleL.TwistDeg, -SampleR.TwistDeg, 0.001f);
+	TestEqual(TEXT("Excess magnitudes identical"), SampleL.TwistExcessDeg, SampleR.TwistExcessDeg, 0.001f);
+	TestEqual(TEXT("Swing identical"), SampleL.SwingDeg, SampleR.SwingDeg, 0.001f);
+	// The clamped ROTATION is the same physical rotation either way.
+	const float ClampedDivergenceDeg =
+		FMath::RadiansToDegrees(ClampedL.AngularDistance(ClampedR));
+	TestEqual(TEXT("Clamped rotations physically identical"), ClampedDivergenceDeg, 0.0f, 0.01f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMediaPipeTrackingQualityWebcamAgeTest,
 	"TestingKit5.MediaPipe.TrackingQuality.WebcamAge.EffectiveAge",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

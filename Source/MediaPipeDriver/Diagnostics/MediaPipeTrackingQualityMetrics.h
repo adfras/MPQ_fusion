@@ -10,15 +10,15 @@
 // throttles) stays in the keyed runtime stores at the call sites.
 namespace MediaPipeTrackingQualityMetrics
 {
-	// Report-only anatomical wrist envelope for Phase 0 (generous on purpose: this
-	// measures how often and how far today's output leaves a range no human wrist
-	// leaves, it is NOT a stylistic limit). Twist about the forearm axis covers
-	// pronation/supination expressed at the hand-vs-lowerarm joint of this two-bone
-	// rig (biomech pro/sup ~85/90 deg: Kenwright twist-and-swing limits; ECCV 2020
-	// biomechanical hand constraints). Swing covers flexion/extension (~80/70 deg)
+	// Anatomical wrist envelope defaults (generous on purpose: a guardrail against
+	// frames no human wrist produces, NOT a stylistic limit). Twist about the forearm
+	// axis covers pronation/supination expressed at the hand-vs-lowerarm joint of this
+	// two-bone rig (biomech pro/sup ~85/90 deg: Kenwright twist-and-swing limits; ECCV
+	// 2020 biomechanical hand constraints). Swing covers flexion/extension (~80/70 deg)
 	// and radial/ulnar deviation (~20/30 deg) as a single cone bounded by the widest
-	// direction. Phase 2 (mp.WristAnatomicalClamp) replaces these constants with
-	// mp.WristTwistRangeDeg / mp.WristSwingRangeDeg CVars.
+	// direction. At runtime the authoritative values are mp.WristTwistRangeDeg /
+	// mp.WristSwingRangeDeg (Phase 2), which default to these constants; the constants
+	// stay here as the documented source of those defaults and for unit tests.
 	constexpr float ReportOnlyWristTwistRangeDeg = 90.0f;
 	constexpr float ReportOnlyWristSwingRangeDeg = 85.0f;
 
@@ -55,6 +55,27 @@ namespace MediaPipeTrackingQualityMetrics
 		float TwistRangeDeg,
 		float SwingRangeDeg,
 		FWristLimitSample& Out);
+
+	// Anatomical clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11): same decomposition,
+	// but when the sample leaves the envelope the twist is clamped to +-TwistRangeDeg,
+	// the swing cone to SwingRangeDeg, and the rotation is recomposed
+	// (Swing' * Twist' * Neutral - the house swing-twist composition order). Guardrail
+	// against anatomically impossible frames, not a stylistic limit.
+	//
+	// Contract for the disarmed/in-range cases: when the sample is INSIDE the envelope,
+	// OutClampedRotCS is the INPUT quat bit-for-bit (no normalization, no recompose) -
+	// the write site stays byte-identical whenever the clamp has nothing to do. Returns
+	// false on a degenerate forearm axis (caller writes the input unchanged).
+	MEDIAPIPEDRIVER_API bool ComputeClampedWristRotation(
+		const FQuat& FinalHandRotCS,
+		const FQuat& LowerArmRotCS,
+		const FQuat& RefLowerArmComp,
+		const FQuat& RefHandComp,
+		const FVector& ForearmAxisComp,
+		float TwistRangeDeg,
+		float SwingRangeDeg,
+		FWristLimitSample& OutSample,
+		FQuat& OutClampedRotCS);
 
 	// Age of a webcam measurement at solve time, minus however much of that age the
 	// source conditioner already cancelled by forward prediction (the "effective age"

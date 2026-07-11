@@ -876,6 +876,13 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// of the ~80-130ms-newer current pose; application unchanged. Byte-identical at the
 		// engine default 0. AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeTimestampAlignedResiduals"), 1),
+		// Anatomical wrist clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11): swing-twist
+		// guardrail on the final wrist rotation at every write site - catches the
+		// 2026-07-09 impossible-flap class (20-130deg) while in-range frames pass through
+		// bit-exactly. Ranges stay at the generous engine defaults
+		// (mp.WristTwistRangeDeg 90 / mp.WristSwingRangeDeg 85), live-tunable.
+		// AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.WristAnatomicalClamp"), 1),
 	};
 }
 

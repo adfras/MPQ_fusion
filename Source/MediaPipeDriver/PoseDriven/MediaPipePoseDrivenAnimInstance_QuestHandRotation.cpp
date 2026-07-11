@@ -46,63 +46,79 @@
 
 #include "MediaPipePoseDrivenAnimInstanceShared.h"
 
-// mp.WristLimitTrace (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11): report-only row for the
-// FINAL wrist rotation, whichever path wrote it (quest/held/camera - the same three sites
-// ApplyQuestWristPalmTrim covers). Decomposes the written rotation into twist about the
-// forearm axis + swing away from the neutral wrist pose riding the CURRENT forearm and
-// reports how far outside the report-only anatomical envelope it sits - measuring what a
-// Phase 2 clamp WOULD have caught, without changing any behavior. Reads pose state only;
-// the only writes are the keyed log throttles (never the key-0 bucket).
-void FAnimNode_MediaPipePoseDriven::EmitWristLimitTrace(FCSPose<FCompactPose>& CSPose, const bool bIsLeft, const FQuat& FinalHandRotCS, const FVector& ForearmAxisComp, const TCHAR* SourceTag)
+// Anatomical wrist envelope at the FINAL wrist rotation, whichever path wrote it
+// (quest/held/camera - the same three sites ApplyQuestWristPalmTrim covers).
+// Phase 0 (2026-07-11): mp.WristLimitTrace report-only rows - twist about the forearm
+// axis + swing away from the neutral wrist pose riding the CURRENT forearm, vs the
+// anatomical envelope. Phase 2 (2026-07-11): mp.WristAnatomicalClamp clamps the RETURNED
+// rotation to mp.WristTwistRangeDeg / mp.WristSwingRangeDeg as the LAST op before the
+// bone write; in-range frames return the input bit-exactly, and clamp events carry the
+// pre-clamp excess on the trace row. Clamped frames never feed any learner: this
+// function writes no pose/solver state (keyed log throttles only, never key 0), and the
+// call sites keep their continuity/hold state on the UNCLAMPED value.
+FQuat FAnimNode_MediaPipePoseDriven::ApplyWristLimitClampAndTrace(FCSPose<FCompactPose>& CSPose, const bool bIsLeft, const FQuat& FinalHandRotCS, const FVector& ForearmAxisComp, const TCHAR* SourceTag)
 {
-	if (CVarWristLimitTrace.GetValueOnAnyThread() == 0 || RuntimeStateKey == 0 || !bHasReferencePose)
+	const bool bClampEnabled = CVarWristAnatomicalClamp.GetValueOnAnyThread() != 0;
+	const bool bTraceEnabled = CVarWristLimitTrace.GetValueOnAnyThread() != 0;
+	if ((!bClampEnabled && !bTraceEnabled) || !bHasReferencePose)
 	{
-		return;
+		return FinalHandRotCS;
 	}
 	const FBoneReference& ParentLowerArmBone = bIsLeft ? LowerArmL : LowerArmR;
 	if (!ParentLowerArmBone.IsValidToEvaluate())
 	{
-		return;
+		return FinalHandRotCS;
 	}
 	const FQuat LowerArmRotCS = CSPose.GetComponentSpaceTransform(ParentLowerArmBone.CachedCompactPoseIndex).GetRotation().GetNormalized();
 	const FQuat& RefLowerComp = bIsLeft ? RefLowerArmCompL : RefLowerArmCompR;
 	const FQuat& RefHandComp = bIsLeft ? RefHandCompL : RefHandCompR;
+	const float TwistRangeDeg = CVarWristTwistRangeDeg.GetValueOnAnyThread();
+	const float SwingRangeDeg = CVarWristSwingRangeDeg.GetValueOnAnyThread();
 	MediaPipeTrackingQualityMetrics::FWristLimitSample Sample;
-	if (!MediaPipeTrackingQualityMetrics::ComputeWristLimitSample(
+	FQuat ClampedRotCS = FinalHandRotCS;
+	if (!MediaPipeTrackingQualityMetrics::ComputeClampedWristRotation(
 		FinalHandRotCS,
 		LowerArmRotCS,
 		RefLowerComp,
 		RefHandComp,
 		ForearmAxisComp,
-		MediaPipeTrackingQualityMetrics::ReportOnlyWristTwistRangeDeg,
-		MediaPipeTrackingQualityMetrics::ReportOnlyWristSwingRangeDeg,
-		Sample))
+		TwistRangeDeg,
+		SwingRangeDeg,
+		Sample,
+		ClampedRotCS))
 	{
-		return;
+		return FinalHandRotCS;
 	}
-	FQuestWristRuntimeState& RuntimeState = GetQuestWristRuntimeState(RuntimeStateKey);
-	FQuestWristSideRuntimeState& SideState = bIsLeft ? RuntimeState.Left : RuntimeState.Right;
-	const double NowSeconds = FPlatformTime::Seconds();
-	const bool bStatusDue = FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-		NowSeconds, 1.0, SideState.WristLimitTraceLastLogTimeSeconds);
-	const bool bEventDue = Sample.bOutOfRange && FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
-		NowSeconds, 0.25, SideState.WristLimitTraceLastEventLogTimeSeconds);
-	if (!bStatusDue && !bEventDue)
+	const bool bClampedThisFrame = bClampEnabled && Sample.bOutOfRange;
+	if (bTraceEnabled && RuntimeStateKey != 0)
 	{
-		return;
+		FQuestWristRuntimeState& RuntimeState = GetQuestWristRuntimeState(RuntimeStateKey);
+		FQuestWristSideRuntimeState& SideState = bIsLeft ? RuntimeState.Left : RuntimeState.Right;
+		const double NowSeconds = FPlatformTime::Seconds();
+		const bool bStatusDue = FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+			NowSeconds, 1.0, SideState.WristLimitTraceLastLogTimeSeconds);
+		const bool bEventDue = Sample.bOutOfRange && FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
+			NowSeconds, 0.25, SideState.WristLimitTraceLastEventLogTimeSeconds);
+		if (bStatusDue || bEventDue)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.WristLimitTrace: actor=%s side=%s src=%s twistDeg=%.1f swingDeg=%.1f twistExcessDeg=%.1f swingExcessDeg=%.1f out=%d evt=%d clamped=%d rangeT=%.0f rangeS=%.0f key=%u"),
+				*TargetActorName.ToString(),
+				bIsLeft ? TEXT("L") : TEXT("R"),
+				SourceTag,
+				Sample.TwistDeg,
+				Sample.SwingDeg,
+				Sample.TwistExcessDeg,
+				Sample.SwingExcessDeg,
+				Sample.bOutOfRange ? 1 : 0,
+				bEventDue ? 1 : 0,
+				bClampedThisFrame ? 1 : 0,
+				TwistRangeDeg,
+				SwingRangeDeg,
+				RuntimeStateKey);
+		}
 	}
-	UE_LOG(LogMediaPipePose, Log,
-		TEXT("mp.WristLimitTrace: actor=%s side=%s src=%s twistDeg=%.1f swingDeg=%.1f twistExcessDeg=%.1f swingExcessDeg=%.1f out=%d evt=%d key=%u"),
-		*TargetActorName.ToString(),
-		bIsLeft ? TEXT("L") : TEXT("R"),
-		SourceTag,
-		Sample.TwistDeg,
-		Sample.SwingDeg,
-		Sample.TwistExcessDeg,
-		Sample.SwingExcessDeg,
-		Sample.bOutOfRange ? 1 : 0,
-		bEventDue ? 1 : 0,
-		RuntimeStateKey);
+	return bClampedThisFrame ? ClampedRotCS : FinalHandRotCS;
 }
 
 bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FVector& ForearmAxisComp, const FQuat& MediaPipeHandTargetCS, float DeltaSeconds, FQuestHandRotationTrace* OutTrace, const FQuestWristMappingTrace* WristTrace)
@@ -240,10 +256,12 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 				? 1.0f
 				: FMath::Clamp((LostAgeSeconds - GraceSeconds) / FadeSeconds, 0.0f, 1.0f);
 			SmoothedQuestHandRotLocal = FQuat::Slerp(SmoothedQuestHandRotLocal, MediaPipeHandLocal, FadeAlpha).GetNormalized();
-			const FQuat HeldFinalHandRotCS = ApplyQuestWristPalmTrim(
-				(LowerArmRotCS * SmoothedQuestHandRotLocal).GetNormalized(), ForearmAxisComp, bIsLeft);
+			const FQuat HeldFinalHandRotCS = ApplyWristLimitClampAndTrace(
+				CSPose, bIsLeft,
+				ApplyQuestWristPalmTrim(
+					(LowerArmRotCS * SmoothedQuestHandRotLocal).GetNormalized(), ForearmAxisComp, bIsLeft),
+				ForearmAxisComp, TEXT("held"));
 			ApplyRotationCS(CSPose, HandBone, HeldFinalHandRotCS);
-			EmitWristLimitTrace(CSPose, bIsLeft, HeldFinalHandRotCS, ForearmAxisComp, TEXT("held"));
 			Trace.bHadCalibration = 1;
 			Trace.bAppliedHandLocalToLowerArm = 1;
 			UpdateCalibrationTrace();
@@ -1794,8 +1812,8 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 		AppliedQuestHandRotCS = SmoothedQuestHandRotCS;
 	}
 	AppliedQuestHandRotCS = ApplyQuestWristPalmTrim(AppliedQuestHandRotCS, ForearmAxisComp, bIsLeft);
+	AppliedQuestHandRotCS = ApplyWristLimitClampAndTrace(CSPose, bIsLeft, AppliedQuestHandRotCS, ForearmAxisComp, TEXT("quest"));
 	ApplyRotationCS(CSPose, HandBone, AppliedQuestHandRotCS);
-	EmitWristLimitTrace(CSPose, bIsLeft, AppliedQuestHandRotCS, ForearmAxisComp, TEXT("quest"));
 	QuestWristSideState.LastHandRotationApplyTimeSeconds = FPlatformTime::Seconds();
 	const FQuat AppliedHandRotCS = HandBone.IsValidToEvaluate()
 		? CSPose.GetComponentSpaceTransform(HandBone.CachedCompactPoseIndex).GetRotation().GetNormalized()

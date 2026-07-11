@@ -4995,8 +4995,12 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 	const float AppliedDeltaDeg = (bUseKeyedCameraHandState && QuestWristSideState.bHasCameraHandLastApplied)
 		? FMath::RadiansToDegrees(QuestWristSideState.CameraHandLastAppliedRotCS.AngularDistance(TargetHandRotCS))
 		: -1.0f;
-	ApplyRotationCS(CSPose, HandBone, TargetHandRotCS);
-	EmitWristLimitTrace(CSPose, bIsLeft, TargetHandRotCS, ForearmAxisComp, TEXT("camera"));
+	// Clamp only the WRITTEN rotation; the continuity state below deliberately stores the
+	// UNCLAMPED TargetHandRotCS so a clamped frame never feeds the hold/handover logic
+	// (the clamp re-applies at the write every frame anyway).
+	const FQuat CameraFinalHandRotCS =
+		ApplyWristLimitClampAndTrace(CSPose, bIsLeft, TargetHandRotCS, ForearmAxisComp, TEXT("camera"));
+	ApplyRotationCS(CSPose, HandBone, CameraFinalHandRotCS);
 	if (RuntimeStateKey != 0)
 	{
 		QuestWristSideState.LastMediaPipeHandRotationApplyTimeSeconds = FPlatformTime::Seconds();

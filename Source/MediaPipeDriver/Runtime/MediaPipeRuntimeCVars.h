@@ -363,4 +363,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<int32> CVarWebcamAgeTrace;
 	// Tracking-quality features (TRACKING_QUALITY_PLAN 2026-07, default 0, candidate-armed).
 	extern TAutoConsoleVariable<int32> CVarMediaPipeTimestampAlignedResiduals;
+	extern TAutoConsoleVariable<int32> CVarWristAnatomicalClamp;
+	extern TAutoConsoleVariable<float> CVarWristTwistRangeDeg;
+	extern TAutoConsoleVariable<float> CVarWristSwingRangeDeg;
 }
