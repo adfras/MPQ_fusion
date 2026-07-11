@@ -6,6 +6,10 @@ historical unless this index marks them active.
 
 ## Active Operational Docs
 
+- `SETUP_NEW_MACHINE.md`: how to move this project to a new computer and get it
+  operational — what git carries vs the ~9 GB carry-by-hand payload (MetaHumans,
+  mediapipe_wrapper DLLs, canonical dataset), install list, first-build verification,
+  live-mirror bring-up, and the field-notes gotcha list for a fresh agent.
 - `MEDIAPIPE_VALIDATION_AND_OPERATIONS.md`: current build, VR proof, Camo/iPhone setup,
   MPQ Stage 0/1/2A validation, and review-packaging rules.
 - `MPQ_Stage2A_Conflict_Stress_Test_Plan.md`: current clean-fusion MPQ shoulder/shrug evidence
