@@ -1642,6 +1642,23 @@ namespace MediaPipeRuntimeCVars
 		2.5f,
 		TEXT("Band (cm) below the shrug rest reference that still counts as posture settling for mp.ShrugRestRefDownGate - matches the 2.5cm near-rest band of the up-adapt quiet gate."));
 
+	// Symmetric in-band rest-ref learning (2026-07-12, worn Emory right-shrug session).
+	// The down-gate above stopped DEEP drops from re-basing rest, but the in-band down
+	// path still learned at 2.5s while in-band up-recovery ran 90s - a 36x asymmetry
+	// that makes the reference track the LOWER ENVELOPE of shoulder noise instead of
+	// its mean. Worn rows: both rest refs sagged ~2.7cm over 4.5 minutes (L 48.9->46.0,
+	// R 45.8->43.2), the right ref sat ~3cm low throughout and rendered ~2x the left's
+	// applied shrug (median 4.5 vs 2.05cm) with minutes-long recovery; Manny on the
+	// same camera feed showed the identical bias, so the ratchet - not the avatar - is
+	// the mechanism. At the candidate 90s the in-band down learner is symmetric with
+	// the up direction and noise averages out instead of ratcheting. Trade-off: a
+	// genuine slouch now converges over minutes, not seconds - the same contract the
+	// up direction has always had ("posture shifts still converge over minutes").
+	TAutoConsoleVariable<float> CVarShrugRestRefInBandDownHalfLifeS(
+		TEXT("mp.ShrugRestRefInBandDownHalfLifeS"),
+		2.5f,
+		TEXT("Half-life (seconds) of the clavicle-shrug rest reference's fast down-adapt - the in-band region (0..mp.ShrugRestRefDownBandCm below the reference) when mp.ShrugRestRefDownGate is armed, or every below-rest sample when the gate is 0 (deeper drops then use the gated 600s rate). Engine default 2.5 = legacy fast-down (the reference ratchets toward the lower noise envelope and inflates applied shrug); 90 makes down-learning symmetric with the in-band up direction so noise averages out."));
+
 	// Small-lift shrug response (2026-07-12, worn session): a real arms-down trap shrug
 	// only moves the webcam shoulder LANDMARK 1.5-3cm (the keypoint sits at the joint
 	// center, which rises far less than the traps), while arm raises lift the measured

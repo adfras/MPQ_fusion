@@ -126,8 +126,14 @@ void ApplyMediaPipeClavicleShrug(
 		// the legacy expression, byte-identical (golden C3 covers a -3cm drop).
 		const bool bDownGated = CVarShrugRestRefDownGate.GetValueOnAnyThread() != 0 &&
 			ElevationCm < -FMath::Max(0.0f, CVarShrugRestRefDownBandCm.GetValueOnAnyThread());
+		// IN-BAND down half-life CVar-exposed (2026-07-12 worn Emory right-shrug session):
+		// with deep drops gated, the remaining 2.5s-down / 90s-up in-band asymmetry still
+		// ratchets the reference toward the lower noise envelope (both refs sagged ~2.7cm
+		// in 4.5min; the right sat ~3cm low and applied ~2x the left's shrug, identically
+		// on Manny from the same feed). Engine default 2.5 = legacy bit-exact; the
+		// candidate arms 90 so in-band learning is symmetric and noise averages out.
 		const float RefHalfLife = ElevationCm < 0.0f
-			? (bDownGated ? 600.0f : 2.5f)
+			? (bDownGated ? 600.0f : FMath::Max(0.1f, CVarShrugRestRefInBandDownHalfLifeS.GetValueOnAnyThread()))
 			: (ElevationCm <= 2.5f ? 90.0f : 600.0f);
 		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, FBoundedCorrectorState::HalfLifeToAlpha(RefHalfLife, In.DeltaSeconds));
 		// SOFT-KNEE deadband (2026-07-09): the old hard subtraction (- 1.5cm) removed 1.5cm

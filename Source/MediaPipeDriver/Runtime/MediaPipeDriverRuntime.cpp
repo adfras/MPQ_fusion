@@ -920,6 +920,21 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// verdict "good"). Live-bisectable.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
+		// Symmetric in-band rest-ref learning (2026-07-12, worn Emory right-shrug
+		// session): with deep drops gated above, the in-band 2.5s-down / 90s-up
+		// asymmetry still ratcheted the rest reference toward the lower noise envelope
+		// - both refs sagged ~2.7cm over 4.5min (L 48.9->46.0, R 45.8->43.2), the right
+		// sat ~3cm low throughout and applied ~2x the left's shrug (median 4.5 vs
+		// 2.05cm) with minutes-long recovery ("right shoulder shrugs more and takes a
+		// while to correct"). Manny on the same camera feed showed the identical bias
+		// and identical refs - the ratchet, not the avatar, is the mechanism (Kellan's
+		// earlier pass even flipped it left). 90s makes in-band down-learning symmetric
+		// with the up direction; noise then averages out instead of ratcheting.
+		// Trade-off: a genuine slouch converges over minutes, matching the up
+		// direction's long-standing contract. Engine default 2.5 = legacy bit-exact.
+		// AWAITING WORN VERDICT (2026-07-12; live-bisectable:
+		// mp.ShrugRestRefInBandDownHalfLifeS 2.5 <-> 90, no restart).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugRestRefInBandDownHalfLifeS"), 90.0f),
 		// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12): fused-pose
 		// world target heights map about the stage floor by the once-per-session
 		// embodiment scale latch S = avatar reference height / user standing reference,
