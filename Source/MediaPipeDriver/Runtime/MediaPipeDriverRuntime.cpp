@@ -897,6 +897,27 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootContactDetect"), 1),
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootLock"), 1),
+		// Squat-proof shrug rest reference (2026-07-12, first candidate worn session):
+		// the ungated 2.5s down-adapt learned the squat/knee-raise segment's compressed
+		// shoulder-above-hip height as posture (restRef 47->40) and the quiet up-gate
+		// then froze recovery - Kellan held a 6-12cm left shrug while standing at rest
+		// (mp.ClavicleShrugFusion rows + worn screenshot). Deep drops (beyond
+		// mp.ShrugRestRefDownBandCm below rest, engine default 2.5cm) now learn at the
+		// active 600s rate, symmetric with the up direction. Byte-identical at engine
+		// default 0. AWAITING WORN VERDICT (squat -> stand must not leave a shrug).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.ShrugRestRefDownGate"), 1),
+		// Small-lift shrug response (2026-07-12, same worn session): a real arms-down
+		// shrug reads only 1.5-3cm at the webcam shoulder landmark and the legacy fixed
+		// 1.5cm knee ate most of it (rows 00:12:41-44: peak appliedCm 3.5 -> 0.5 while
+		// the user held a shrug); arm raises read 5-9cm and applied 8-11cm. Modest
+		// arming: knee 1.0cm + 1.5x post-knee gain makes a 2-3cm measured shrug apply
+		// ~3-6cm without re-admitting the ~+-1cm rest noise (knee zeroes noise BEFORE
+		// the gain). Honest ceiling note: the webcam signal for an arms-down shrug is
+		// small - if this still reads weak, tune mp.ShrugDeadbandCm / mp.ShrugLiftGain
+		// live at the mirror rather than pushing the gain past ~2 (flicker risk).
+		// AWAITING WORN VERDICT (live-bisectable).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
 	};
 }
 

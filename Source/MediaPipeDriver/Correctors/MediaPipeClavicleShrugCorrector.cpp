@@ -117,19 +117,36 @@ void ApplyMediaPipeClavicleShrug(
 		// shrug. The baseline may only learn upward from samples near rest (<=2.5cm above);
 		// active lifts barely count (600s), so posture shifts still converge over minutes.
 		const float ElevationCm = HeightCm - RestRefCm;
-		const float RefHalfLife = ElevationCm < 0.0f ? 2.5f : (ElevationCm <= 2.5f ? 90.0f : 600.0f);
+		// SQUAT-PROOF down-adapt (2026-07-12 worn shoulder-drift session, flag-gated): the
+		// quiet gate above only guards the UP direction; the ungated 2.5s down path learned
+		// the squat's compressed torso height as rest within seconds, and the >2.5cm
+		// leftover elevation after standing froze recovery at 600s - a session-long false
+		// shrug. Drops deeper than the band are an active pose, not a new rest posture;
+		// they learn at the same 600s the up direction uses for active lifts. Flag off =
+		// the legacy expression, byte-identical (golden C3 covers a -3cm drop).
+		const bool bDownGated = CVarShrugRestRefDownGate.GetValueOnAnyThread() != 0 &&
+			ElevationCm < -FMath::Max(0.0f, CVarShrugRestRefDownBandCm.GetValueOnAnyThread());
+		const float RefHalfLife = ElevationCm < 0.0f
+			? (bDownGated ? 600.0f : 2.5f)
+			: (ElevationCm <= 2.5f ? 90.0f : 600.0f);
 		RestRefCm = FMath::Lerp(RestRefCm, HeightCm, FBoundedCorrectorState::HalfLifeToAlpha(RefHalfLife, In.DeltaSeconds));
 		// SOFT-KNEE deadband (2026-07-09): the old hard subtraction (- 1.5cm) removed 1.5cm
 		// from every shrug on top of the rest-ref loss - his proven 7.7cm camera shrug applied
 		// only 3.5-5.5cm live. The knee still zeroes resting jitter (output is 0 at or below
 		// the deadband) but restores the full amplitude on real shrugs: at 3cm over rest it
 		// passes 2.4cm, at 7.7cm it passes 7.6cm.
-		const float ShrugDeadbandCm = 1.5f;
+		// Deadband + gain CVar-exposed (2026-07-12 worn session): a real arms-down trap
+		// shrug reads only 1.5-3cm at the webcam shoulder landmark, so the fixed 1.5cm
+		// knee ate it while 5-9cm arm-raise elevation passed in full. Engine defaults
+		// (1.5cm / 1.0x) reproduce the legacy math bit-exactly; the gain applies AFTER
+		// the knee so rest noise stays zeroed no matter the gain.
+		const float ShrugDeadbandCm = FMath::Max(0.01f, CVarShrugDeadbandCm.GetValueOnAnyThread());
 		const float OverRestCm = HeightCm - RestRefCm;
 		const float KneeLiftCm = OverRestCm <= ShrugDeadbandCm
 			? 0.0f
 			: OverRestCm - ShrugDeadbandCm * FMath::Exp(-(OverRestCm - ShrugDeadbandCm) / ShrugDeadbandCm);
-		const float LiftRigCm = FMath::Clamp(KneeLiftCm * RigScale, 0.0f, 14.0f);
+		const float GainedLiftCm = KneeLiftCm * FMath::Max(0.0f, CVarShrugLiftGain.GetValueOnAnyThread());
+		const float LiftRigCm = FMath::Clamp(GainedLiftCm * RigScale, 0.0f, 14.0f);
 		const FVector ClavPosComp = Pose.GetClavicleTranslationCS(bIsLeft);
 		const FVector UpperPosComp = Pose.GetUpperArmTranslationCS(bIsLeft);
 		const FVector CurDir = (UpperPosComp - ClavPosComp);
@@ -161,8 +178,8 @@ void ApplyMediaPipeClavicleShrug(
 				Pose.GetUpperArmTranslationCS(bIsLeft);
 			const float AppliedLiftCm = FVector::DotProduct(UpperAfterComp - UpperPosComp, UpComp);
 			UE_LOG(LogMediaPipePose, Log,
-				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f appliedCm=%.1f"),
-				*In.TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale, AppliedLiftCm);
+				TEXT("mp.ClavicleShrugFusion: actor=%s side=%s heightCm=%.1f restRef=%.1f liftRig=%.1f sin=%.2f rigScale=%.2f appliedCm=%.1f elevCm=%.1f dnGated=%d"),
+				*In.TargetActorName.ToString(), bIsLeft ? TEXT("L") : TEXT("R"), HeightCm, RestRefCm, LiftRigCm, SmoothedSin, RigScale, AppliedLiftCm, ElevationCm, bDownGated ? 1 : 0);
 		}
 	}
 }

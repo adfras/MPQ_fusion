@@ -331,6 +331,10 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugWeight;
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugMinCm;
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugFullCm;
+	extern TAutoConsoleVariable<int32> CVarShrugRestRefDownGate;
+	extern TAutoConsoleVariable<float> CVarShrugRestRefDownBandCm;
+	extern TAutoConsoleVariable<float> CVarShrugDeadbandCm;
+	extern TAutoConsoleVariable<float> CVarShrugLiftGain;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeHolisticShoulderSolve;
 	extern TAutoConsoleVariable<float> CVarMediaPipeShoulderLiftTranslationScale;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeShoulderRollbackTrace;

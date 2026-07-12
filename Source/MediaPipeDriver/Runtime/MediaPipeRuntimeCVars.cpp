@@ -1623,6 +1623,44 @@ namespace MediaPipeRuntimeCVars
 		8.0f,
 		TEXT("Shoulder-height rise in centimeters that reaches full MediaPipe clavicle shrug response."));
 
+	// Squat-proof shrug rest reference (2026-07-12, worn shoulder-drift session). The
+	// 2026-07-09 quiet gate protected the shrug rest baseline from learning UP during
+	// lifts but left the fast 2.5s DOWN-adapt ungated: the worn squat/knee-raise segment
+	// compressed the measured shoulder-above-hip height to ~40cm for ~30s, the baseline
+	// learned it as posture, and after standing the leftover >2.5cm "elevation" froze
+	// up-recovery at the 600s active rate - Kellan held a 6-12cm left shrug for the rest
+	// of the session (mp.ClavicleShrugFusion: restRef 47 -> 40 while heightCm returned to
+	// 46-53). The gate mirrors the up direction: drops deeper than the band below rest
+	// are an active pose (squat, forward lean), not a new rest posture.
+	TAutoConsoleVariable<int32> CVarShrugRestRefDownGate(
+		TEXT("mp.ShrugRestRefDownGate"),
+		0,
+		TEXT("When non-zero, the clavicle-shrug rest reference's fast (2.5s) down-adapt only applies within mp.ShrugRestRefDownBandCm below the current rest reference; deeper drops (squat / forward-lean compressed torso) learn at the same 600s half-life as active lifts. Default 0 = legacy ungated down-adapt (a sustained squat re-bases rest and reads as a standing shrug afterwards)."));
+
+	TAutoConsoleVariable<float> CVarShrugRestRefDownBandCm(
+		TEXT("mp.ShrugRestRefDownBandCm"),
+		2.5f,
+		TEXT("Band (cm) below the shrug rest reference that still counts as posture settling for mp.ShrugRestRefDownGate - matches the 2.5cm near-rest band of the up-adapt quiet gate."));
+
+	// Small-lift shrug response (2026-07-12, worn session): a real arms-down trap shrug
+	// only moves the webcam shoulder LANDMARK 1.5-3cm (the keypoint sits at the joint
+	// center, which rises far less than the traps), while arm raises lift the measured
+	// shoulder 5-9cm. The fixed 1.5cm soft-knee deadband therefore ate most of a real
+	// shrug (rows 00:12:41-44: peak appliedCm 3.5 decaying to 0.5 while the user held a
+	// shrug) but passed arm-raise elevation in full - "shoulders only shrug when I
+	// stretch my arms". Both knobs default to the legacy constants (bit-identical);
+	// the candidate variant arms 1.0cm / 1.5x. The knee still zeroes resting jitter
+	// FIRST - the gain only amplifies what survives the deadband.
+	TAutoConsoleVariable<float> CVarShrugDeadbandCm(
+		TEXT("mp.ShrugDeadbandCm"),
+		1.5f,
+		TEXT("Soft-knee deadband (cm) on shoulder elevation over the shrug rest reference - elevation at or below this applies zero clavicle lift (kills resting jitter/breathing), and the knee restores full amplitude a few cm above it. Engine default 1.5 = the legacy hardcoded constant."));
+
+	TAutoConsoleVariable<float> CVarShrugLiftGain(
+		TEXT("mp.ShrugLiftGain"),
+		1.0f,
+		TEXT("Multiplier on the post-deadband shrug lift (before the rig-scale and the 14cm clamp). Amplifies the webcam's small arms-down shrug signal without re-admitting rest noise (the deadband zeroes noise before the gain applies). Engine default 1.0 = legacy."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeHolisticShoulderSolve(
 		TEXT("mp.MediaPipeHolisticShoulderSolve"),
 		0,
