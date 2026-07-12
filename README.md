@@ -59,11 +59,12 @@ flowchart TB
     L --> ZD["Foreshortening Z-distrust — turns down<br/>depth trust on limbs pointing at the lens"]
     ZD --> RACK
 
-    subgraph RACK["Corrector rack — one shared contract: bounded, quiet-gated, motion-faded, traced. Quality arc inside: learners timestamp-aligned; shrug rest-ref ratchet fixed"]
+    subgraph RACK["Corrector rack — one shared contract"]
         SH["Shrug"]
         HD["Heading ≤25°"]
         PV["Pelvis ≤25cm"]
         DIR["Direction ≤20°"]
+        QN["Quality arc inside: learners timestamp-aligned<br/>+ shrug rest-ref ratchet fix"]
     end
 
     SH --> TO["Head + torso owner"]
@@ -95,7 +96,7 @@ flowchart TB
     FA --> M["Mirror avatar — the only judge"]
 
     classDef qa stroke-dasharray:6 4,stroke-width:2px;
-    class ZD,WC,FL,ML qa;
+    class ZD,WC,FL,ML,QN qa;
 ```
 
 The quality arc in full (each behind its own CVar, off by default, armed in
