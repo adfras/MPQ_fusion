@@ -40,6 +40,73 @@ the arm-chain retargeter and the avatar's shoulders collapse (details and the
 instant recovery in [Docs/SETUP_NEW_MACHINE.md](Docs/SETUP_NEW_MACHINE.md)
 §7c). `mp.MirrorAvatar` is the safe switch.
 
+## Project shape
+
+The architecture in one picture: the Quest headset owns the pose, the webcam
+contributes bounded corrections through a rack of correctors sharing one
+contract, everything meets exactly once at final assembly, and the mirror
+avatar is the only acceptance judge. The dashed subgraph is the 2026-07
+quality arc — built and tested, dark by default, armed only in the candidate
+settings, awaiting two worn verdicts (the shrug ratchet fix and the avatar
+metric lock).
+
+```mermaid
+flowchart TB
+    W["Webcam"] --> L["Body landmarks — 33 points + confidence"]
+    Q["Quest headset"] --> H["Head pose"]
+    Q --> HT["Hand tracking"]
+    Q --> SK["Body skeleton"]
+
+    subgraph RACK["Corrector rack — one shared contract: bounded, quiet-gated, motion-faded, traced"]
+        SH["Shrug"]
+        HD["Heading ≤25°"]
+        PV["Pelvis ≤25cm"]
+        DIR["Direction ≤20°"]
+    end
+
+    L --> RACK
+    SH -->|"bounded Δ"| TO["Head + torso owner"]
+    HD -->|"bounded Δ"| TO
+    PV -->|"bounded Δ"| TO
+    DIR -->|"bounded Δ"| AR["Arm owner"]
+    H --> TO
+    SK --> AR
+    HT --> WR["Wrist + fingers"]
+    HT --> RX["Reach extender ≤8cm"]
+    AR --> RX
+    RX --> G["Torso guard — always runs last"]
+    L --> LEG["Legs + feet owner — the webcam's own region"]
+    H -->|"height budget"| LEG
+    L -.->|"hand truly lost"| OV["Arm loss override"]
+    OV -.-> G
+    TO --> FA["Final assembly — one pose write"]
+    G --> FA
+    WR --> FA
+    LEG --> FA
+    FA --> M["Mirror avatar — the only judge"]
+
+    subgraph QA["2026-07 quality arc — dark by default, armed in candidate, two worn verdicts pending"]
+        TS["Timestamped residuals"]
+        ZD["Foreshortening Z-distrust"]
+        WC["Wrist anatomical clamp"]
+        FL["Foot contact + lock"]
+        ML["Avatar metric lock (guard)"]
+        SF["Shrug ratchet fix"]
+    end
+    TS -.-> RACK
+    ZD -.-> L
+    WC -.-> WR
+    FL -.-> LEG
+    ML -.-> FA
+    SF -.-> SH
+```
+
+The full interactive version — every box opens a dossier with its inner flow
+chart, CVars, commits, and the story behind it (including the quality-arc
+change list under *Where it stands*) — is
+[Docs/PROJECT_SHAPE.html](Docs/PROJECT_SHAPE.html): download it and open it
+in any browser, no server needed.
+
 ## Where everything else is
 
 - **[Docs/README.md](Docs/README.md)** — the documentation index (active vs

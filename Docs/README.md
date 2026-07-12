@@ -11,6 +11,10 @@ and gotchas is `SETUP_NEW_MACHINE.md` §7-7d.
 
 ## Active Operational Docs
 
+- `PROJECT_SHAPE.html`: the interactive architecture flow chart (open in any browser) —
+  corrector rack, quest spine, final assembly, plus the 2026-07 quality-arc band with the
+  change list and pending worn verdicts. A static Mermaid version renders in the root
+  `README.md` on GitHub.
 - `SETUP_NEW_MACHINE.md`: how to move this project to a new computer and get it
   operational — what git carries vs the ~9 GB carry-by-hand payload (MetaHumans,
   mediapipe_wrapper DLLs, canonical dataset), install list, first-build verification,
