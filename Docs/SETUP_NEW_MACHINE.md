@@ -100,9 +100,9 @@ Steps:
    ```bat
    D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe "D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -ExecCmds="Automation RunTests MediaPipe; Quit" -unattended -nopause -nosplash -log
    ```
-   Count `Test Completed. Result={Success}` lines in the log: **expect 164, zero
-   failures.** This exercises the corrector goldens byte-for-byte — if the copy or
-   toolchain were broken, this catches it.
+   Count `Test Completed. Result={Success}` lines in the log: **expect 208 (as of
+   2026-07-12 — the count only grows), zero failures.** This exercises the corrector
+   goldens byte-for-byte — if the copy or toolchain were broken, this catches it.
 3. Open the editor normally once. Checklist: no missing-plugin dialog, the Content
    Browser shows `Content/MetaHumans` (Kellan), the preview-room map opens without
    missing-actor errors.
@@ -160,7 +160,9 @@ automation keeps raw defaults). The loop is:
 3. `mp.MirrorAvatar Maria` (or any cast id) → **VR Preview** again. Repeat.
 4. Nothing needs re-arming between sessions — variant, trial, and tracers survive
    preview stop/start. The avatar choice resets to the level's saved default on the
-   next editor restart unless you save the level (Ctrl+S) after switching.
+   next editor restart unless you save the level (Ctrl+S) after switching. The
+   showcase room's saved default is **Emory** (level save 2026-07-12), so a fresh
+   boot demos Emory with zero typing.
 
 **Why `mp.MetaHumanActiveProfile` alone does NOT work here, and is dangerous
 mid-session:** the placed pawn re-applies its own property to that CVar at every play

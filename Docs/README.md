@@ -1,8 +1,13 @@
 # TestingKit5 Documentation Index
 
 Status: single authoritative index. Created 2026-06-07, restructured 2026-06-11 (all project
-documentation now lives under `Docs/`; root keeps only `AGENTS.md`). Date-stamped files are
+documentation now lives under `Docs/`; root keeps `AGENTS.md` plus `README.md`, the GitHub
+landing page with the demo quickstart, added 2026-07-12). Date-stamped files are
 historical unless this index marks them active.
+
+**Running the demo:** see the root `README.md` — open the editor, everything self-arms,
+`mp.MirrorAvatar <name>` between sessions. The long-form version with verification steps
+and gotchas is `SETUP_NEW_MACHINE.md` §7-7d.
 
 ## Active Operational Docs
 
