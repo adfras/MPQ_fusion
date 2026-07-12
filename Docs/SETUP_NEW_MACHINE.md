@@ -172,6 +172,21 @@ avatar stays visible but its shoulders/arms collapse to the legacy path and look
 mangled. If you ever see that: `mp.MetaHumanActiveProfile <the avatar actually in the
 room>` restores it instantly, no restart needed.
 
+### 7d. Avatar sizes are native (and the metric lock, 2026-07-12)
+
+Every cast member drives at its own authored stature - the AVATAR_METRIC_LOCK_PLAN
+Phase 0 audit measured driven == reference pose within a few percent on the whole
+cast (`Docs/avatar_metric_lock_baseline/phase4_cast_audit.md` has the per-avatar
+bone-Z table; Emory is an authored SHORT ADULT at 94.5% of Kellan - the old "child
+at 130%" reading was an imported-bounds artifact). `mp.AvatarMetricLock` (candidate
+stack, default 0) additionally maps the fused-pose height targets about the floor by
+a once-per-session embodiment scale S = avatar eye height / your standing HMD
+baseline, so an avatar keeps ITS stature under a taller/shorter user whenever the
+fused pose writer (`mp.BodyFusion.WritePose`) is armed; the accepted live stack runs
+that writer off, so the lock is dark there. Bisect live, no restart:
+`mp.AvatarMetricLock 0` <-> `1`. Per-actor evidence rows: `mp.EmbodimentScaleTrace`
+(boot-armed, native-vs-driven spans + the latched S and its inputs).
+
 ## 8. Getting Claude (or any agent) up to speed at work
 
 Session memory does not move between machines. Everything essential lives in this
