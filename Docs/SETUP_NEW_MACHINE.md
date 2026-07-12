@@ -119,6 +119,40 @@ Steps:
 4. VR Preview, stand in front of the webcam, judge in the mirror. The mirror avatar
    is the only judge that counts.
 
+### 7b. Choosing the mirror avatar (Kellan / Maria / Wallace / Emory / Hudson / Payton / Manny)
+
+The selector is a PROPERTY ON THE PLACED PAWN, not a console variable. Verified
+2026-07-12 (PIE spawned `MP_LiveMetaHumanEmory` + self-view, profile resolved
+`active=1 valid=1`):
+
+1. In the editor (NOT during play), select **`MP_PlacedEmbodiedMetaHumanPawn`** in the
+   Outliner and set its **`MetaHuman Profile Id`** to the cast member you want
+   (`Kellan`, `Maria`, `Wallace`, `Emory`, `Hudson`, `Payton`).
+2. Press VR Preview. The pawn spawns that MetaHuman as the live mirror actor and its
+   self-view copy; there is no per-character level setup.
+3. `Manny` is not a profile id — the placed `MP_LiveMediaPipeManny` runs alongside
+   every session, and setting the pawn's `Avatar Type` to non-MetaHuman drops the
+   embodiment to the Manny baseline (`mp.AutoQuestAvatar 0`).
+
+Bridge one-liner (same thing without clicking, editor idle):
+
+```python
+import unreal
+for a in unreal.EditorLevelLibrary.get_all_level_actors():
+    if 'Embodied' in a.get_class().get_name():
+        a.set_editor_property('MetaHumanProfileId', 'Maria')
+```
+
+**Why `mp.MetaHumanActiveProfile` alone does NOT work here, and is dangerous
+mid-session:** the placed pawn re-applies its own property to that CVar at every play
+start (`ApplySelectedAvatarProfileToRuntimeCVars`), so a console pre-set is silently
+overwritten. Worse, changing the CVar DURING a session makes the spawned avatar's
+profile "not active", which hard-disables the full arm-chain retargeter
+(`MediaPipeMetaHumanArmRetargeter.cpp` rejects with "profile X is not active") — the
+avatar stays visible but its shoulders/arms collapse to the legacy path and look
+mangled. If you ever see that: `mp.MetaHumanActiveProfile <the avatar actually in the
+room>` restores it instantly, no restart needed.
+
 ## 8. Getting Claude (or any agent) up to speed at work
 
 Session memory does not move between machines. Everything essential lives in this
