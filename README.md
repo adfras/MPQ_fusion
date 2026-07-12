@@ -45,10 +45,9 @@ instant recovery in [Docs/SETUP_NEW_MACHINE.md](Docs/SETUP_NEW_MACHINE.md)
 The architecture in one picture: the Quest headset owns the pose, the webcam
 contributes bounded corrections through a rack of correctors sharing one
 contract, everything meets exactly once at final assembly, and the mirror
-avatar is the only acceptance judge. The dashed subgraph is the 2026-07
+avatar is the only acceptance judge. Dashed-border boxes are the 2026-07
 quality arc — built and tested, dark by default, armed only in the candidate
-settings, awaiting two worn verdicts (the shrug ratchet fix and the avatar
-metric lock).
+settings — drawn at the exact pipeline stage where each one runs.
 
 ```mermaid
 flowchart TB
@@ -57,49 +56,64 @@ flowchart TB
     Q --> HT["Hand tracking"]
     Q --> SK["Body skeleton"]
 
-    subgraph RACK["Corrector rack — one shared contract: bounded, quiet-gated, motion-faded, traced"]
+    L --> ZD["Foreshortening Z-distrust — turns down<br/>depth trust on limbs pointing at the lens"]
+    ZD --> RACK
+
+    subgraph RACK["Corrector rack — one shared contract: bounded, quiet-gated, motion-faded, traced. Quality arc inside: learners timestamp-aligned; shrug rest-ref ratchet fixed"]
         SH["Shrug"]
         HD["Heading ≤25°"]
         PV["Pelvis ≤25cm"]
         DIR["Direction ≤20°"]
     end
 
-    L --> RACK
-    SH -->|"bounded Δ"| TO["Head + torso owner"]
-    HD -->|"bounded Δ"| TO
-    PV -->|"bounded Δ"| TO
-    DIR -->|"bounded Δ"| AR["Arm owner"]
+    SH --> TO["Head + torso owner"]
+    HD --> TO
+    PV --> TO
+    DIR --> AR["Arm owner"]
     H --> TO
     SK --> AR
+
     HT --> WR["Wrist + fingers"]
     HT --> RX["Reach extender ≤8cm"]
     AR --> RX
     RX --> G["Torso guard — always runs last"]
+
     L --> LEG["Legs + feet owner — the webcam's own region"]
     H -->|"height budget"| LEG
+    LEG --> FL["Foot contact + lock — pins planted<br/>feet, releases on lift"]
+
     L -.->|"hand truly lost"| OV["Arm loss override"]
     OV -.-> G
+
+    WR --> WC["Wrist anatomical clamp — last gate<br/>before the bone write"]
+
     TO --> FA["Final assembly — one pose write"]
     G --> FA
-    WR --> FA
-    LEG --> FA
+    WC --> FA
+    FL --> FA
+    ML["Avatar metric lock — dark guard:<br/>each avatar keeps its own stature"] -.-> FA
     FA --> M["Mirror avatar — the only judge"]
 
-    subgraph QA["2026-07 quality arc — dark by default, armed in candidate, two worn verdicts pending"]
-        TS["Timestamped residuals"]
-        ZD["Foreshortening Z-distrust"]
-        WC["Wrist anatomical clamp"]
-        FL["Foot contact + lock"]
-        ML["Avatar metric lock (guard)"]
-        SF["Shrug ratchet fix"]
-    end
-    TS -.-> RACK
-    ZD -.-> L
-    WC -.-> WR
-    FL -.-> LEG
-    ML -.-> FA
-    SF -.-> SH
+    classDef qa stroke-dasharray:6 4,stroke-width:2px;
+    class ZD,WC,FL,ML qa;
 ```
+
+The quality arc in full (each behind its own CVar, off by default, armed in
+the candidate variant; two worn verdicts pending):
+
+- `mp.MediaPipeTimestampAlignedResiduals` — corrector learners compare each
+  webcam frame against the pose at its capture time, not against now.
+- `mp.MediaPipeForeshortenZDistrust` — the depth-trust dial drawn above.
+- `mp.WristAnatomicalClamp` — swing/twist range check, applied last, never
+  feeds learners.
+- `mp.FootContactDetect` + `mp.FootLock` — contact detection and planted-foot
+  pinning (≤10 cm, instant release on lift).
+- `mp.AvatarMetricLock` — dark guard in the fused-pose writer; **worn verdict
+  pending** (Kellan then Emory should feel identical; bisect 0 ↔ 1).
+- `mp.ShrugRestRefInBandDownHalfLifeS` — the shrug rest reference now learns
+  down as slowly as up, ending the sag ratchet; **worn verdict pending**
+  (bisect 2.5 ↔ 90).
+- Learned-prior bake-off — offline only, go/no-go memo; never wired live.
 
 The full interactive version — every box opens a dossier with its inner flow
 chart, CVars, commits, and the story behind it (including the quality-arc
