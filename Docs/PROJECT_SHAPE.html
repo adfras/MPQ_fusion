@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TestingKit5 — project shape</title>
+<style>
+:root{
+  --bg:#F2F4F3; --panel:#FFFFFF; --ink:#1A2320; --ink2:#55635E; --line:#D8DEDB; --edge:#9AA6A1;
+  --accent:#148066; --ring:#148066;
+  --q-f:#DFF2E9; --q-b:#79C3A8; --q-t:#0A5340; --q-e:#3EA283;
+  --c-f:#FBE9DF; --c-b:#E9A583; --c-t:#813112; --c-e:#D07A4E;
+  --g-f:#ECEEED; --g-b:#BDC5C1; --g-t:#414D48;
+  --o-f:#EAE7FA; --o-b:#AFA6EA; --o-t:#372F85;
+  --r-f:#FAE6E6; --r-b:#EBA09F; --r-t:#8A1F1C; --r-e:#D96B6A;
+  --b-f:#E4EEF8; --b-b:#86B3DC; --b-t:#1C4A75; --b-e:#5590C4;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  --ui:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --disp:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0F1513; --panel:#171F1C; --ink:#E8EDEA; --ink2:#9DAAA4; --line:#2A342F; --edge:#4A5751;
+  --accent:#4FC3A1; --ring:#4FC3A1;
+  --q-f:#123129; --q-b:#256F58; --q-t:#8ADDC1; --q-e:#3B9678;
+  --c-f:#372015; --c-b:#8A4526; --c-t:#F2A987; --c-e:#B96A42;
+  --g-f:#1F2724; --g-b:#3D4844; --g-t:#BCC6C1;
+  --o-f:#231E3E; --o-b:#4C4390; --o-t:#BCB4F4;
+  --r-f:#371A1A; --r-b:#8A3434; --r-t:#F2A09F; --r-e:#B25353;
+  --b-f:#122539; --b-b:#2E5E8C; --b-t:#9CC6EC; --b-e:#417AAD;
+}}
+:root[data-theme="dark"]{
+  --bg:#0F1513; --panel:#171F1C; --ink:#E8EDEA; --ink2:#9DAAA4; --line:#2A342F; --edge:#4A5751;
+  --accent:#4FC3A1; --ring:#4FC3A1;
+  --q-f:#123129; --q-b:#256F58; --q-t:#8ADDC1; --q-e:#3B9678;
+  --c-f:#372015; --c-b:#8A4526; --c-t:#F2A987; --c-e:#B96A42;
+  --g-f:#1F2724; --g-b:#3D4844; --g-t:#BCC6C1;
+  --o-f:#231E3E; --o-b:#4C4390; --o-t:#BCB4F4;
+  --r-f:#371A1A; --r-b:#8A3434; --r-t:#F2A09F; --r-e:#B25353;
+  --b-f:#122539; --b-b:#2E5E8C; --b-t:#9CC6EC; --b-e:#417AAD;
+}
+:root[data-theme="light"]{
+  --bg:#F2F4F3; --panel:#FFFFFF; --ink:#1A2320; --ink2:#55635E; --line:#D8DEDB; --edge:#9AA6A1;
+  --accent:#148066; --ring:#148066;
+  --q-f:#DFF2E9; --q-b:#79C3A8; --q-t:#0A5340; --q-e:#3EA283;
+  --c-f:#FBE9DF; --c-b:#E9A583; --c-t:#813112; --c-e:#D07A4E;
+  --g-f:#ECEEED; --g-b:#BDC5C1; --g-t:#414D48;
+  --o-f:#EAE7FA; --o-b:#AFA6EA; --o-t:#372F85;
+  --r-f:#FAE6E6; --r-b:#EBA09F; --r-t:#8A1F1C; --r-e:#D96B6A;
+  --b-f:#E4EEF8; --b-b:#86B3DC; --b-t:#1C4A75; --b-e:#5590C4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:15px;line-height:1.55}
+header{padding:26px 24px 8px;max-width:1440px;margin:0 auto}
+header h1{font-family:var(--disp);font-size:22px;font-weight:600;margin:0 0 6px;text-wrap:balance}
+header p{margin:0;color:var(--ink2);max-width:78ch}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;align-items:center}
+.legend span{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
+.dot{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
+.dot.q{background:var(--q-b)} .dot.c{background:var(--c-b)} .dot.g{background:var(--g-b)} .dot.o{background:var(--o-b)} .dot.r{background:var(--r-b)} .dot.b{background:var(--b-b)}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:18px;max-width:1440px;margin:0 auto;padding:12px 24px 60px;align-items:start}
+.chartwrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+svg{display:block;min-width:980px;width:100%;height:auto;font-family:var(--ui)}
+.nd{cursor:pointer}
+.nd rect{rx:9;stroke-width:1.4}
+.nd text{pointer-events:none}
+.nd .t1{font-size:13.5px;font-weight:600}
+.nd .t2{font-size:11px;opacity:.85}
+.nd.q rect{fill:var(--q-f);stroke:var(--q-b)} .nd.q text{fill:var(--q-t)}
+.nd.c rect{fill:var(--c-f);stroke:var(--c-b)} .nd.c text{fill:var(--c-t)}
+.nd.g rect{fill:var(--g-f);stroke:var(--g-b)} .nd.g text{fill:var(--g-t)}
+.nd.o rect{fill:var(--o-f);stroke:var(--o-b)} .nd.o text{fill:var(--o-t)}
+.nd.r rect{fill:var(--r-f);stroke:var(--r-b)} .nd.r text{fill:var(--r-t)}
+.nd.b rect{fill:var(--b-f);stroke:var(--b-b)} .nd.b text{fill:var(--b-t)}
+.nd.park rect{fill:none;stroke:var(--g-b);stroke-dasharray:5 4} .nd.park text{fill:var(--ink2)}
+.nd.sel rect{stroke:var(--ring);stroke-width:2.6}
+.eg{fill:none;stroke-width:1.6;opacity:.5}
+.eg.q{stroke:var(--q-e)} .eg.c{stroke:var(--c-e)} .eg.g{stroke:var(--edge)} .eg.r{stroke:var(--r-e)} .eg.b{stroke:var(--b-e)}
+.eg.dash{stroke-dasharray:6 5}
+.eg.hidden{opacity:0}
+.dimmed .nd{opacity:.28}
+.dimmed .eg{opacity:.07}
+.dimmed .eg.hidden{opacity:0}
+.dimmed .nd.lit{opacity:1}
+.dimmed .eg.lit{opacity:.95;stroke-width:2.4}
+.rowcap{font-size:10.5px;letter-spacing:.1em;font-weight:600;fill:var(--ink2)}
+.rowcap.b{fill:var(--b-t)}
+.arrowhead{fill:var(--edge)}
+.inspector{position:sticky;top:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 20px 24px;max-height:calc(100vh - 28px);overflow-y:auto}
+.inspector h2{font-family:var(--disp);font-size:19px;font-weight:600;margin:0;text-wrap:balance}
+.fam{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:600;margin-bottom:8px}
+.fam.q{color:var(--q-t)} .fam.c{color:var(--c-t)} .fam.g{color:var(--g-t)} .fam.o{color:var(--o-t)} .fam.r{color:var(--r-t)} .fam.b{color:var(--b-t)}
+.lead{font-size:15px;margin:8px 0 0;max-width:62ch}
+.sec{margin-top:18px}
+.sec h3{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink2);margin:0 0 8px;font-weight:600}
+.sec p{margin:0 0 8px;max-width:62ch}
+.sec ol{margin:0;padding-left:20px}
+.sec ol li{margin:0 0 7px}
+.sec ul{margin:0;padding-left:18px}
+.sec ul li{margin:0 0 7px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);white-space:nowrap}
+.hist{display:flex;gap:10px;margin:0 0 9px}
+.hist .cc{font-family:var(--mono);font-size:11.5px;color:var(--accent);flex:none;padding-top:2px;min-width:66px}
+.hist .tt{font-size:13.5px}
+.conn{display:flex;gap:8px;align-items:baseline;margin:0 0 7px;font-size:13.5px}
+.conn .dir{flex:none;font-family:var(--mono);font-size:12px;color:var(--ink2);min-width:38px}
+.conn a{color:var(--accent);cursor:pointer;text-decoration:none;font-weight:600}
+.conn a:hover{text-decoration:underline}
+.conn .lb{color:var(--ink2)}
+.ftab{border-collapse:collapse;width:100%;margin:0 0 10px}
+.ftab td{padding:3px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.ftab .fp{font-family:var(--mono);font-size:11.5px;word-break:break-all;padding-right:12px}
+.ftab .fl{font-size:11.5px;color:var(--ink2);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.fnlist{margin:0;padding-left:18px}
+.fnlist li{margin:0 0 7px;font-size:13.5px}
+.fn{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+.miniflow{display:block;width:100%;min-width:0;height:auto;margin:4px 0 2px;font-family:var(--ui)}
+.miniflow .nd{cursor:default}
+.miniflow .t1{font-size:12px;font-weight:600}
+.miniflow .t2{font-size:10px}
+.miniflow .eg{opacity:.6;stroke-width:1.5}
+.egl{font-size:9.5px;fill:var(--ink2);font-weight:600;paint-order:stroke;stroke:var(--panel);stroke-width:3px;stroke-linejoin:round}
+.closeb{display:none;appearance:none;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:4px 12px;font-size:13px;cursor:pointer;float:right}
+.resetb{appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--ink2);border-radius:8px;padding:3px 12px;font-size:12.5px;cursor:pointer;margin-left:auto}
+.resetb:hover{color:var(--ink)}
+@media (max-width:1060px){
+  .app{grid-template-columns:1fr}
+  .inspector{position:fixed;left:10px;right:10px;bottom:10px;top:auto;max-height:62vh;z-index:10;
+    transform:translateY(calc(100% + 20px));transition:transform .2s ease;box-shadow:0 -8px 34px rgba(0,0,0,.3)}
+  .inspector.open{transform:none}
+  .closeb{display:inline-block}
+}
+@media (prefers-reduced-motion: reduce){ .inspector{transition:none} }
+</style>
+
+<header>
+  <h1>TestingKit5 — the project shape</h1>
+  <p><strong>Built, accepted, and merged to <code>main</code> 2026-07-10</strong> — 164/164 tests, worn acceptance passed, fast-forward merge pushed to GitHub; one deliberate deviation from the plan (Phase 7 deferred — see the red box). The data flow is identical to the old system; only the code's shape changed. Every webcam contribution is now a plug-in <strong>corrector</strong> implementing one shared contract, racked in one place, plugging into <strong>sockets</strong> on the quest-owned spine. Orange never enters green directly anymore. <strong>New since the merge (2026-07-12):</strong> the bottom band — the quality arc. Seven features built on this shape, all tested (208/208), all dark by default and armed only in the candidate settings; two worn verdicts are the only thing outstanding. Click <em>Where it stands</em> for the change list, or any box for its dossier.</p>
+  <div class="legend">
+    <span><i class="dot q"></i>quest — owns the pose</span>
+    <span><i class="dot c"></i>webcam — contributes</span>
+    <span><i class="dot b"></i>bounded corrector — one contract</span>
+    <span><i class="dot g"></i>shared machinery</span>
+    <span><i class="dot o"></i>what you see</span>
+    <span><i class="dot r"></i>dissolved — or deferred (red box)</span>
+    <button class="resetb" id="resetb">Reset view</button>
+  </div>
+</header>
+
+<div class="app">
+  <div class="chartwrap"><svg id="chart" viewBox="0 0 1180 1490" role="img" aria-label="Interactive flow chart of the project architecture"></svg></div>
+  <aside class="inspector" id="insp" aria-live="polite"></aside>
+</div>
+
+<script>
+"use strict";
+/* ---------- graph data (target shape) ---------- */
+const NODES = [
+ {id:"webcam", x:180, y:24, w:200, f:"c", t:"Webcam", s:"the camera watching you"},
+ {id:"quest", x:850, y:24, w:240, f:"q", t:"Quest headset", s:"the device you wear"},
+
+ {id:"landmarks", x:180, y:140, w:200, f:"c", t:"Body landmarks", s:"33 points + confidence"},
+ {id:"hmd", x:640, y:140, w:150, f:"q", t:"Head position", s:"where + facing"},
+ {id:"hands", x:850, y:140, w:160, f:"q", t:"Hand tracking", s:"26 joints + flag"},
+ {id:"skeleton", x:1060, y:140, w:160, f:"q", t:"Body skeleton", s:"the arm guess"},
+
+ {id:"contract", x:180, y:258, w:220, f:"b", t:"The contract", s:"Learn · Apply · Trace"},
+ {id:"shrugC", x:180, y:330, w:220, f:"b", t:"Shrug corrector", s:"collarbone lift"},
+ {id:"headingC", x:180, y:402, w:220, f:"b", t:"Heading corrector", s:"chest facing, ≤25°"},
+ {id:"pelvisC", x:180, y:474, w:220, f:"b", t:"Pelvis corrector", s:"sideways anchor, ≤25cm"},
+ {id:"dirtrimC", x:180, y:546, w:220, f:"b", t:"Direction corrector", s:"hanging arms, ≤20°"},
+
+ {id:"headtorso", x:640, y:280, w:150, f:"q", t:"Head & torso", s:"3 sockets"},
+ {id:"wrist", x:850, y:280, w:160, f:"q", t:"Wrist rotation", s:"unchanged"},
+ {id:"armchain", x:1060, y:280, w:160, f:"q", t:"Arm owner", s:"1 socket"},
+
+ {id:"fingers", x:850, y:400, w:160, f:"q", t:"Fingers", s:"unchanged"},
+ {id:"reachx", x:1060, y:400, w:160, f:"b", t:"Reach extender", s:"same contract, quest-fed"},
+
+ {id:"legs", x:180, y:660, w:200, f:"c", t:"Legs & feet owner", s:"the webcam's own region"},
+ {id:"rescue", x:180, y:758, w:220, f:"c", t:"Loss override", s:"its own contract, loss only"},
+
+ {id:"guard", x:1060, y:515, w:160, f:"g", t:"Torso guard", s:"still runs last"},
+ {id:"assembly", x:850, y:630, w:280, f:"g", t:"Final assembly", s:"the single meeting point"},
+
+ {id:"manny", x:250, y:880, w:150, f:"o", t:"Manny (debug)", s:"raw webcam"},
+ {id:"panel", x:445, y:880, w:170, f:"o", t:"Tracking panel", s:"camera + overlay"},
+ {id:"fphands", x:635, y:880, w:160, f:"o", t:"First-person hands", s:"your own view"},
+ {id:"mirror", x:870, y:880, w:280, h:64, f:"o", t:"Mirror avatar (Kellan)", s:"still the only judge"},
+
+ {id:"deadcode", x:350, y:1030, w:330, f:"r", t:"Webcam-hand machinery", s:"baseline-live — deletion deferred"},
+ {id:"inline", x:760, y:1030, w:340, f:"r", t:"Inline corrector blocks", s:"dissolved into the rack"},
+
+ {id:"keyed", x:250, y:1150, w:360, f:"g", t:"Per-actor memory store", s:"+ one corrector-state block each"},
+ {id:"settings", x:640, y:1150, w:320, f:"g", t:"Settings layers", s:"unchanged — caps stay CVars"},
+ {id:"tracers", x:1000, y:1150, w:340, f:"g", t:"Tracers + tests", s:"trace() is part of the contract"},
+
+ {id:"tsres", x:160, y:1300, w:250, f:"b", t:"Timestamped residuals", s:"learn vs the pose at capture time"},
+ {id:"zdistrust", x:450, y:1300, w:270, f:"b", t:"Foreshortening Z-distrust", s:"depth trust dial"},
+ {id:"wclamp", x:740, y:1300, w:250, f:"b", t:"Wrist anatomical clamp", s:"no impossible wrists"},
+ {id:"footlock", x:1005, y:1300, w:230, f:"b", t:"Foot contact + lock", s:"pins planted feet"},
+ {id:"metriclock", x:175, y:1400, w:280, f:"b", t:"Avatar metric lock", s:"premise died — landed as a guard"},
+ {id:"shrugfix", x:490, y:1400, w:270, f:"b", t:"Shrug ratchet fix", s:"symmetric rest learning"},
+ {id:"prior", x:790, y:1400, w:250, f:"park", t:"Learned-prior bake-off", s:"offline only"},
+ {id:"qstatus", x:1040, y:1400, w:200, f:"g", t:"Where it stands", s:"2 worn verdicts pending"},
+];
+
+/* from, to, color, label, curve points, dashed?, hidden-until-selected? */
+const EDGES = [
+ {f:"webcam",t:"landmarks",c:"c",l:"smoothed landmarks",p:[[180,80],[180,110],[180,140]]},
+ {f:"quest",t:"hmd",c:"q",l:"head pose",p:[[780,80],[690,105],[650,140]]},
+ {f:"quest",t:"hands",c:"q",l:"hand joints + tracked flag",p:[[850,80],[850,110],[850,140]]},
+ {f:"quest",t:"skeleton",c:"q",l:"synthesized arm chain",p:[[920,80],[1010,105],[1050,140]]},
+
+ {f:"landmarks",t:"shrugC",c:"c",l:"shoulder height",p:[[155,196],[60,275],[112,330]]},
+ {f:"landmarks",t:"headingC",c:"c",l:"shoulder line",p:[[135,196],[30,330],[70,424]]},
+ {f:"landmarks",t:"pelvisC",c:"c",l:"pelvis position",p:[[120,196],[20,390],[70,496]]},
+ {f:"landmarks",t:"dirtrimC",c:"c",l:"arm directions",p:[[108,196],[12,450],[70,568]]},
+ {f:"landmarks",t:"legs",c:"c",l:"leg + foot landmarks",p:[[250,196],[380,430],[265,660]]},
+ {f:"landmarks",t:"rescue",c:"c",l:"the replacement arm",p:[[262,196],[395,470],[255,758]]},
+ {f:"landmarks",t:"manny",c:"c",l:"raw webcam pose",p:[[238,196],[400,530],[280,880]]},
+ {f:"landmarks",t:"panel",c:"c",l:"camera preview",p:[[272,196],[440,530],[455,880]]},
+
+ {f:"hmd",t:"headtorso",c:"q",l:"direct head + lean drive",p:[[640,196],[640,240],[640,280]]},
+ {f:"hmd",t:"legs",c:"q",l:"height budget",p:[[600,196],[430,480],[255,660]]},
+ {f:"hands",t:"wrist",c:"q",l:"wrist + palm orientation",p:[[850,196],[850,240],[850,280]]},
+ {f:"hands",t:"fingers",c:"q",l:"finger joints",p:[[795,196],[745,300],[815,400]]},
+ {f:"hands",t:"reachx",c:"q",l:"the real wrist",p:[[905,196],[952,300],[1015,400]]},
+ {f:"hands",t:"rescue",c:"q",l:"loss signal (flag + grace)",p:[[782,200],[480,600],[290,758]],dash:1},
+ {f:"skeleton",t:"armchain",c:"q",l:"segment directions",p:[[1060,196],[1060,240],[1060,280]]},
+ {f:"skeleton",t:"reachx",c:"q",l:"its own segment lengths",p:[[1112,196],[1162,300],[1105,400]]},
+
+ {f:"shrugC",t:"headtorso",c:"b",l:"collarbone Δ",p:[[290,350],[470,248],[615,280]]},
+ {f:"headingC",t:"headtorso",c:"b",l:"Δ ≤25°",p:[[290,420],[490,258],[648,280]]},
+ {f:"pelvisC",t:"headtorso",c:"b",l:"Δ ≤25cm",p:[[290,492],[515,268],[682,280]]},
+ {f:"dirtrimC",t:"armchain",c:"b",l:"Δ ≤20°",p:[[290,562],[700,430],[1000,338]]},
+
+ {f:"armchain",t:"reachx",c:"g",l:"built + trimmed arm",p:[[1060,336],[1060,368],[1060,400]]},
+ {f:"reachx",t:"guard",c:"g",l:"full-reach arm",p:[[1060,456],[1060,485],[1060,515]]},
+ {f:"guard",t:"assembly",c:"g",l:"final arm targets",p:[[1010,571],[960,600],[925,630]]},
+ {f:"rescue",t:"guard",c:"c",l:"override — replaces the arm, loss only",p:[[292,762],[640,585],[980,545]],dash:1},
+
+ {f:"headtorso",t:"assembly",c:"g",l:"torso pose",p:[[655,336],[690,500],[790,630]]},
+ {f:"wrist",t:"assembly",c:"g",l:"hand rotation",p:[[900,336],[948,450],[888,630]]},
+ {f:"fingers",t:"assembly",c:"g",l:"finger pose",p:[[850,456],[850,540],[850,630]]},
+ {f:"legs",t:"assembly",c:"g",l:"leg + foot pose",p:[[282,682],[520,700],[710,660]]},
+ {f:"assembly",t:"mirror",c:"g",l:"one write of the final pose",p:[[865,686],[868,780],[870,880]]},
+ {f:"wrist",t:"fphands",c:"g",l:"same machinery",p:[[800,336],[625,600],[638,880]]},
+
+ {f:"contract",t:"shrugC",c:"b",l:"implements",p:[[180,300],[180,315],[180,330]],dash:1},
+ {f:"contract",t:"headingC",c:"b",l:"",p:[[168,300],[150,360],[168,402]],dash:1,hid:1},
+ {f:"contract",t:"pelvisC",c:"b",l:"",p:[[160,300],[140,390],[160,474]],dash:1,hid:1},
+ {f:"contract",t:"dirtrimC",c:"b",l:"",p:[[152,300],[130,420],[152,546]],dash:1,hid:1},
+ {f:"contract",t:"reachx",c:"b",l:"same contract, different input",p:[[290,285],[700,330],[1015,400]],dash:1,hid:1},
+
+ {f:"deadcode",t:"armchain",c:"r",l:"baseline-gated block inside the arm solve",p:[[350,1030],[640,700],[1030,338]],dash:1,hid:1},
+ {f:"inline",t:"armchain",c:"r",l:"was: inline in the 5,339-line arm solve",p:[[820,1030],[940,700],[1030,338]],dash:1,hid:1},
+ {f:"inline",t:"headtorso",c:"r",l:"was: inline in the body solve",p:[[700,1030],[560,700],[660,338]],dash:1,hid:1},
+
+ {f:"tsres",t:"contract",c:"b",l:"Learn() compares against the pose at capture time",p:[[160,1300],[40,760],[140,318]],dash:1,hid:1},
+ {f:"zdistrust",t:"landmarks",c:"b",l:"turns down each landmark's depth trust as it foreshortens",p:[[450,1300],[16,700],[100,198]],dash:1,hid:1},
+ {f:"wclamp",t:"wrist",c:"b",l:"the very last gate before the bone write — never feeds learners",p:[[740,1300],[700,800],[812,338]],dash:1,hid:1},
+ {f:"footlock",t:"legs",c:"b",l:"pins a planted foot — ≤10cm, releases the instant you lift",p:[[1005,1300],[560,1060],[282,718]],dash:1,hid:1},
+ {f:"metriclock",t:"assembly",c:"b",l:"scales height targets by a latched S — dark in the live stack",p:[[175,1400],[400,1100],[772,688]],dash:1,hid:1},
+ {f:"shrugfix",t:"shrugC",c:"b",l:"rest reference now learns down as slowly as up",p:[[490,1400],[430,740],[294,364]],dash:1,hid:1},
+];
+
+/* ---------- dossiers ---------- */
+const D = {
+_intro:{f:"b",tag:"Start here",t:"The target shape, and the plan to get there",
+ lead:"Same data flow as today — nothing the avatar does would change. What changes is the shape of the code: every webcam contribution becomes a plug-in corrector implementing one shared contract, racked together on the left; the quest spine on the right owns the pose and exposes sockets; everything meets exactly once, at final assembly. The webcam column never touches the spine directly anymore.",
+ how:["Click any box: its inner flow chart, its dossier, and the refactor phase that creates it.",
+  "Blue boxes are the new thing — bounded correctors. All five have the same inner shape: measure, vote, learn slowly, clamp hard, fade with motion, trace. That shape is today's hard-won recipe, promoted from a convention into a type.",
+  "Red boxes are flagged code: the inline blocks dissolved into the rack; the webcam-hand machinery stays — the Phase-7 static proof showed it is baseline-live, so its deletion is deferred. Click them for the details.",
+  "Executed 2026-07-10: Phases 0–8 landed one commit each, 164/164 tests, the worn acceptance passed, and the branch was merged to main and pushed the same day. This chart is the shape of the code on main.",
+  "New since the merge: the bottom band — the 2026-07 quality arc. Seven features built on this shape (four signal-quality upgrades, the metric-lock guard, the shrug ratchet fix, and an offline model bake-off), all dark by default, all armed in the candidate settings, tests grown to 208/208. Click 'Where it stands' for the change list and the two pending worn verdicts."],
+ hist:[["Phase 0","Freeze the baseline — tag the commit, save replay hashes, record one worn reference session with tracers armed"],
+  ["Phase 1","Write the contract — config + state structs in the keyed store, the Learn/Apply/Trace interface; zero behavior change"],
+  ["Phase 2","Extract the direction corrector first — it is the best-instrumented, so any slip shows up immediately"],
+  ["Phase 3","Extract the heading + pelvis correctors from the body solve"],
+  ["Phase 4","Extract the shrug corrector — its 8 unit tests move with it"],
+  ["Phase 5","Extract the reach extender — same contract, quest-fed"],
+  ["Phase 6","Extract the loss override with its own Trigger/Hold/Release interface"],
+  ["Phase 7","DEFERRED — the static proof failed: the machinery is baseline-live (both gates are 1 in the baseline trial list). Documented in REFACTOR_PLAN §9 instead of deleted"],
+  ["Phase 8","Slim the solve files into orchestrators; update docs + charts; final worn session compared against the Phase-0 fingerprint"]],
+ why:["Move code, never math — any behavior difference disqualifies the commit, full stop.",
+  "One phase = one commit + push, editor closed for the build.",
+  "Every phase gated on: build clean, the full test suite (157 at Phase 0, grown to 164/164 by Phase 8 — the count may only grow), and byte-exact golden dumps across every extraction.",
+  "All corrector state lives in the keyed store — the engine wipes node members every frame in live VR.",
+  "The mirror avatar stays the only judge. The Phase-0 worn recording is the reference its behavior is compared against at the end."],
+ note:"Why not a fusion module where both devices meet BEFORE the solvers? Because that shape makes the sources peers, and every regression in the July arc came from the webcam acting like a peer: the divergence rescue seizing healthy arms, the webcam wrist takeover, the unbounded direction corrector. The winning rule is asymmetric — the headset owns the pose, the webcam contributes bounded corrections at specific stages — and this shape encodes that rule in the architecture itself."},
+
+webcam:{f:"c",tag:"Device — unchanged",t:"Webcam",
+ lead:"Unchanged by the refactor. Every video frame runs through the heavy tracking model, is smoothed, and predicted ~80ms ahead. What changes is where its data is allowed to go: after the refactor, everything it produces flows into exactly three kinds of place — the corrector rack, its own region (legs), and the loss override.",
+ cvars:["mp.AutoQuestWebcamPoseModel heavy"]},
+
+landmarks:{f:"c",tag:"Stream — unchanged",t:"Body landmarks",
+ lead:"The 33 smoothed points with confidence scores, same as today. The difference is the discipline downstream: no consumer reaches into a quest-owned solver anymore. Four measurements feed four correctors, the legs keep their own orange box, and the rescue keeps its dashed override line. That is the complete list.",
+ how:["Shoulder height → the shrug corrector.",
+  "Shoulder line → the heading corrector.",
+  "Pelvis position → the pelvis corrector.",
+  "Arm directions + confidence → the direction corrector.",
+  "Legs & feet → still owned outright (the headset cannot see them).",
+  "Replacement arm → only to the loss override, only when a hand is truly gone."]},
+
+contract:{f:"b",tag:"The new thing",t:"The contract",
+ lead:"One small interface that every corrector implements: Learn, Apply, Trace. It is the July arc's hard-won recipe — magnitude bound, quiet-gated learning, motion-faded application, slow time constant, mandatory tracer — promoted from a code-review convention into an actual type. After this, 'every webcam contribution is bounded' is enforced by construction, not by remembering.",
+ how:["Learn(measurement, reliability, quiet, dt) — a slow estimator that only updates while the signal is reliable and the body part is nearly still. A bias eraser has no business studying motion.",
+  "Apply(pose, speed, dt) — clamp the learned correction to the hard cap, then fade it toward zero as the body part speeds up. The headset owns fast motion, always.",
+  "Trace() — every corrector emits the same row shape: measured, learned, applied, faded. Not optional; it is a pure virtual. The next drift complaint names its own culprit.",
+  "Engage/disengage goes through a hysteresis vote with dwell times — a corrector can never pop on or off in one frame."],
+ why:["Each corrector's numbers (cap, tau, fade speeds) stay CVars — tuning stays live, only the shape is shared.",
+  "All state lives in one FBoundedCorrectorState block per corrector inside the keyed store, because the engine wipes node members every frame in live VR."],
+ plan:["Phase 1 (commit 1ca84a7) — written before anything moved. A header, the config + state structs, zero call sites, plus its own unit test: 157 → 158 tests."]},
+
+shrugC:{f:"b",tag:"Corrector 1 of 5",t:"Shrug corrector",
+ lead:"Today's shrug drive, unchanged in behavior, moved out of the 2,449-line body solve into its own file. It maps onto the contract naturally: the quiet-gated rest reference is Learn, the soft dead-zone plus avatar scaling is the clamp, and the appliedCm log row it already emits becomes its Trace.",
+ why:["It brings its own precedent: the shoulder-evidence math was already extracted once (Stage2ShoulderEvidence) and grew 8 unit tests because of it. This finishes that job."],
+ plan:["Phase 4 (commit 7e8406f). Moved out of the body solve behind a narrow pose-access seam; the 8 unit tests passed unmodified and stayed with the evidence math they actually test. Pinned by a 2,052-step golden; 162/162. Worn acceptance: appliedCm peaked 11.5, rest reference in the same band as baseline."],
+ data:["mp.ClavicleShrugFusion — appliedCm, restRef"],
+ cvars:["mp.MediaPipeClavicleShrugDirect 1"]},
+
+headingC:{f:"b",tag:"Corrector 2 of 5",t:"Heading corrector",
+ lead:"The chest-facing trim: the headset's idea of which way you face drifts a few degrees over minutes; the webcam sees your true shoulder line and pulls it back. Already contract-shaped — 8-second half-life is its slow Learn, ±25° is its clamp. Extraction is a pure move.",
+ plan:["Phase 3 (commit 259cc7b, together with the pelvis corrector — they lived side by side in the body solve). Golden-locked; 161/161."],
+ cvars:["mp.MediaPipeBodyYawFromCamera 1"]},
+
+pelvisC:{f:"b",tag:"Corrector 3 of 5",t:"Pelvis corrector",
+ lead:"The sideways anchor: the webcam's idea of where your hips are slides over time; the headset's position pulls it back, at most 25cm, and only while you stand upright so a bend is never learned as drift. The upright gate is its quiet gate; the 25cm cap is its clamp.",
+ why:["This is the one corrector whose reference input comes from the headset (the anchor) while the corrected signal is the webcam's — the contract doesn't care which direction the correction flows, only that it is bounded, slow, and traced."],
+ plan:["Phase 3 (commit 259cc7b). Golden-locked; 161/161."],
+ cvars:["mp.MediaPipePelvisHmdAnchor 1"]},
+
+dirtrimC:{f:"b",tag:"Corrector 4 of 5",t:"Direction corrector",
+ lead:"The arm-width trim — the box that caused most of the July arc and then received every part of the recipe: 20° clamp, quiet-gated 3-second learner, motion fade, hysteresis vote, 1Hz tracer. It is already a complete contract implementation written inline; extraction just gives it walls.",
+ why:["It goes first among the extractions precisely because it is the best-instrumented: mp.ArmDirCorrection logs its correction curve at 1Hz and mp.ArmJumpTrace names it whenever it injects motion. If the move changes anything, the instruments say so the same session."],
+ plan:["Phase 2 (commit 7c27c0e) — the template extraction the other four copied. Moved out of the 5,339-line arm solve; a 1,751-step golden reproduced bit for bit; tracer row format unchanged. 159/159. Worn acceptance: the corrector saturated at exactly 20.00° in both sessions."],
+ data:["mp.ArmDirCorrection — angles, applyAlpha, speed, quiet"],
+ cvars:["mp.MediaPipeArmDirectionFromCamera 1.0","mp.MediaPipeArmDirectionFromCameraMaxDeg 20"]},
+
+legs:{f:"c",tag:"Owner — unchanged",t:"Legs & feet owner",
+ lead:"The one region the webcam owns outright, because the headset physically cannot see it. Unchanged by the refactor: webcam landmarks give the pose, the headset's height makes it metrically honest, foot contact and the 10-second floor window live in the keyed store. It keeps its own orange box on the spine's output — ownership, not correction.",
+ cvars:["mp.MediaPipeDriveLegs 1","mp.MediaPipeFootFloorWindowSeconds 10"]},
+
+rescue:{f:"c",tag:"Override — its own contract",t:"Loss override",
+ lead:"The single sanctioned replacement path: if a hand is truly gone past the grace period, the webcam takes that whole arm rather than leave it frozen. It is deliberately NOT a corrector — it replaces rather than corrects — so it gets its own narrow interface: Trigger, Hold, Release.",
+ how:["Trigger: untracked past 0.35s grace AND wrist overhead (where the headset genuinely cannot see) — or hand and skeleton both gone, in which case any webcam detection wins.",
+  "Hold: entry conditions must persist 0.15s; while held, the webcam owns the arm and the wrist rides the forearm.",
+  "Release: 0.3s of calm tracking hands the arm back to the headset."],
+ why:["House rule since 2026-07-02: never hold an arm frozen against a camera that can see it. The override exists to honor that rule and nothing else — its third trigger (divergence) stayed dead and is not coming along."],
+ plan:["Phase 6 (commit 89627a2). Moved into its own file with the trigger expression, dwells, and handback as named methods — deliberately NOT the corrector contract. 500-step golden over the trigger-clause matrix; 164/164. Worn acceptance: it caught a real overhead dropout and handed back cleanly."],
+ data:["mp.ArmOverheadRescue — active, conditions, questTracked, chainFresh"]},
+
+quest:{f:"q",tag:"Device — unchanged",t:"Quest headset",
+ lead:"Unchanged: three streams, each failing independently. Head pose always; hand joints while the cameras can see them; a synthesized body skeleton whose directions are good and whose proportions are cautious."},
+
+hmd:{f:"q",tag:"Stream — unchanged",t:"Head position",
+ lead:"Unchanged: drives head and torso directly, sets the height budget the legs are scaled against, and serves as the anchor reference the pelvis corrector pulls toward."},
+
+hands:{f:"q",tag:"Stream — unchanged",t:"Hand tracking",
+ lead:"Unchanged: 26 joints plus a tracked flag filtered through the 0.35s grace period. Still the system's only ground truth for real arm extension (feeding the reach extender) and still the only signal allowed to declare a hand lost (feeding the override).",
+ cvars:["mp.QuestWristLostTrackingGraceSeconds 0.35"]},
+
+skeleton:{f:"q",tag:"Stream — unchanged",t:"Body skeleton",
+ lead:"Unchanged: shoulder, elbow, wrist per side — smooth, fast, never fully straightening. Its directions build the arm; its segment lengths are the yardstick the reach extender measures your real wrist against."},
+
+headtorso:{f:"q",tag:"Owner — 3 sockets",t:"Head & torso owner",
+ lead:"The HMD drives lean, twist, and height as before — but after the refactor this solver is an orchestrator: it does its own fast work, then invites exactly three corrections through typed sockets, in a fixed order. The sockets are the ONLY doors; nothing else can write to the torso.",
+ how:["Own work: apply the HMD pose (lean up to 55°, twist, height).",
+  "Socket 1: heading Δ from the heading corrector, at most 25°.",
+  "Socket 2: sideways Δ from the pelvis corrector, at most 25cm.",
+  "Socket 3: collarbone Δ from the shrug corrector, scaled to the avatar.",
+  "Hand the torso pose to final assembly."],
+ plan:["Becomes an orchestrator in Phase 8, after its three correctors have moved out in Phases 3–4. The socket calls replace the inline blocks one-for-one."],
+ cvars:["mp.MediaPipeDriveHmdHead 1","mp.MediaPipeHmdLeanMaxDeg 55"]},
+
+wrist:{f:"q",tag:"Owner — unchanged",t:"Wrist rotation",
+ lead:"Deliberately untouched — 2,004 lines before and after, zero diffs. The wrist solve was rebuilt through six worn rounds this July — neutral capture, dual roll measurements, source vote with dwell, bounded continuity bias, flip guard, forearm-riding dropout hold — and it works. (Earlier notes placed the webcam-hand machinery inside this file; the Phase-7 static proof showed that was wrong — it lives in the arm solve, and it is baseline-live, not dead.)",
+ why:["Refactor discipline: a file that just earned a worn 'much better' verdict is not a file you reorganize for tidiness. It gets smaller only by deletion of code that already never runs."],
+ plan:["No phase touched this file — zero diffs, 2,004 lines before and after. The Phase-7 deletion that earlier notes aimed here was aimed at the wrong file and at live code; it is deferred (see the red box)."],
+ data:["mp.QuestWristSolve — handRotApplied, wristPalmHeld, calibrationState"],
+ cvars:["mp.QuestPalmMode 2"]},
+
+armchain:{f:"q",tag:"Owner — 1 socket",t:"Arm owner",
+ lead:"Builds the arm from the skeleton's directions at the avatar's fixed proportions, exactly as today — then exposes one socket: the direction corrector's Δ, at most 20°. After that the arm flows to the reach extender and the guard. The application order that took six rounds to get right (build → trim → stretch → guard) becomes the orchestrator's literal call sequence.",
+ plan:["Becomes an orchestrator in Phase 8; its socket call replaces the inline direction-trim block extracted in Phase 2."]},
+
+fingers:{f:"q",tag:"Owner — unchanged",t:"Fingers",
+ lead:"Unchanged: your real finger joints, remapped to the avatar's proportions; frozen at the last pose on dropout; nothing else may move them.",
+ cvars:["mp.QuestFingerPoseGate 1"]},
+
+reachx:{f:"b",tag:"Corrector 5 of 5",t:"Reach extender",
+ lead:"The proof that the contract is about latency-mismatched fusion, not about the webcam: this corrector's input is quest hand tracking, yet it has the identical shape. Real wrist distance ÷ skeleton arm length is its measurement, the 0.35s sustained dwell is its vote, 8cm is its clamp, the ease in/out is its fade, and the elbow re-solve keeps bone lengths exact.",
+ why:["Round 3 of the July arc proved why the shape matters here: the low-latency hand wrist leads the laggy body chain during fast moves, which briefly looks like a 19cm reach deficit. The dwell and cap render those transients as nothing."],
+ plan:["Phase 5 (commit dc05858). Moved out of the arm solve with the two-bone elbow re-solve kept with the unit. 1,142-step golden; 163/163. Worn acceptance: appliedExtCm maxed at 1.50 in both sessions — no pumping."],
+ data:["mp.ChainReachExtend — frac, highS, appliedExtCm"],
+ cvars:["mp.MediaPipeChainReachFromQuestHand 1.0"]},
+
+guard:{f:"g",tag:"Unchanged — still last",t:"Torso guard",
+ lead:"Unchanged, and still deliberately the final word on arm targets: elbow and wrist must stay at least 13cm from the body's core axis. Whatever the correctors and the override do above it, nothing inside the body reaches the avatar.",
+ cvars:["mp.MediaPipeArmTorsoGuardCm 13"]},
+
+assembly:{f:"g",tag:"The single meeting point",t:"Final assembly",
+ lead:"The one place everything converges — which answers the question that started this refactor. The devices do meet at a module: this one. But they meet AFTER ownership has been resolved, not before. Each region owner hands over exactly one finished result, the guard has already had its say on the arms, and one write produces the final pose.",
+ why:["Meeting before the solvers would make the sources peers and re-open every July failure mode. Meeting here, after the asymmetry has done its work, is safe — there are no decisions left to fight over."],
+ plan:["Phase 8 makes the existing final-pose write explicit as the orchestrator's last step — a naming change more than a code change."]},
+
+manny:{f:"o",tag:"Output — unchanged",t:"Manny (debug)",
+ lead:"Unchanged: the webcam-only witness avatar, showing what the camera sees with no headset data."},
+
+panel:{f:"o",tag:"Output — unchanged",t:"Tracking panel",
+ lead:"Unchanged: the floating live camera feed with the tracked skeleton drawn on top."},
+
+fphands:{f:"o",tag:"Output — unchanged",t:"First-person hands",
+ lead:"Unchanged: your own-view hands use the same wrist machinery as the mirror, so they inherit every wrist behavior automatically."},
+
+mirror:{f:"o",tag:"Output — still the judge",t:"Mirror avatar (Kellan)",
+ lead:"Unchanged, and still the only acceptance judge. The refactor added one duty: the Phase-0 worn reference recording was compared, on this avatar, against the final worn session — 2026-07-10, verdict accepted. All five tracer row families matched the baseline fingerprint; the one large jump event was the loss override doing its designed job during an overhead dropout.",
+ note:"The gold-standard boot stays as-is: preview room, Kellan profile, candidate settings, heavy model, tracers armed."},
+
+deadcode:{f:"r",tag:"Deferred — Phase 7",t:"Webcam-hand machinery",
+ lead:"The plan called this ~1,100 dead lines inside the wrist file. The Phase-7 static proof said otherwise, twice: it is ~830 lines inside the ARM solve (~lines 4040–4870 — the camera-hand ownership latch and the synthetic-finger feed), and it is not dead. The baseline trial list sets both of its gates to 1, so it runs live whenever the baseline variant is selected; only the candidate variant zeroes them. A diagnostics test asserts the baseline values.",
+ why:["Baseline keeps it on purpose: baseline must stay the old system so worn A/B comparisons mean something. Deleting it would silently change what 'baseline' means mid-refactor.",
+  "This is exactly what the static-proof gate existed to catch — the deletion was stopped by evidence, not caution. Nothing was deleted, no CVar retired, no test edited."],
+ plan:["Phase 7 shipped as documentation only: the full reachability map is in Docs/REFACTOR_PLAN.md §9. The deletion re-arms only after the candidate's hand-loss behavior is promoted into the baseline trial list and those two entries are deliberately retired — then the proof is re-run line by line before any line goes."],
+ cvars:["mp.MediaPipeHandRotationOnQuestLoss — default 0 · baseline 1 · candidate 0","mp.MediaPipeFingersOnQuestLoss — default 0 · baseline 1 · candidate 0"]},
+
+inline:{f:"r",tag:"Dissolved — Phases 2–6",t:"Inline corrector blocks",
+ lead:"Where the correctors live today: as anonymous blocks inside two giant files — the direction trim and reach extension inside the 5,339-line arm solve, the heading, pelvis, and shrug logic inside the 2,449-line body solve, the rescue's trigger machinery spread through the arm solve. Correct code in the wrong place: unreviewable, untestable in isolation, and invisible on any module map.",
+ why:["This is the box that answers your original observation. The 'webcam branches reaching into quest modules' you saw on the first chart are exactly these blocks. The fix is not to move the meeting point — it is to give each block walls, a name, and a contract."],
+ plan:["Phases 2–6, one block per phase, one commit per phase. The rule for every one: move code, never change math. Any behavior diff — replay bytes, tracer rows, worn feel — disqualifies the commit."]},
+
+keyed:{f:"g",tag:"Foundation — extended",t:"Per-actor memory store",
+ lead:"Unchanged rule — and as executed, deliberately unchanged layout too: the contract defines FBoundedCorrectorState (unit-tested, with bit-identical copies of the smoothing helpers), while each corrector's persistent fields stayed in the exact keyed slots and body-solver state the live code had already proven. Moving state would have been behavior risk for zero gain. The engine still wipes node members every frame in live VR; the store is still the only safe home.",
+ why:["This is why Phase 1 existed as its own phase: the state shape had to be pinned and unit-tested before any corrector moved — an extraction that accidentally left a timer in a node member would work in replay and fail worn, the hardest class of bug this project knows."],
+ plan:["Phase 1 added the struct and its unit test; Phases 2–6 each moved code against state that never moved. No anim-node members were added at any phase (asserted in every phase report)."]},
+
+settings:{f:"g",tag:"Foundation — unchanged",t:"Settings layers",
+ lead:"Unchanged: profile → trial layer → candidate overlay, diff printed at boot, gold standard armed by the boot script. Every corrector cap, tau, and threshold remains a live-tunable CVar — the contract standardizes the shape, not the numbers.",
+ cvars:["mp.DumpLiveProfileSettings"]},
+
+tracers:{f:"g",tag:"Foundation — strengthened",t:"Tracers + tests",
+ lead:"The refactor's biggest quality dividend. Today, tracing is per-solver convention; after, Trace() is part of the contract — a corrector without a tracer does not compile. And because each corrector becomes a plain function of its inputs, each one gets direct unit tests, the way the shrug evidence math already has 8.",
+ how:["Every corrector emits the same row shape: measured, learned, applied, faded — one grep pattern covers all five.",
+  "The jump tracer keeps naming stages; after Phase 8 the stages ARE the sockets, so attribution matches the architecture one-to-one.",
+  "The automation suite passed untouched at every phase — 157 at Phase 0, 164/164 by Phase 8 (the count only grew); each corrector gained its own tests on top.",
+  "Byte-exact goldens were the master gate: every extraction was functionized in place, a hex-exact dump of every state field captured, and the moved code had to reproduce that dump bit for bit."],
+ plan:["No dedicated phase — every phase fed it. Phase 8's exit criterion, the worn session vs the Phase-0 reference judged on the mirror, passed 2026-07-10."],
+ data:["mp.ArmJumpTrace","mp.ArmDirCorrection","mp.ChainReachExtend","mp.QuestWristSolve","mp.ClavicleShrugFusion"]},
+
+qstatus:{f:"g",tag:"Status — 2026-07-12",t:"Where it stands",
+ lead:"Everything in this band is built, tested, committed, and pushed — six commits on the feature/tracking-quality branch, 208/208 automation tests, working tree clean — but dark: each feature sits behind its own switch, off by default, armed only in the candidate settings variant. The editor is running verified-armed on the gold standard. Two worn verdicts are all that's left, both flippable live at the mirror with no restart.",
+ hist:[["Metric lock","Phases 0–4 executed — and the plan's premise died on the evidence. 'Child-sized Emory driven at 130%' was a measurement artifact: the '97.3cm' figure was imported-bounds metadata (tall Hudson carries the same ratio — it's how the assets are packaged), every real measure says Emory is an authored short adult (94.5% of Kellan's head height), and the replay rows showed driven == native reference within 0.7% across the entire cast. Nothing was ever being stretched. What landed is a guard, not a fix — click the Avatar metric lock box."],
+  ["Shrug fix","The right-shoulder report, diagnosed from the rows: the shrug rest reference learned downward fast (2.5s) but upward slowly (90s) inside the noise band, so it ratchets toward the lowest thing the camera sees. Fix shipped (commit cbf2f5d), three new tests reproduce the ratchet and show it gone — click the Shrug ratchet fix box."],
+  ["Demo ready","The showcase room now boots with Emory as the saved default avatar (f7d1c01) and the repo grew a root README with the demo quickstart (b3e8d0f) — open the editor, everything self-arms, mp.MirrorAvatar to switch."],
+  ["Waiting on Alan","Verdict 1 — shrug fix: does the right shoulder still creep up and linger? Bisect mp.ShrugRestRefInBandDownHalfLifeS 2.5 ↔ 90 live. Verdict 2 — metric lock (plan Phase 5): 60 seconds of the usual script on Kellan then Emory should feel identical to before, because the lock is dark in the live stack. Bisect mp.AvatarMetricLock 0 ↔ 1."]],
+ cvars:["feature/tracking-quality — 6 commits, pushed","tests 208/208"]},
+
+tsres:{f:"b",tag:"Quality arc — armed in candidate",t:"Timestamped residuals",
+ lead:"The webcam's picture of you is roughly a tenth of a second old, but the correctors used to compare it against where you are NOW — so during any movement they studied a stale error and learned a little of it as truth. With this armed, a short ring buffer of recent poses lives in the keyed store and every camera measurement is compared against where you actually were when that frame was taken. Learners only — the applied corrections still fade with motion exactly as before.",
+ why:["This is the textbook fix for latency-mismatched sensor fusion (out-of-sequence measurements) — the one research finding that was verified by every independent source.","Off by default; the stack is byte-identical when disarmed."],
+ cvars:["mp.MediaPipeTimestampAlignedResiduals — default 0 · candidate 1"]},
+
+zdistrust:{f:"b",tag:"Quality arc — armed in candidate",t:"Foreshortening Z-distrust",
+ lead:"A single webcam guesses depth worst exactly when a limb points at the lens: the segment looks short in 2D, so its depth estimate turns to noise. This feature measures how foreshortened each segment currently is — its on-screen length against its known proportions — and turns that landmark's depth trust down to match. The correctors quietly stop listening to depth on a pointing arm instead of learning garbage from it.",
+ data:["mp.ForeshortenTrace"],
+ cvars:["mp.MediaPipeForeshortenZDistrust — default 0 · candidate 1"]},
+
+wclamp:{f:"b",tag:"Quality arc — armed in candidate",t:"Wrist anatomical clamp",
+ lead:"A human wrist can only bend and twist so far. This is a hard anatomical range check — swing and twist limited separately — applied as the very LAST operation before the wrist pose is written to the bone. It cannot cause drift because it never feeds any learner; it simply refuses to render an impossible wrist, whatever upstream noise asked for one.",
+ data:["mp.WristLimitTrace"],
+ cvars:["mp.WristAnatomicalClamp — default 0 · candidate 1","mp.WristTwistRangeDeg","mp.WristSwingRangeDeg"]},
+
+footlock:{f:"b",tag:"Quality arc — armed in candidate",t:"Foot contact + lock",
+ lead:"Sliding feet are the single most-noticed avatar artifact in the research literature. When a foot is detected as planted — low, still, weight-bearing — it is pinned to the ground point where it landed, corrections capped near 10cm, and released the instant you lift. Deliberate steps, squats, and knee raises pass straight through; only the skating goes.",
+ why:["The release is asymmetric — fast out, eased in — so it can never hold a foot down against a real lift.","It runs through the existing leg scaffold: it corrects the webcam's leg pose, it does not own it.","Escape hatch: mp.FootLock 0 live, no restart. It is the first bisection suspect if feet ever feel wrong."],
+ data:["mp.FootSkateTrace"],
+ cvars:["mp.FootContactDetect — default 0 · candidate 1","mp.FootLock — default 0 · candidate 1"]},
+
+metriclock:{f:"b",tag:"Quality arc — landed as a guard",t:"Avatar metric lock",
+ lead:"Born from a plan to fix 'child-sized Emory being driven at 130%' — and the first thing the evidence did was kill that premise. The '97.3cm' figure was imported-bounds metadata (tall Hudson carries the same ratio — it's how the assets are packaged); every real measurement says Emory is an authored short adult, 94.5% of Kellan's head height; and the replay rows showed driven == native reference within 0.7% across the entire cast. Nothing was ever being stretched. What landed anyway is a guard for the future, not a fix for a bug.",
+ how:["mp.EmbodimentScaleTrace — a boot-armed tracer that prints native-vs-driven body spans per avatar, so any future 'sizes look wrong' claim is answerable from rows in seconds.",
+  "mp.AvatarMetricLock (candidate, dark) — if the fused-pose writer is ever armed, it scales world height targets about the floor by a once-per-session latch S = avatar eye height ÷ your standing HMD baseline, so each avatar keeps its own stature under any user. Nine new unit tests; live-bisectable.",
+  "Phases 2–3 closed as verification-only: arms and legs were proven avatar-native from rows, and adding an arm ratio map would have duplicated machinery the accepted stack disables on purpose.",
+  "Phase 4: full-cast PIE audit — all 7 avatars, gates passed, tables committed under Docs/avatar_metric_lock_baseline/. Tests grew 196 → 205."],
+ note:"Worn check (its Phase 5): 60 seconds of the usual script on Kellan then Emory — it should feel identical to before, because the lock is dark in the live stack. If anything feels off, bisect mp.AvatarMetricLock 0 ↔ 1 live.",
+ cvars:["mp.AvatarMetricLock — default 0 · candidate 1","mp.EmbodimentScaleTrace — boot-armed"]},
+
+shrugfix:{f:"b",tag:"Quality arc — verdict pending",t:"Shrug ratchet fix",
+ lead:"The right-shoulder report — 'it creeps up and lingers' — diagnosed from the rows. The right side was applying about twice the left (median 4.5 vs 2.05cm). The decisive control: Manny, driven by the same webcam feed in the same session, showed the identical bias — and the earlier Kellan pass flipped it left. The avatar was innocent; the mechanism lived in the shrug corrector's learner.",
+ how:["The rest reference learned downward fast (2.5s half-life) but upward slowly (90s) inside the noise band — so it ratchets toward the lowest thing the camera ever sees.",
+  "Both rest references sagged ~2.7cm over the 4.5-minute session; the right sat ~3cm low. Everything above a sagged reference renders as a shrug that takes minutes to melt.",
+  "The fix (commit cbf2f5d): mp.ShrugRestRefInBandDownHalfLifeS. At the engine default 2.5 the legacy behavior is bit-exact — the goldens prove it. The candidate arms 90, making in-band learning symmetric so noise averages out instead of ratcheting.",
+  "Deep drops (squats) keep the existing 600s gate — the two knobs compose. Three new tests reproduce the ratchet at the legacy rate and show it gone at 90s. 208/208."],
+ why:["Trade-off to know: a genuine slouch now takes a couple of minutes to register as your new rest posture.","Worn verdict pending: does the right shoulder still creep? Bisect mp.ShrugRestRefInBandDownHalfLifeS 2.5 ↔ 90 live at the mirror."],
+ data:["mp.ClavicleShrugFusion — appliedCm, restRef"],
+ cvars:["mp.ShrugRestRefInBandDownHalfLifeS — engine 2.5 · candidate 90"]},
+
+prior:{f:"park",tag:"Offline only — never wired live",t:"Learned-prior bake-off",
+ lead:"The research found small neural pose priors now run absurdly fast — hundreds of frames a second on ordinary hardware. This phase races two of them (HMD-Poser, EgoPoser) against the canonical replay dataset, entirely offline and chunked to respect the GPU device-hang discipline, and produces a go/no-go memo. Nothing touches the live stack unless that memo says the win is real and Alan approves the wiring — the mirror contract stays untouched either way."},
+};
+
+/* ---------- code map: today → after ---------- */
+const CODE = {
+_intro:{files:[["PoseDriven/…_QuestArmSolve.cpp","5,339 → 4,908"],["PoseDriven/…_BodyPoseSolve.cpp","2,449 → 2,267"],["Correctors/ (new folder)","1,574 across 13 files"],["PoseDriven/…_QuestHandRotation.cpp","2,004 — untouched"]],
+ note:"As built: the extractions moved the corrector logic into small, unit-testable files, each pinned by a byte-exact golden. The planned Phase-7 deletion did not happen — the machinery proved baseline-live and stays, documented in REFACTOR_PLAN §9."},
+contract:{files:[["Correctors/MediaPipeBoundedCorrector.h","new, 269 lines"],["Quest/MediaPipeQuestWristCalibrationState.h","338 — unchanged; persistent fields stayed in their proven slots"]],
+ fns:[["FBoundedCorrectorConfig","cap, tau, quiet threshold, fade speeds, dwells — all read from CVars"],["FBoundedCorrectorState","the state shape + bit-identical smoothing helpers (HalfLifeToAlpha) — unit-tested"],["Learn() / Apply() / Trace()","the three calls every corrector implements"]]},
+shrugC:{files:[["Correctors/MediaPipeClavicleShrugCorrector.cpp/.h","230 lines"],["PoseDriven/…_BodyPoseSolve.cpp","2,449 → 2,267 (all three body extractions)"],["BodyFusion/MediaPipeStage2ShoulderEvidence.cpp","472 — reused as-is, tests included"]],
+ fns:[["DriveClavicleShrugCS()","becomes the corrector's Apply"],["the quiet-gated rest reference","becomes its Learn"]]},
+headingC:{files:[["Correctors/MediaPipeHeadingCorrector.cpp/.h","155 lines"],["PoseDriven/…_BodyPoseSolve.cpp","source of the moved lines"]],
+ fns:[["the yaw correction block","today an anonymous block; after, a named unit with tests"]]},
+pelvisC:{files:[["Correctors/MediaPipePelvisAnchorCorrector.cpp/.h","106 lines"],["PoseDriven/…_BodyPoseSolve.cpp","source of the moved lines"]],
+ fns:[["the pelvis anchor block","upright-gated planar pull, ≤25cm"]]},
+dirtrimC:{files:[["Correctors/MediaPipeArmDirectionCorrector.cpp/.h","313 lines"],["PoseDriven/…_QuestArmSolve.cpp","5,339 → 4,908 (all three arm extractions)"]],
+ fns:[["the hysteresis vote","engage ≥0.6 / release <0.4, 0.3s dwells"],["UpdateCorrection()","the 3s learner → Learn()"],["ClampCorrection()","the 20° cap → inside Apply()"],["the motion fade","→ inside Apply()"],["the mp.ArmDirCorrection emit","→ Trace()"]]},
+reachx:{files:[["Correctors/MediaPipeReachExtender.cpp/.h","216 lines"],["PoseDriven/…_QuestArmSolve.cpp","source of the moved lines"]],
+ fns:[["the straightness fraction","real wrist ÷ chain length → its measurement"],["the two-bone re-solve","law-of-cosines elbow, kept with the unit"]]},
+rescue:{files:[["Correctors/MediaPipeArmLossOverride.cpp/.h","285 lines"],["PoseDriven/…_QuestArmSolve.cpp","source of the moved lines"]],
+ fns:[["Trigger()","the full condition expression, finally readable in one place"],["Hold() / Release()","entry dwell 0.15s, exit calm 0.3s"]]},
+headtorso:{files:[["PoseDriven/MediaPipePoseDrivenAnimInstance.cpp","2,780 — orchestrator after Phase 8"],["PoseDriven/…_BodyPoseSolve.cpp","2,449 → 2,267"]],
+ fns:[["the socket sequence","own drive → heading Δ → pelvis Δ → collarbone Δ → assembly"]]},
+armchain:{files:[["PoseDriven/…_QuestArmSolve.cpp","5,339 → 4,908"],["Avatar/MediaPipeMetaHumanArmRetargeter.cpp","140 — unchanged"]],
+ fns:[["BuildTargetPose()","unchanged — directions × avatar lengths"],["the socket call","one line where the inline block used to be"]]},
+wrist:{files:[["PoseDriven/…_QuestHandRotation.cpp","2,004 — unchanged, zero diffs"],["Quest/MediaPipeQuestWristCalibrationState.h/.cpp","650 — unchanged"]],
+ fns:[["DriveQuestHandCS()","untouched — six worn rounds earned it that"]]},
+deadcode:{files:[["PoseDriven/…_QuestArmSolve.cpp ~4040–4870","~830 baseline-live lines — kept, frozen in place"],["Runtime/MediaPipeDriverRuntime.cpp:784-785","baseline trial list sets both gates = 1"]],
+ fns:[["the camera-hand ownership latch","runs live under the baseline variant — not dead"],["FillSyntheticQuestHandSideFromMediaPipe","the synthetic-finger feed, same gates"]]},
+inline:{files:[["PoseDriven/…_QuestArmSolve.cpp","5,339 → 4,908"],["PoseDriven/…_BodyPoseSolve.cpp","2,449 → 2,267"],["Correctors/ (new)","1,574 lines, 13 files, each unit-testable"]],
+ fns:[["what moves","direction trim, reach extender, rescue (arm solve); heading, pelvis, shrug (body solve)"]]},
+keyed:{files:[["Quest/MediaPipeQuestWristCalibrationState.h","338 — unchanged"],["PoseDriven/MediaPipePoseDrivenSolverState.h","764 — unchanged"]],
+ fns:[["FBoundedCorrectorState","the contract's state shape — persistent fields stayed in their proven keyed slots"],["GetQuestWristRuntimeState(key)","unchanged — key 0 still means never write"]]},
+tracers:{files:[["Quest/MediaPipeQuestWristDiagnosticFormatter.cpp","878 — rows character-identical through every phase"],["Tests","157 → 164 automation tests, plus six byte-exact goldens"]],
+ fns:[["Trace()","pure virtual — a corrector without a tracer does not compile"],["ShouldEmitThrottled()","unchanged, 8 lines gating every row"]]},
+assembly:{files:[["PoseDriven/MediaPipePoseDrivenAnimInstance.cpp","the existing final write, named as a step"]],
+ fns:[["the orchestrator tail","owners in fixed order → guard result → one pose write"]]},
+};
+
+/* ---------- inner flow charts ---------- */
+const FLOW = {
+webcam:{w:400,h:230,
+ n:[{id:"a",x:200,y:8,w:200,t:"Video frame"},
+    {id:"b",x:200,y:70,w:300,t:"Heavy pose model",s:"33 points + confidence"},
+    {id:"c",x:200,y:154,w:300,t:"Smoothing + prediction",s:"~80ms lookahead cancels lag"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"}]},
+
+landmarks:{w:400,h:340,
+ n:[{id:"p",x:85,y:118,w:150,h:64,t:"33 points",s:"+ confidence"},
+    {id:"c1",x:300,y:8,w:180,t:"4 correctors",s:"one measurement each",f:"b"},
+    {id:"c2",x:300,y:78,w:180,t:"Legs & feet",s:"owned outright"},
+    {id:"c3",x:300,y:148,w:180,t:"Loss override",s:"replacement arm"},
+    {id:"c4",x:300,y:218,w:180,t:"Manny + panel",s:"debug views",f:"o"},
+    {id:"x",x:300,y:288,w:180,t:"Quest solvers",s:"no longer reachable",f:"r"}],
+ e:[{f:"p",t:"c1",side:1},{f:"p",t:"c2",side:1},{f:"p",t:"c3",side:1},{f:"p",t:"c4",side:1}]},
+
+contract:{w:400,h:480,
+ n:[{id:"in",x:200,y:8,w:330,t:"Measurement",s:"webcam signal (or quest hand)"},
+    {id:"vt",x:200,y:92,w:330,t:"Engage vote",s:"hysteresis + dwell — never pops on/off"},
+    {id:"ln",x:200,y:176,w:330,t:"Learn",s:"slow tau · only while quiet + reliable"},
+    {id:"cl",x:200,y:260,w:330,t:"Clamp",s:"hard cap = the validated purpose"},
+    {id:"fd",x:200,y:344,w:330,t:"Fade",s:"applies less the faster you move"},
+    {id:"ot",x:105,y:428,w:180,t:"Bounded Δ",s:"into the socket"},
+    {id:"tr",x:295,y:428,w:180,t:"Trace()",s:"required to compile",f:"g"}],
+ e:[{f:"in",t:"vt"},{f:"vt",t:"ln"},{f:"ln",t:"cl"},{f:"cl",t:"fd"},{f:"fd",t:"ot"},{f:"fd",t:"tr"}]},
+
+shrugC:{w:400,h:400,
+ n:[{id:"a",x:200,y:8,w:320,t:"Shoulder height",s:"webcam, every frame"},
+    {id:"b",x:200,y:92,w:320,t:"Learn: rest reference",s:"quiet-gated — a held shrug can't teach it"},
+    {id:"c",x:200,y:176,w:320,t:"Lift = height − rest"},
+    {id:"d",x:200,y:238,w:320,t:"Clamp: dead-zone + avatar scale",s:"zero at rest, full amplitude on lifts"},
+    {id:"e",x:105,y:322,w:180,t:"Collarbone Δ",s:"→ torso socket 3",f:"b"},
+    {id:"f",x:295,y:322,w:180,t:"Trace: appliedCm",f:"g"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"},{f:"d",t:"e"},{f:"d",t:"f"}]},
+
+headingC:{w:400,h:378,
+ n:[{id:"a",x:200,y:8,w:320,t:"Camera shoulder line"},
+    {id:"b",x:200,y:70,w:320,t:"Compare vs applied heading",s:"the slow drift"},
+    {id:"c",x:200,y:154,w:320,t:"Learn: 8s half-life",s:"slowness is its quiet gate"},
+    {id:"d",x:200,y:238,w:320,t:"Clamp: ±25°"},
+    {id:"e",x:200,y:300,w:320,t:"Heading Δ → torso socket 1",f:"b"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"},{f:"d",t:"e"}]},
+
+pelvisC:{w:400,h:316,
+ n:[{id:"a",x:200,y:8,w:320,t:"Camera pelvis vs HMD anchor"},
+    {id:"b",x:200,y:70,w:320,t:"Quiet gate: upright only",s:"a bend is never learned as drift"},
+    {id:"c",x:200,y:154,w:320,t:"Clamp: ≤25cm"},
+    {id:"d",x:200,y:216,w:320,t:"Sideways Δ → torso socket 2",f:"b"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"}]},
+
+dirtrimC:{w:400,h:480,
+ n:[{id:"cm",x:105,y:8,w:180,t:"Webcam arm direction",s:"+ confidence"},
+    {id:"sk",x:295,y:8,w:180,t:"Skeleton arm direction",f:"q"},
+    {id:"vt",x:200,y:92,w:330,t:"Vote: hysteresis",s:"on ≥0.6 · off <0.4 · 0.3s dwells"},
+    {id:"ln",x:200,y:176,w:330,t:"Learn: 3s constant",s:"only quiet, confident frames"},
+    {id:"cl",x:200,y:260,w:330,t:"Clamp: 20°"},
+    {id:"fd",x:200,y:344,w:330,t:"Fade: full ≤20cm/s → zero ≥60cm/s"},
+    {id:"ap",x:105,y:428,w:180,t:"Direction Δ",s:"→ arm socket",f:"b"},
+    {id:"tr",x:295,y:428,w:180,t:"Trace: 1Hz curve",f:"g"}],
+ e:[{f:"cm",t:"vt"},{f:"sk",t:"vt"},{f:"vt",t:"ln"},{f:"ln",t:"cl"},{f:"cl",t:"fd"},{f:"fd",t:"ap"},{f:"fd",t:"tr"}]},
+
+reachx:{w:400,h:462,
+ n:[{id:"a",x:200,y:8,w:330,t:"Real wrist ↔ shoulder ÷ chain length",s:"true straightness, from quest hands"},
+    {id:"b",x:200,y:92,w:330,t:"Vote: ≥0.85 held 0.35s",s:"transients render as nothing"},
+    {id:"c",x:200,y:176,w:330,t:"Clamp: ≤8cm"},
+    {id:"d",x:200,y:238,w:330,t:"Fade: ease in 0.5s / out 0.8s"},
+    {id:"e",x:200,y:300,w:330,t:"Elbow re-solve",s:"bone lengths stay exact"},
+    {id:"f",x:200,y:384,w:330,t:"Reach Δ → guard",f:"b"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"},{f:"d",t:"e"},{f:"e",t:"f"}]},
+
+legs:{w:400,h:298,
+ n:[{id:"a",x:105,y:8,w:180,t:"Leg landmarks",s:"webcam"},
+    {id:"b",x:295,y:8,w:180,t:"HMD height",s:"the metric budget",f:"q"},
+    {id:"c",x:200,y:92,w:330,t:"Distribute the drop",s:"by each leg's measured bend"},
+    {id:"d",x:200,y:176,w:330,t:"Foot contact + floor",s:"10s rolling window"},
+    {id:"e",x:200,y:260,w:330,t:"Leg + foot pose → assembly"}],
+ e:[{f:"a",t:"c"},{f:"b",t:"c"},{f:"c",t:"d"},{f:"d",t:"e"}]},
+
+rescue:{w:400,h:296,
+ n:[{id:"t1",x:105,y:8,w:180,t:"Trigger: lost + overhead",s:"can't be seen"},
+    {id:"t2",x:295,y:8,w:180,t:"Trigger: everything gone",s:"any camera wins"},
+    {id:"dw",x:200,y:92,w:330,t:"Hold",s:"entry dwell 0.15s, then webcam owns the arm"},
+    {id:"tk",x:200,y:176,w:330,t:"Release",s:"0.3s calm → arm handed back"},
+    {id:"ex",x:200,y:260,w:330,t:"→ guard, like any arm"}],
+ e:[{f:"t1",t:"dw"},{f:"t2",t:"dw"},{f:"dw",t:"tk"},{f:"tk",t:"ex"}]},
+
+quest:{w:400,h:152,
+ n:[{id:"a",x:200,y:8,w:230,t:"Headset sensors",s:"cameras + motion"},
+    {id:"h",x:70,y:100,w:124,t:"Head pose",s:"always"},
+    {id:"j",x:200,y:100,w:118,t:"Hand joints",s:"when visible"},
+    {id:"k",x:332,y:100,w:126,t:"Skeleton guess",s:"always, cautious"}],
+ e:[{f:"a",t:"h"},{f:"a",t:"j"},{f:"a",t:"k"}]},
+
+hmd:{w:400,h:144,
+ n:[{id:"p",x:200,y:8,w:240,t:"HMD pose",s:"position + facing"},
+    {id:"a",x:70,y:92,w:124,t:"Head + lean",s:"direct drive"},
+    {id:"b",x:200,y:92,w:118,t:"Height ref",s:"for the legs"},
+    {id:"c",x:332,y:92,w:126,t:"Pelvis anchor",s:"corrector ref"}],
+ e:[{f:"p",t:"a"},{f:"p",t:"b"},{f:"p",t:"c"}]},
+
+hands:{w:400,h:214,
+ n:[{id:"r",x:200,y:8,w:280,t:"26 joints + tracked flag"},
+    {id:"g",x:200,y:70,w:280,t:"Grace filter",s:"0.35s — one blip changes nothing"},
+    {id:"t",x:105,y:162,w:180,t:"Tracked",s:"wrist · fingers · reach"},
+    {id:"l",x:295,y:162,w:180,t:"Truly lost",s:"arms the override"}],
+ e:[{f:"r",t:"g"},{f:"g",t:"t",l:"almost always"},{f:"g",t:"l",dash:1,l:"past 0.35s"}]},
+
+skeleton:{w:400,h:228,
+ n:[{id:"a",x:200,y:8,w:300,t:"Headset arm solver",s:"its built-in guess"},
+    {id:"b",x:200,y:92,w:300,t:"Shoulder → elbow → wrist",s:"smooth and fast, never fully straightens"},
+    {id:"c",x:105,y:176,w:180,t:"Directions",s:"→ arm owner"},
+    {id:"d",x:295,y:176,w:180,t:"Segment lengths",s:"→ reach yardstick"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"b",t:"d"}]},
+
+headtorso:{w:400,h:436,
+ n:[{id:"a",x:200,y:8,w:320,t:"Own drive: HMD",s:"lean ≤55° · twist · height — fast"},
+    {id:"s1",x:200,y:92,w:320,t:"Socket 1: heading Δ",s:"≤25°, from the rack",f:"b"},
+    {id:"s2",x:200,y:176,w:320,t:"Socket 2: pelvis Δ",s:"≤25cm",f:"b"},
+    {id:"s3",x:200,y:260,w:320,t:"Socket 3: collarbone Δ",s:"the shrug",f:"b"},
+    {id:"o",x:200,y:344,w:320,t:"Torso pose → assembly"}],
+ e:[{f:"a",t:"s1"},{f:"s1",t:"s2"},{f:"s2",t:"s3"},{f:"s3",t:"o"}]},
+
+wrist:{w:400,h:480,
+ n:[{id:"cap",x:200,y:8,w:330,t:"Neutral capture",s:"once, while your hand is still"},
+    {id:"m1",x:105,y:92,w:180,t:"Precise roll",s:"weakens arm-high"},
+    {id:"m2",x:295,y:92,w:180,t:"Backup roll",s:"rougher, always works"},
+    {id:"vt",x:200,y:176,w:330,t:"Source vote + dwell",s:"never switches instantly"},
+    {id:"bi",x:200,y:260,w:330,t:"Continuity bias",s:"bounded life — 0.75s, then converges"},
+    {id:"gu",x:200,y:344,w:330,t:"Flip guard",s:"1.0s dwell before any calibration wipe"},
+    {id:"ap",x:105,y:428,w:180,t:"Avatar hand",s:"tracked path"},
+    {id:"ho",x:295,y:428,w:180,t:"Dropout hold",s:"rides forearm → neutral"}],
+ e:[{f:"cap",t:"m1"},{f:"cap",t:"m2"},{f:"m1",t:"vt"},{f:"m2",t:"vt"},{f:"vt",t:"bi"},{f:"bi",t:"gu"},{f:"gu",t:"ap"},{f:"gu",t:"ho",dash:1,l:"hand lost"}]},
+
+armchain:{w:400,h:320,
+ n:[{id:"a",x:200,y:8,w:300,t:"Skeleton directions"},
+    {id:"b",x:200,y:70,w:300,t:"Build at avatar lengths",s:"~52cm, fixed"},
+    {id:"s1",x:200,y:154,w:300,t:"Socket: direction Δ",s:"≤20°, from the rack",f:"b"},
+    {id:"c",x:200,y:238,w:300,t:"→ reach extender, then guard",f:"b"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"s1"},{f:"s1",t:"c"}]},
+
+fingers:{w:400,h:270,
+ n:[{id:"a",x:200,y:8,w:300,t:"Your finger joints"},
+    {id:"b",x:200,y:70,w:300,t:"Remap to avatar proportions"},
+    {id:"c",x:200,y:132,w:300,t:"Tracked?",s:"yes: follow · no: freeze last pose"},
+    {id:"d",x:200,y:216,w:300,t:"Finger pose → assembly"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"}]},
+
+guard:{w:400,h:254,
+ n:[{id:"a",x:200,y:8,w:300,t:"Elbow + wrist targets"},
+    {id:"b",x:200,y:70,w:300,t:"Closer than 13cm to the core?"},
+    {id:"c",x:105,y:132,w:180,t:"Push outward",s:"keeps height"},
+    {id:"d",x:295,y:132,w:180,t:"Untouched",s:"most frames"},
+    {id:"e",x:200,y:216,w:240,t:"Final arm targets"}],
+ e:[{f:"a",t:"b"},{f:"b",t:"c",l:"yes"},{f:"b",t:"d",l:"no"},{f:"c",t:"e"},{f:"d",t:"e"}]},
+
+assembly:{w:400,h:300,
+ n:[{id:"i1",x:105,y:8,w:180,t:"Head + torso",s:"3 sockets applied"},
+    {id:"i2",x:105,y:66,w:180,t:"Arms",s:"via the guard"},
+    {id:"i3",x:105,y:124,w:180,t:"Wrist + fingers"},
+    {id:"i4",x:105,y:182,w:180,t:"Legs & feet"},
+    {id:"as",x:315,y:80,w:150,h:64,t:"One write",s:"of the final pose"},
+    {id:"k",x:315,y:220,w:150,t:"→ outputs"}],
+ e:[{f:"i1",t:"as",side:1},{f:"i2",t:"as",side:1},{f:"i3",t:"as",side:1},{f:"i4",t:"as",side:1},{f:"as",t:"k"}]},
+
+mirror:{w:400,h:142,
+ n:[{id:"a",x:200,y:8,w:300,t:"Final assembly",s:"one pose, every frame"},
+    {id:"b",x:200,y:92,w:300,t:"Kellan",s:"still the only judge"}],
+ e:[{f:"a",t:"b"}]},
+
+fphands:{w:400,h:130,
+ n:[{id:"a",x:200,y:8,w:300,t:"Same wrist machinery",s:"as the mirror"},
+    {id:"b",x:200,y:92,w:300,t:"Hands in your own view"}],
+ e:[{f:"a",t:"b"}]},
+
+manny:{w:400,h:142,
+ n:[{id:"a",x:200,y:8,w:300,t:"Webcam landmarks only",s:"no headset data"},
+    {id:"b",x:200,y:92,w:300,t:"Manny",s:"the witness avatar"}],
+ e:[{f:"a",t:"b"}]},
+
+panel:{w:400,h:120,
+ n:[{id:"a",x:105,y:8,w:180,t:"Camera feed"},
+    {id:"b",x:295,y:8,w:180,t:"Skeleton overlay"},
+    {id:"c",x:200,y:70,w:240,t:"Floating panel",s:"beside your view"}],
+ e:[{f:"a",t:"c"},{f:"b",t:"c"}]},
+
+deadcode:{w:400,h:312,
+ n:[{id:"a",x:200,y:8,w:330,t:"The plan said",s:"~1,100 dead lines — delete them",f:"r"},
+    {id:"b",x:200,y:92,w:330,t:"Static proof said no",s:"baseline trial list sets both gates to 1",f:"r"},
+    {id:"c",x:200,y:176,w:330,t:"Reality",s:"~830 live lines in the arm solve (baseline)",f:"q"},
+    {id:"d",x:200,y:260,w:330,t:"Phase 7 as shipped",s:"docs only — deferred, re-arm condition set",f:"g"}],
+ e:[{f:"a",t:"b",c:"r",dash:1},{f:"b",t:"c"},{f:"c",t:"d"}]},
+
+inline:{w:400,h:312,
+ n:[{id:"a",x:200,y:8,w:330,t:"Today",s:"corrector logic inline in two giant files",f:"r"},
+    {id:"b",x:200,y:92,w:330,t:"Phases 2–6: extract",s:"move code, never change math",f:"b"},
+    {id:"c",x:200,y:176,w:330,t:"After",s:"solver calls a socket → corrector unit",f:"b"},
+    {id:"d",x:200,y:260,w:330,t:"Gate, every phase",s:"byte-identical replays + worn check",f:"g"}],
+ e:[{f:"a",t:"b",c:"r",dash:1},{f:"b",t:"c"},{f:"c",t:"d"}]},
+
+keyed:{w:400,h:228,
+ n:[{id:"a",x:200,y:8,w:330,t:"Every frame",s:"the engine rebuilds the node's cache"},
+    {id:"b",x:105,y:92,w:180,t:"Ordinary variables",s:"wiped — the trap",f:"r"},
+    {id:"c",x:295,y:92,w:180,t:"Keyed store",s:"survives, per actor + side",f:"g"},
+    {id:"d",x:200,y:176,w:330,t:"What lives there",s:"latches · calibrations · one block per corrector",f:"g"}],
+ e:[{f:"a",t:"b",c:"r",dash:1,l:"lost"},{f:"a",t:"c",l:"kept"},{f:"c",t:"d",tx:295}]},
+
+settings:{w:400,h:374,
+ n:[{id:"e0",x:200,y:8,w:320,t:"Boot script",s:"arms all of this at every editor start"},
+    {id:"a",x:200,y:92,w:320,t:"Base profile"},
+    {id:"b",x:200,y:154,w:320,t:"+ Trial layer",s:"the accepted live setup"},
+    {id:"c",x:200,y:238,w:320,t:"+ Candidate overlay",s:"the experiment under test"},
+    {id:"d",x:200,y:322,w:320,t:"~420 resolved values",s:"corrector caps + taus stay live-tunable"}],
+ e:[{f:"e0",t:"a"},{f:"a",t:"b"},{f:"b",t:"c"},{f:"c",t:"d"}]},
+
+tracers:{w:400,h:312,
+ n:[{id:"a",x:200,y:8,w:330,t:"Trace() — required by the contract"},
+    {id:"b",x:105,y:92,w:180,t:"Corrector rows",s:"measured · learned · applied"},
+    {id:"c",x:295,y:92,w:180,t:"Jump tracer",s:"names the socket"},
+    {id:"d",x:200,y:176,w:330,t:"Unit tests per corrector",s:"plain functions now — like the shrug's 8"},
+    {id:"e",x:200,y:260,w:330,t:"164 tests + byte-exact goldens",s:"the master gate at every phase"}],
+ e:[{f:"a",t:"b"},{f:"a",t:"c"},{f:"b",t:"d",tx:105},{f:"c",t:"d",tx:295},{f:"d",t:"e"}]},
+};
+
+function flowSvg(F,fam){
+  const H=n=>n.h||(n.s?42:30);
+  const map={}; F.n.forEach(n=>map[n.id]=n);
+  let s='<svg class="miniflow" viewBox="0 0 '+F.w+' '+F.h+'" role="img" aria-label="Inner flow chart">'
+      +'<defs><marker id="mah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker></defs>';
+  F.e.forEach(e=>{
+    const a=map[e.f], b=map[e.t], ah=H(a), bh=H(b);
+    let d,lx,ly;
+    if(e.side){
+      const dir=b.x>a.x?1:-1;
+      const x1=a.x+dir*a.w/2, x2=b.x-dir*(b.w/2+2), y1=a.y+ah/2, y2=b.y+bh/2, mx=(x1+x2)/2;
+      d="M "+x1+" "+y1+" C "+mx+" "+y1+", "+mx+" "+y2+", "+x2+" "+y2;
+      lx=mx; ly=Math.min(y1,y2)-6;
+    } else if(b.y>=a.y+ah){
+      const x1=(e.fx!==undefined?e.fx:a.x), y1=a.y+ah, x2=(e.tx!==undefined?e.tx:b.x), y2=b.y-2, my=(y1+y2)/2;
+      d="M "+x1+" "+y1+" C "+x1+" "+my+", "+x2+" "+my+", "+x2+" "+y2;
+      lx=(x1+x2)/2; ly=my-3;
+    } else {
+      const x1=(e.fx!==undefined?e.fx:a.x), y1=a.y, x2=(e.tx!==undefined?e.tx:b.x), y2=b.y+bh+2, my=(y1+y2)/2;
+      d="M "+x1+" "+y1+" C "+x1+" "+my+", "+x2+" "+my+", "+x2+" "+y2;
+      lx=(x1+x2)/2; ly=my-3;
+    }
+    s+='<path class="eg '+(e.c||"g")+(e.dash?" dash":"")+'" d="'+d+'" marker-end="url(#mah)"/>';
+    if(e.l) s+='<text class="egl" x="'+lx+'" y="'+ly+'" text-anchor="middle">'+e.l+'</text>';
+  });
+  F.n.forEach(n=>{
+    const h=H(n), f=n.f||fam, cls=(f==="park"?"park":f);
+    s+='<g class="nd '+cls+'"><rect x="'+(n.x-n.w/2)+'" y="'+n.y+'" width="'+n.w+'" height="'+h+'" rx="7"/>';
+    if(n.s){
+      s+='<text class="t1" x="'+n.x+'" y="'+(n.y+h/2-2)+'" text-anchor="middle">'+n.t+'</text>'
+        +'<text class="t2" x="'+n.x+'" y="'+(n.y+h/2+12)+'" text-anchor="middle">'+n.s+'</text>';
+    } else {
+      s+='<text class="t1" x="'+n.x+'" y="'+(n.y+h/2+4)+'" text-anchor="middle">'+n.t+'</text>';
+    }
+    s+='</g>';
+  });
+  return s+'</svg>';
+}
+
+/* ---------- build the chart ---------- */
+const svg = document.getElementById("chart");
+const NS = "http://www.w3.org/2000/svg";
+const byId = {}; NODES.forEach(n=>byId[n.id]=n);
+const defs = document.createElementNS(NS,"defs");
+defs.innerHTML = '<marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>';
+svg.appendChild(defs);
+const rowcaps = [["THE WEBCAM SIDE — CONTRIBUTES, BOUNDED",16,14,""],["THE QUEST SPINE — OWNS THE POSE",560,14,""],["WHAT YOU SEE",16,870,""],["DELETED BY THE REFACTOR",16,1020,""],["UNDER EVERYTHING",16,1140,""],["THE CORRECTOR RACK — ONE SHARED CONTRACT",64,240,"b"],["NEW SINCE THE MERGE — THE 2026-07 QUALITY ARC (DARK BY DEFAULT, ARMED IN CANDIDATE)",28,1288,"b"]];
+rowcaps.forEach(([t,x,y,extra])=>{const e=document.createElementNS(NS,"text");e.setAttribute("x",x);e.setAttribute("y",y-4);e.setAttribute("class","rowcap"+(extra?" "+extra:""));e.textContent=t;svg.appendChild(e);});
+const rack=document.createElementNS(NS,"rect");
+rack.setAttribute("x",56);rack.setAttribute("y",246);rack.setAttribute("width",250);rack.setAttribute("height",372);
+rack.setAttribute("rx",14);rack.setAttribute("fill","none");rack.setAttribute("stroke","var(--b-b)");rack.setAttribute("stroke-dasharray","4 5");
+svg.appendChild(rack);
+const qband=document.createElementNS(NS,"rect");
+qband.setAttribute("x",20);qband.setAttribute("y",1292);qband.setAttribute("width",1140);qband.setAttribute("height",176);
+qband.setAttribute("rx",14);qband.setAttribute("fill","none");qband.setAttribute("stroke","var(--b-b)");qband.setAttribute("stroke-dasharray","4 5");
+svg.appendChild(qband);
+const edgeEls = [];
+EDGES.forEach((e,i)=>{
+  const p=document.createElementNS(NS,"path");
+  const pts=e.p;
+  p.setAttribute("d","M "+pts[0][0]+" "+pts[0][1]+" C "+pts[1][0]+" "+pts[1][1]+", "+((pts[1][0]+pts[2][0])/2)+" "+((pts[1][1]+pts[2][1])/2)+", "+pts[2][0]+" "+pts[2][1]);
+  p.setAttribute("class","eg "+e.c+(e.dash?" dash":"")+(e.hid?" hidden":""));
+  p.setAttribute("marker-end","url(#ah)");
+  const tt=document.createElementNS(NS,"title");
+  tt.textContent=byId[e.f].t+" → "+byId[e.t].t+": "+e.l;
+  p.appendChild(tt);
+  svg.appendChild(p); edgeEls.push(p);
+});
+const nodeEls = {};
+NODES.forEach(n=>{
+  const g=document.createElementNS(NS,"g");
+  g.setAttribute("class","nd "+n.f); g.setAttribute("tabindex","0"); g.setAttribute("role","button");
+  g.setAttribute("aria-label",n.t);
+  const h=n.h||56;
+  const r=document.createElementNS(NS,"rect");
+  r.setAttribute("x",n.x-n.w/2); r.setAttribute("y",n.y); r.setAttribute("width",n.w); r.setAttribute("height",h); r.setAttribute("rx",9);
+  g.appendChild(r);
+  const t1=document.createElementNS(NS,"text");
+  t1.setAttribute("x",n.x); t1.setAttribute("y",n.y+h/2-4); t1.setAttribute("text-anchor","middle"); t1.setAttribute("class","t1"); t1.textContent=n.t;
+  g.appendChild(t1);
+  const t2=document.createElementNS(NS,"text");
+  t2.setAttribute("x",n.x); t2.setAttribute("y",n.y+h/2+13); t2.setAttribute("text-anchor","middle"); t2.setAttribute("class","t2"); t2.textContent=n.s;
+  g.appendChild(t2);
+  g.addEventListener("click",ev=>{ev.stopPropagation();select(n.id);});
+  g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();select(n.id);}});
+  svg.appendChild(g); nodeEls[n.id]=g;
+});
+
+/* ---------- selection + panel ---------- */
+const insp=document.getElementById("insp");
+let selected=null;
+function reset(){
+  selected=null; svg.classList.remove("dimmed");
+  Object.values(nodeEls).forEach(g=>{g.classList.remove("sel","lit");});
+  edgeEls.forEach((p,i)=>{p.classList.remove("lit"); if(EDGES[i].hid)p.classList.add("hidden");});
+  renderPanel("_intro");
+  insp.classList.remove("open");
+}
+function select(id){
+  selected=id; svg.classList.add("dimmed");
+  Object.values(nodeEls).forEach(g=>g.classList.remove("sel","lit"));
+  edgeEls.forEach((p,i)=>{p.classList.remove("lit"); if(EDGES[i].hid)p.classList.add("hidden");});
+  nodeEls[id].classList.add("sel","lit");
+  EDGES.forEach((e,i)=>{
+    if(e.f===id||e.t===id){
+      edgeEls[i].classList.add("lit"); edgeEls[i].classList.remove("hidden");
+      nodeEls[e.f].classList.add("lit"); nodeEls[e.t].classList.add("lit");
+    }
+  });
+  renderPanel(id);
+  insp.classList.add("open");
+}
+function renderPanel(id){
+  const d=D[id]; if(!d){insp.innerHTML="";return;}
+  const famName={q:"Runs on headset data",c:"Runs on webcam data",g:"Shared machinery",o:"Output",r:"Deleted by the refactor",b:"Bounded corrector",park:"Parked"};
+  let h='<button class="closeb" id="closeb">Close</button>';
+  h+='<div class="fam '+(d.f==="park"?"g":d.f)+'"><i class="dot '+(d.f==="park"?"g":d.f)+'"></i>'+(d.tag||famName[d.f])+'</div>';
+  h+='<h2>'+d.t+'</h2>';
+  h+='<p class="lead">'+d.lead+'</p>';
+  if(FLOW[id]){h+='<div class="sec"><h3>Inside this box</h3>'+flowSvg(FLOW[id],d.f==="park"?"g":d.f)+'</div>';}
+  if(d.how){h+='<div class="sec"><h3>How it works</h3><ol>'+d.how.map(x=>'<li>'+x+'</li>').join('')+'</ol></div>';}
+  if(d.why){h+='<div class="sec"><h3>Worth knowing</h3><ul>'+d.why.map(x=>'<li>'+x+'</li>').join('')+'</ul></div>';}
+  if(d.plan){h+='<div class="sec"><h3>Refactor step</h3><ul>'+d.plan.map(x=>'<li>'+x+'</li>').join('')+'</ul></div>';}
+  if(id!=="_intro"){
+    const inn=EDGES.filter(e=>e.t===id), out=EDGES.filter(e=>e.f===id);
+    if(inn.length||out.length){
+      h+='<div class="sec"><h3>Connections</h3>';
+      inn.forEach(e=>{h+='<div class="conn"><span class="dir">in&nbsp;&larr;</span><span><a data-go="'+e.f+'">'+byId[e.f].t+'</a> <span class="lb">— '+e.l+'</span></span></div>';});
+      out.forEach(e=>{h+='<div class="conn"><span class="dir">out&nbsp;&rarr;</span><span><a data-go="'+e.t+'">'+byId[e.t].t+'</a> <span class="lb">— '+e.l+'</span></span></div>';});
+      h+='</div>';
+    }
+  }
+  const C=CODE[id];
+  if(C){
+    h+='<div class="sec"><h3>Files — today → after</h3>';
+    if(C.files){h+='<table class="ftab">'+C.files.map(x=>'<tr><td class="fp">'+x[0]+'</td><td class="fl">'+x[1]+'</td></tr>').join('')+'</table>';}
+    if(C.fns){h+='<ul class="fnlist">'+C.fns.map(x=>'<li><span class="fn">'+x[0]+'</span> — '+x[1]+'</li>').join('')+'</ul>';}
+    if(C.note){h+='<p style="margin-top:8px">'+C.note+'</p>';}
+    h+='</div>';
+  }
+  if(d.hist){h+='<div class="sec"><h3>'+(id==="_intro"?"The plan — nine phases, each gated":"The story")+'</h3>'+d.hist.map(x=>'<div class="hist"><span class="cc">'+x[0]+'</span><span class="tt">'+x[1]+'</span></div>').join('')+'</div>';}
+  if(d.data){h+='<div class="sec"><h3>Check it in the log</h3><div class="chips">'+d.data.map(x=>'<span class="chip">'+x+'</span>').join('')+'</div></div>';}
+  if(d.cvars){h+='<div class="sec"><h3>Key settings</h3><div class="chips">'+d.cvars.map(x=>'<span class="chip">'+x+'</span>').join('')+'</div></div>';}
+  if(d.note){h+='<div class="sec"><h3>Note</h3><p>'+d.note+'</p></div>';}
+  insp.innerHTML=h;
+  insp.querySelectorAll("[data-go]").forEach(a=>a.addEventListener("click",()=>select(a.dataset.go)));
+  const cb=document.getElementById("closeb"); if(cb)cb.addEventListener("click",reset);
+}
+svg.addEventListener("click",()=>reset());
+document.getElementById("resetb").addEventListener("click",reset);
+document.addEventListener("keydown",e=>{if(e.key==="Escape")reset();});
+renderPanel("_intro");
+</script>
+
+</html>
+
