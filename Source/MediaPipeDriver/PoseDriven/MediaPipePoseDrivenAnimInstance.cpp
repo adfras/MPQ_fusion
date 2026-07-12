@@ -121,6 +121,13 @@ FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeStateForKey(const uint32
 	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
 }
 
+FMediaPipeEmbodimentScaleRuntimeState& GetEmbodimentScaleRuntimeStateForKey(const uint32 Key)
+{
+	static FCriticalSection Lock;
+	static TMap<uint32, TUniquePtr<FMediaPipeEmbodimentScaleRuntimeState>> Store;
+	return FindOrAddKeyedRuntimeState(Lock, Store, Key);
+}
+
 namespace
 {
 #if WITH_DEV_AUTOMATION_TESTS
@@ -2525,6 +2532,7 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 			ResetQuestWristRuntimeState(RuntimeStateKey);
 			ResetFootContactRuntimeState(RuntimeStateKey);
 			ResetDerivedSignalRuntimeState(RuntimeStateKey);
+			ResetEmbodimentScaleRuntimeState(RuntimeStateKey);
 			ResetRotationSmoothing();
 			BodyState.ResetDerivedSignalReferences();
 			PoseStateResetReasonMask |= 0x4;
@@ -2596,6 +2604,11 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 	DriveArmCS(CSPose, true, DeltaSeconds);
 	DriveArmCS(CSPose, false, DeltaSeconds);
 	DriveArmTwistBonesCS(CSPose, DeltaSeconds);
+
+	// Report-only: measures the final solved pose against the avatar's native
+	// reference spans (AVATAR_METRIC_LOCK_PLAN Phase 0). Reads CSPose, writes
+	// nothing but keyed trace/latch state; gated on mp.EmbodimentScaleTrace.
+	EmitEmbodimentScaleTraceCS(CSPose, bBodyFusionPoseWritten);
 
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPosesSafe(CSPose, Output.Pose);
 

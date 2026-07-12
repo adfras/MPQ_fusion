@@ -91,6 +91,7 @@ FPoseYawAlignRuntimeState& GetPoseYawAlignRuntimeStateForKey(uint32 Key);
 FQuestWristRuntimeState& GetQuestWristRuntimeStateForKey(uint32 Key);
 FMediaPipeFootContactRuntimeState& GetFootContactRuntimeStateForKey(uint32 Key);
 FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeStateForKey(uint32 Key);
+FMediaPipeEmbodimentScaleRuntimeState& GetEmbodimentScaleRuntimeStateForKey(uint32 Key);
 
 namespace
 {
@@ -154,6 +155,16 @@ namespace
 	FMediaPipeForeshortenRuntimeState& GetForeshortenRuntimeState(uint32 Key)
 	{
 		return GetForeshortenRuntimeStateForKey(Key);
+	}
+
+	FMediaPipeEmbodimentScaleRuntimeState& GetEmbodimentScaleRuntimeState(uint32 Key)
+	{
+		return GetEmbodimentScaleRuntimeStateForKey(Key);
+	}
+
+	void ResetEmbodimentScaleRuntimeState(uint32 Key)
+	{
+		GetEmbodimentScaleRuntimeState(Key).Reset();
 	}
 
 	void ResetFootContactRuntimeState(uint32 Key)

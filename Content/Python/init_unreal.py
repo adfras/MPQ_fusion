@@ -69,6 +69,9 @@ try:
             "mp.WebcamAgeTrace",
             "mp.ForeshortenTrace",
             "mp.QuestWristTrace",
+            # Avatar metric lock Phase 0 (2026-07-12): per-actor native-vs-driven
+            # span rows + the dark S latch (AVATAR_METRIC_LOCK_PLAN).
+            "mp.EmbodimentScaleTrace",
         ):
             unreal.SystemLibrary.execute_console_command(None, _tracer + " 1")
         unreal.log("[AutoTrial] layered fusion applied at startup (CANDIDATE variant, worn A/B rig 2026-07-06; tracking-quality tracers armed 2026-07-12)")

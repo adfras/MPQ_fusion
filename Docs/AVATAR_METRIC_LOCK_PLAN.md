@@ -88,6 +88,88 @@ separate opt-in arc.
     request in the whole plan, only if a phase gate truly cannot be judged from
     PIE probes + existing replay data.
 
+## Writer census (Phase 0 deliverable, 2026-07-12)
+
+Every site that converts user-metric absolutes into pose-space targets, from a
+full source read; "rows" column filled from the Phase 0 PIE evidence. LIVE means
+the site can fire in the gold-standard live stack; FUSED means it needs
+`mp.BodyFusion.Enable` + `mp.BodyFusion.WritePose` + a usable fused pose
+(WritePose defaults 0 and is armed by replay-evaluation/dataset-capture flows,
+not the live trial lists).
+
+### Height writers (Phase 1 targets)
+
+| # | Site | User-metric absolute consumed | Writes | Verdict |
+| - | ---- | ----------------------------- | ------ | ------- |
+| H1 | `DriveBodyFusionPoseCS` pelvis, MediaPipePoseDrivenAnimInstance.cpp:1758+1784 | fused `Pose.Pelvis.LocationWorld` (world cm) | pelvis CS translation | FUSED; user-metric — map about floor by S |
+| H2 | `ApplyBodyFusionSpineTranslationTargets`, same file :1919-1975 (re-applied :1995, :2092) | fused pelvis→chest world span | spine01..05 CS translations (stretches torso) | FUSED; user-metric — follows H1/H3 once endpoints map |
+| H3 | fused neck/head translations + eye anchor, same file :2039-2097 | fused `Pose.Eye.LocationWorld` = HMD world; head placed so avatar EYE lands on it | neck/neck02/head CS translations | FUSED; user-metric — map about floor by S |
+| H4 | raw-path pelvis compression, _BodyPoseSolve.cpp:264-336 | user hip/floor heights as a RATIO only | pelvis offset = avatar's own `ReferenceRigHipHeightCm` × alpha (down-only) | LIVE; CLEAN by construction (comment :301) |
+| H5 | HMD height scaffold, _BodyPoseSolve.cpp:63-114 + MediaPipeBodySolverMath.cpp:355-428 | HMD Z normalized to `CompressionAlpha01` | no pose write; supplies S's USER side (`BaselineHeadZ`) | LIVE; CLEAN; runs only on the raw path (skipped when fused writes) |
+| H6 | `DriveHmdHeadCS`, _BodyPoseSolve.cpp:1086 | HMD rotation only | head CS rotation | LIVE; CLEAN (no height) |
+| H7 | FK root grounding, _BodyPoseSolve.cpp:533-605 | none (avatar's own ball-vs-ref-floor delta, capped) | root translation | LIVE; bounded corrector; `rootOffZ` row field is the evidence |
+| H8 | embodiment calibration scale, MediaPipeEmbodimentCalibrationSolver.cpp:105 + EmbodiedFusionComponent.cpp:1147 | `Scale = clamp(max(DefaultEyeLocalOffset.Z, Observed)/Observed, 0.5, 1.8)` | scales fused-candidate MediaPipe landmarks into world | FUSED input path; avatar side is the SHARED 161.94 eye constant (`MakeBuiltInProfile` gives the whole cast the same eye offset; MediaPipeAvatarProfileResolver.cpp:26 just copies it), so Scale≈1 for any user at least that tall — the "avatar height" never comes from the actual mesh |
+| H9 | best-available head fallback, EmbodiedFusionComponent.cpp:920 | raw HMD world location | `BestAvailablePose.HeadLocationWorld` (movement replica fallback) | Replica-only; not a skeletal pose write |
+
+### Arm endpoint writers (Phase 2 targets)
+
+| # | Site | User-metric absolute consumed | Writes | Verdict |
+| - | ---- | ----------------------------- | ------ | ------- |
+| A1 | Quest wrist endpoint, _QuestSpaceMapping.cpp:556 → :502/:538, applied _QuestArmSolve.cpp:1028-1030 | raw Quest wrist world; mapped about the avatar eye anchor with USER-metric HMD-relative offsets (MediaPipeAvatarEmbodimentProfile.cpp:663-679) | arm chain endpoint target | LIVE; user-metric — scale about shoulder by per-arm ratio |
+| A2 | calibrated user reach, _QuestArmSolve.cpp:1221-1230 (forward reach), :1480-1516 (reach-scale), measured :1534-1735 | live shoulder→wrist distances (user cm) | reach clamp/normalization | LIVE; already clamped into the avatar envelope (`MaxReachCm` from Ref arm lens) — verify from rows, then per-arm ratio mapping |
+| A3 | camera-path wrist, _QuestArmSolve.cpp:318-325; overhead rescue :341-378 | MediaPipe wrist world | arm endpoint when camera owns the arm | LIVE; user-metric — Phase 2 target |
+| A4 | full-arm-chain retarget, MediaPipeMetaHumanArmRetargeter.cpp:49-72 | source directions only | avatar-native-length chain (ReferenceArmLengths from the TARGET skeleton ref pose, MediaPipeMetaHumanProfile.cpp:229-277) | CLEAN |
+| A5 | chain-reach extension, MediaPipeReachExtender.cpp:25-35 + :67-84 | source-native FRACTION only | extension of avatar-native reach, capped 8cm | CLEAN (prove from rows, plan requirement) |
+
+### Leg writers (Phase 3 targets)
+
+| # | Site | User-metric absolute consumed | Writes | Verdict |
+| - | ---- | ----------------------------- | ------ | ------- |
+| L1 | `RefThighLen`/`RefCalfLen` sourcing, _ReferenceCache.cpp:812-813 | none (TARGET skeleton ref pose) | leg reference lengths | CLEAN — plan's verification requirement met in source; rows re-confirm |
+| L2 | leg IK ankle target, _LegSolve.cpp:1136-1144 | `HipPosComp + (AnkleWorld - HipWorld)` — user-metric leg vector | ankle IK target (planted snaps to avatar rig floor) | user-metric — Phase 3 |
+| L3 | direct-segment solve, _LegSolve.cpp:1363-1366 + foot-lock pin :1373-1444 | source directions only | ankle from avatar-native `RefThighLen`/`RefCalfLen` | CLEAN |
+
+### W0 — VERDICT: the plan's premise was a measurement artifact (Phase 0, 2026-07-12)
+
+The tracer rows + asset probes overturned the "problem (measured)" section.
+Chain of evidence, every step reproducible from the committed baseline files:
+
+1. **The drive is not stretching anyone.** Canonical-replay rows: driven spans
+   vs the target skeleton's reference pose are 0.993–1.007 on Kellan, Manny AND
+   EMORY; leg/arm segment sums exactly 1.000 (no translation-stretch anywhere).
+2. **"Driven Emory 88.6/147.2" is his reference pose.** A bare spawned
+   `m_srt_unw_body` and the full idle `BP_Emory` (whole MetaHuman stack, zero
+   MediaPipe) hold pelvis 88.6 / head 147.2. The 2026-07-12 "live-driven" PIE
+   probe measured the same numbers because bone-Z probes return the reference
+   pose whether or not anything drives.
+3. **The asset is internally CONSISTENT at short-adult scale.** The runtime
+   inverse-bind matrices equal the reference skeleton (bindK = 1.000 in the
+   `mp.EmbodimentScaleTrace.Bind` rows — on every cast member including Emory),
+   and idle Emory RENDERS at skeleton height (side-by-side scene captures:
+   `Docs/avatar_metric_lock_baseline/phase0_idle_emory.png`) — a short teen
+   figure, not a 97cm child.
+4. **The "bind-pose height ~97.3 cm" was imported-bounds packaging, not
+   stature.** Cast survey of `SkeletalMesh.get_bounds()` top vs the neck_01
+   bone: Wallace 0.955, Kellan 0.937 — but Emory 0.705, **Hudson (the TALL
+   body!) 0.706**, Maria 0.716, Payton 0.726. Four avatars share Emory's "71%"
+   ratio; it is how srt/tal/female body assets are packaged. Comparing Emory's
+   bounds metadata (97.3) with Kellan's (136.6) and reading it as body height
+   was a category error; head-bone stature says Emory = 94.5% of Kellan — a
+   short adult by authoring (m_srt_unw), exactly what he renders at.
+
+So: **there is no ~130% stretch, no child body in the project, and no defect in
+the height path** — "driven at native size, user pose in control" is already
+true of the accepted stack (rows). The census tables above stand as the map of
+where USER-metric absolutes genuinely enter (they matter live: the Quest wrist
+endpoint offsets are real user cm on an avatar whose arms are ~5-7% shorter),
+which is what `mp.AvatarMetricLock` maps in Phases 1-2. The plan's approx
+column ("native ~90/63") and the "~1.3 leg/torso stretch" Phase 0 gate clause
+are voided by this evidence per iron rule 1 (every verdict argued from rows);
+the corrected gate values are the measured native reference spans in
+`Docs/avatar_metric_lock_baseline/`.
+
+Phase 0 row evidence: `Docs/avatar_metric_lock_baseline/phase0_*`.
+
 ## Phases
 
 ### Phase 0 — Embodiment scale tracer + writer census (dark)

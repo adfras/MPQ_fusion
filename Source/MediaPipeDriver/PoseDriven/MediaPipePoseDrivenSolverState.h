@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MediaPipeBodySolverMath.h"
+#include "MediaPipeEmbodimentScaleMetrics.h"
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseHistoryRing.h"
 #include "MediaPipeQuestFingerSolver.h"
@@ -659,6 +660,22 @@ struct FMediaPipeForeshortenRuntimeState
 	void Reset()
 	{
 		*this = FMediaPipeForeshortenRuntimeState();
+	}
+};
+
+// Avatar metric lock (Docs/AVATAR_METRIC_LOCK_PLAN.md Phase 0, 2026-07-12). Keyed
+// (per-component) embodiment scale state: the once-per-session S latch plus the
+// mp.EmbodimentScaleTrace throttle. Keyed for the CacheBones reason - the latch is
+// session-lived cross-frame state; node members are wiped every live frame.
+struct FMediaPipeEmbodimentScaleRuntimeState
+{
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchState ScaleLatch;
+	// mp.EmbodimentScaleTrace ~1Hz throttle (keyed, per actor).
+	double TraceLastLogTimeSeconds = -1.0;
+
+	void Reset()
+	{
+		*this = FMediaPipeEmbodimentScaleRuntimeState();
 	}
 };
 

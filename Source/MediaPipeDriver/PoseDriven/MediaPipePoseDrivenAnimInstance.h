@@ -743,6 +743,11 @@ private:
 	void DriveArmTwistBonesCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveLegCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
 	void EmitLegScaffoldDiagnostics(float DeltaSeconds);
+	// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 0, 2026-07-12): per-actor ~1Hz
+	// mp.EmbodimentScaleTrace rows measuring the FINAL solved pose against the avatar's
+	// native reference spans, plus the dark once-per-session embodiment scale latch.
+	// Report-only: reads CSPose, mutates only keyed trace/latch state.
+	void EmitEmbodimentScaleTraceCS(FCSPose<FCompactPose>& CSPose, bool bBodyFusionPoseWritten);
 	// Anatomical wrist envelope, LAST op before every wrist bone write (quest/held/
 	// camera). Phase 0 (2026-07-11): mp.WristLimitTrace report-only rows. Phase 2:
 	// mp.WristAnatomicalClamp additionally clamps the returned rotation's swing/twist
