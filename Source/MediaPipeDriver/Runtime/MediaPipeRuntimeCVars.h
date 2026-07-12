@@ -331,6 +331,11 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugWeight;
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugMinCm;
 	extern TAutoConsoleVariable<float> CVarMediaPipeClavicleShrugFullCm;
+	extern TAutoConsoleVariable<int32> CVarShrugRestRefDownGate;
+	extern TAutoConsoleVariable<float> CVarShrugRestRefDownBandCm;
+	extern TAutoConsoleVariable<float> CVarShrugRestRefInBandDownHalfLifeS;
+	extern TAutoConsoleVariable<float> CVarShrugDeadbandCm;
+	extern TAutoConsoleVariable<float> CVarShrugLiftGain;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeHolisticShoulderSolve;
 	extern TAutoConsoleVariable<float> CVarMediaPipeShoulderLiftTranslationScale;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeShoulderRollbackTrace;
@@ -357,4 +362,30 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarMediaPipePoseYawAlignMaxSpeedDegreesPerSecond;
 	extern TAutoConsoleVariable<float> CVarMediaPipePoseYawAlignRejectJumpDegrees;
 	extern TAutoConsoleVariable<int32> CVarMediaPipeTorsoDebug;
+	// Tracking-quality tracers (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11; report-only).
+	extern TAutoConsoleVariable<int32> CVarFootSkateTrace;
+	extern TAutoConsoleVariable<int32> CVarWristLimitTrace;
+	extern TAutoConsoleVariable<int32> CVarWebcamAgeTrace;
+	extern TAutoConsoleVariable<int32> CVarForeshortenTrace;
+	// Avatar metric lock tracer (AVATAR_METRIC_LOCK_PLAN Phase 0, 2026-07-12; report-only).
+	extern TAutoConsoleVariable<int32> CVarEmbodimentScaleTrace;
+	// Avatar metric lock feature (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12; default 0, candidate-armed).
+	extern TAutoConsoleVariable<int32> CVarAvatarMetricLock;
+	// Tracking-quality features (TRACKING_QUALITY_PLAN 2026-07, default 0, candidate-armed).
+	extern TAutoConsoleVariable<int32> CVarMediaPipeTimestampAlignedResiduals;
+	extern TAutoConsoleVariable<int32> CVarWristAnatomicalClamp;
+	extern TAutoConsoleVariable<float> CVarWristTwistRangeDeg;
+	extern TAutoConsoleVariable<float> CVarWristSwingRangeDeg;
+	extern TAutoConsoleVariable<int32> CVarMediaPipeForeshortenZDistrust;
+	extern TAutoConsoleVariable<int32> CVarFootContactDetect;
+	extern TAutoConsoleVariable<float> CVarFootContactAcquireHeightCm;
+	extern TAutoConsoleVariable<float> CVarFootContactReleaseHeightCm;
+	extern TAutoConsoleVariable<float> CVarFootContactAcquireSpeedCmS;
+	extern TAutoConsoleVariable<float> CVarFootContactReleaseSpeedCmS;
+	extern TAutoConsoleVariable<float> CVarFootContactEnterDwellSeconds;
+	extern TAutoConsoleVariable<float> CVarFootContactExitDwellSeconds;
+	extern TAutoConsoleVariable<int32> CVarFootLock;
+	extern TAutoConsoleVariable<float> CVarFootLockMaxCorrectionCm;
+	extern TAutoConsoleVariable<float> CVarFootLockReanchorCmPerSec;
+	extern TAutoConsoleVariable<float> CVarFootLockReleaseBlendSeconds;
 }

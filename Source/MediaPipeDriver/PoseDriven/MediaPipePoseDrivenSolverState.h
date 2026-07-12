@@ -2,8 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "MediaPipeBodySolverMath.h"
+#include "MediaPipeEmbodimentScaleMetrics.h"
 #include "MediaPipePoseDiagnostics.h"
+#include "MediaPipePoseHistoryRing.h"
 #include "MediaPipeQuestFingerSolver.h"
+#include "MediaPipeTrackingQualityMetrics.h"
 
 static constexpr int32 MediaPipeQuestStateFingerBoneCount = 19;
 static constexpr int32 MediaPipeQuestStateMetacarpalOffset = 15;
@@ -62,6 +65,12 @@ struct FMediaPipeBodySolverState
 	float BodyYawCameraCorrectionDeg = 0.0f;
 	bool bHasBodyYawCamAnchor = false;
 	float BodyYawCamAnchorDeg = 0.0f;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): recent
+	// APPLIED body yaw so the heading learner can compare the camera's shoulder-line yaw
+	// against the yaw at the measurement's effective capture time. Pushed ONLY while
+	// mp.MediaPipeTimestampAlignedResiduals=1 (byte-inert disarmed). Lives here beside
+	// the corrector state it serves (this struct's live survival is field-proven).
+	MediaPipePoseHistory::FMediaPipeYawHistoryRing AppliedYawHistory;
 	// Fusion-path clavicle shrug (DriveClavicleShrugCS): per-side asymmetric rest reference
 	// (camera shoulder height above hip-mid, cm; sentinel -10000 = unset) and the smoothed
 	// applied lift sine. Keyed store: node members are wiped by CacheBones in live sessions.
@@ -561,6 +570,35 @@ struct FMediaPipeFootContactSideRuntimeState
 	int32 FloorBucketIndex = 0;
 	bool bFloorBucketsInit = false;
 
+	// mp.FootSkateTrace row throttle (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11). Keyed
+	// here (not a node member) so live CacheBones resets cannot turn the 4 Hz row into
+	// frame-rate spam - the mp.ArmOverheadRescue 3,522-rows/side lesson.
+	double FootSkateTraceLastLogTimeSeconds = -1.0;
+
+	// Foot contact detector (TRACKING_QUALITY_PLAN Phase 4a, 2026-07-11,
+	// mp.FootContactDetect): hysteresis + dwell state machine over height/velocity,
+	// frozen on distrusted measurements. Keyed for the CacheBones reason; written only
+	// while the detector CVar is armed.
+	MediaPipeTrackingQualityMetrics::FFootContactDetectorState ContactDetector;
+	double ContactDetectLastUpdateTimeSeconds = -1.0;
+
+	// Foot lock (Phase 4b, mp.FootLock): world-space pin captured at contact entry,
+	// cm-bounded re-anchor, eased release. Written only while the lock CVar is armed.
+	bool bFootLockEngaged = false;
+	FVector FootLockPinWorld = FVector::ZeroVector;
+	// 1 while locked; decays over mp.FootLockReleaseBlendSeconds after release so the
+	// leg blends back to the raw solve instead of snapping.
+	float FootLockReleaseAlpha = 0.0f;
+	double FootLockLastUpdateTimeSeconds = -1.0;
+
+	// Rendered-ankle speed tracer support (Phase 4a: the >=80% skate-reduction
+	// scoreboard measures the WRITTEN foot, not the source landmarks). Updated only
+	// while mp.FootSkateTrace is armed.
+	bool bHasPrevRenderedAnkle = false;
+	FVector PrevRenderedAnkleWorld = FVector::ZeroVector;
+	double PrevRenderedSampleTimeSeconds = -1.0;
+	float LastRenderedAnkleSpdCmS = -1.0f;
+
 	void Reset()
 	{
 		*this = FMediaPipeFootContactSideRuntimeState();
@@ -576,6 +614,68 @@ struct FMediaPipeFootContactRuntimeState
 	{
 		Left.Reset();
 		Right.Reset();
+	}
+};
+
+// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11). Keyed
+// (per-component) segment-foreshortening state: decaying-max image-plane lengths and
+// the smoothed distrust alphas per limb segment. Keyed for the CacheBones reason -
+// smoothed alphas and length maxima are cross-frame state; node members are wiped every
+// live frame. Written ONLY while mp.MediaPipeForeshortenZDistrust is armed.
+enum EMediaPipeForeshortenSegment : uint8
+{
+	MediaPipeForeshortenSegment_Thigh = 0,
+	MediaPipeForeshortenSegment_Shin = 1,
+	MediaPipeForeshortenSegment_UpperArm = 2,
+	MediaPipeForeshortenSegment_Forearm = 3,
+	MediaPipeForeshortenSegment_Count = 4,
+};
+
+struct FMediaPipeForeshortenSegmentState
+{
+	bool bHasPlanarMax = false;
+	// Decaying-max image-plane segment length (raw camera-space units).
+	float PlanarMax = 0.0f;
+	// Smoothed distrust alpha: 0 = trusted (in-plane), 1 = fully foreshortened.
+	float DistrustAlpha = 0.0f;
+	// Last raw ratio (trace evidence).
+	float LastRatio = 1.0f;
+};
+
+struct FMediaPipeForeshortenSideState
+{
+	FMediaPipeForeshortenSegmentState Segments[MediaPipeForeshortenSegment_Count];
+};
+
+struct FMediaPipeForeshortenRuntimeState
+{
+	FMediaPipeForeshortenSideState Left;
+	FMediaPipeForeshortenSideState Right;
+	// New-frame dedup + wall-clock step (DeltaSeconds can be 0 in Evaluate).
+	int64 LastPoseTimestampUs = -1;
+	double LastUpdateTimeSeconds = -1.0;
+	// mp.ForeshortenTrace throttle (keyed, per actor).
+	double ForeshortenTraceLastLogTimeSeconds = -1.0;
+
+	void Reset()
+	{
+		*this = FMediaPipeForeshortenRuntimeState();
+	}
+};
+
+// Avatar metric lock (Docs/AVATAR_METRIC_LOCK_PLAN.md Phase 0, 2026-07-12). Keyed
+// (per-component) embodiment scale state: the once-per-session S latch plus the
+// mp.EmbodimentScaleTrace throttle. Keyed for the CacheBones reason - the latch is
+// session-lived cross-frame state; node members are wiped every live frame.
+struct FMediaPipeEmbodimentScaleRuntimeState
+{
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchState ScaleLatch;
+	// mp.EmbodimentScaleTrace ~1Hz throttle (keyed, per actor).
+	double TraceLastLogTimeSeconds = -1.0;
+
+	void Reset()
+	{
+		*this = FMediaPipeEmbodimentScaleRuntimeState();
 	}
 };
 

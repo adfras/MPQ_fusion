@@ -35,6 +35,16 @@ struct FMediaPipeHeadingCorrectorInputs
 	float LeftShoulderCamZ = 0.0f;
 	float RightShoulderCamX = 0.0f;
 	float RightShoulderCamZ = 0.0f;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): the
+	// APPLIED body yaw at this measurement's effective capture time, sampled from
+	// BodyState.AppliedYawHistory at the call site ONLY while
+	// mp.MediaPipeTimestampAlignedResiduals is 1 and history covers the timestamp.
+	// When set, the LEARNER (anchor latch + closed-loop error) measures against that
+	// yaw - the camera's shoulder line is compared with the heading it actually saw.
+	// The applied correction itself is untouched; false = character-identical to the
+	// golden-locked original.
+	bool bHasAlignedTwistYawDeg = false;
+	float AlignedTwistYawDeg = 0.0f;
 };
 
 // The apply half: adds the learned correction to the target yaw when

@@ -100,9 +100,9 @@ Steps:
    ```bat
    D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe "D:\Epic\Unreal_Projects\TestingKit5\TestingKit5.uproject" -ExecCmds="Automation RunTests MediaPipe; Quit" -unattended -nopause -nosplash -log
    ```
-   Count `Test Completed. Result={Success}` lines in the log: **expect 164, zero
-   failures.** This exercises the corrector goldens byte-for-byte — if the copy or
-   toolchain were broken, this catches it.
+   Count `Test Completed. Result={Success}` lines in the log: **expect 208 (as of
+   2026-07-12 — the count only grows), zero failures.** This exercises the corrector
+   goldens byte-for-byte — if the copy or toolchain were broken, this catches it.
 3. Open the editor normally once. Checklist: no missing-plugin dialog, the Content
    Browser shows `Content/MetaHumans` (Kellan), the preview-room map opens without
    missing-actor errors.
@@ -118,6 +118,76 @@ Steps:
    is the RAW stack and looks broken — always verify before judging anything.
 4. VR Preview, stand in front of the webcam, judge in the mirror. The mirror avatar
    is the only judge that counts.
+
+### 7b. Choosing the mirror avatar (Kellan / Maria / Wallace / Emory / Hudson / Payton / Manny)
+
+The selector is a PROPERTY ON THE PLACED PAWN, not a console variable. Verified
+2026-07-12 (PIE spawned `MP_LiveMetaHumanEmory` + self-view, profile resolved
+`active=1 valid=1`).
+
+**The one-line way (any machine, no agent, no editor UI):** in the editor console,
+while NOT playing:
+
+```
+mp.MirrorAvatar Emory
+```
+
+then press VR Preview. The command writes the placed pawn's properties (the real
+selector) and aligns the runtime CVars. Run it with no argument to print the current
+selection and the valid ids (`Wallace`, `Emory`, `Hudson`, `Kellan`, `Maria`,
+`Payton`, `Manny`). `mp.MirrorAvatar Manny` switches the pawn to the internal Manny
+baseline (`Avatar Type` non-MetaHuman, `mp.AutoQuestAvatar 0`); any cast name
+switches back to MetaHuman mode automatically. If a session is already running the
+command stores the choice for the NEXT preview and deliberately leaves the live
+session alone.
+
+Equivalent manual path: select **`MP_PlacedEmbodiedMetaHumanPawn`** in the Outliner
+and set its **`Avatar Type`** / **`MetaHuman Profile Id`** in the Details panel. The
+placed `MP_LiveMediaPipeManny` reference runs alongside every session regardless of
+this selection.
+
+### 7c. The showcase loop (zero-setup, any machine)
+
+A bare interactive editor boot needs NOTHING typed before the first preview: the
+editor opens straight into the showcase room (`EditorStartupMap`), and
+`Content/Python/init_unreal.py` arms the whole gold standard — candidate variant,
+live trial, heavy pose model, and every tracer — at startup (interactive boots only;
+automation keeps raw defaults). The loop is:
+
+1. Open the editor (double-click the `.uproject`). Optional sanity check:
+   `mp.DumpLiveProfileSettings` → candidate variant, rescue/legs/panel at 1.
+2. **VR Preview** → showcase the current avatar → **Esc** to stop.
+3. `mp.MirrorAvatar Maria` (or any cast id) → **VR Preview** again. Repeat.
+4. Nothing needs re-arming between sessions — variant, trial, and tracers survive
+   preview stop/start. The avatar choice resets to the level's saved default on the
+   next editor restart unless you save the level (Ctrl+S) after switching. The
+   showcase room's saved default is **Emory** (level save 2026-07-12), so a fresh
+   boot demos Emory with zero typing.
+
+**Why `mp.MetaHumanActiveProfile` alone does NOT work here, and is dangerous
+mid-session:** the placed pawn re-applies its own property to that CVar at every play
+start (`ApplySelectedAvatarProfileToRuntimeCVars`), so a console pre-set is silently
+overwritten. Worse, changing the CVar DURING a session makes the spawned avatar's
+profile "not active", which hard-disables the full arm-chain retargeter
+(`MediaPipeMetaHumanArmRetargeter.cpp` rejects with "profile X is not active") — the
+avatar stays visible but its shoulders/arms collapse to the legacy path and look
+mangled. If you ever see that: `mp.MetaHumanActiveProfile <the avatar actually in the
+room>` restores it instantly, no restart needed.
+
+### 7d. Avatar sizes are native (and the metric lock, 2026-07-12)
+
+Every cast member drives at its own authored stature - the AVATAR_METRIC_LOCK_PLAN
+Phase 0 audit measured driven == reference pose within a few percent on the whole
+cast (`Docs/avatar_metric_lock_baseline/phase4_cast_audit.md` has the per-avatar
+bone-Z table; Emory is an authored SHORT ADULT at 94.5% of Kellan - the old "child
+at 130%" reading was an imported-bounds artifact). `mp.AvatarMetricLock` (candidate
+stack, default 0) additionally maps the fused-pose height targets about the floor by
+a once-per-session embodiment scale S = avatar eye height / your standing HMD
+baseline, so an avatar keeps ITS stature under a taller/shorter user whenever the
+fused pose writer (`mp.BodyFusion.WritePose`) is armed; the accepted live stack runs
+that writer off, so the lock is dark there. Bisect live, no restart:
+`mp.AvatarMetricLock 0` <-> `1`. Per-actor evidence rows: `mp.EmbodimentScaleTrace`
+(boot-armed, native-vs-driven spans + the latched S and its inputs).
 
 ## 8. Getting Claude (or any agent) up to speed at work
 

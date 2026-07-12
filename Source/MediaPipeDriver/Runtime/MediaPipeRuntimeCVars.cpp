@@ -1623,6 +1623,61 @@ namespace MediaPipeRuntimeCVars
 		8.0f,
 		TEXT("Shoulder-height rise in centimeters that reaches full MediaPipe clavicle shrug response."));
 
+	// Squat-proof shrug rest reference (2026-07-12, worn shoulder-drift session). The
+	// 2026-07-09 quiet gate protected the shrug rest baseline from learning UP during
+	// lifts but left the fast 2.5s DOWN-adapt ungated: the worn squat/knee-raise segment
+	// compressed the measured shoulder-above-hip height to ~40cm for ~30s, the baseline
+	// learned it as posture, and after standing the leftover >2.5cm "elevation" froze
+	// up-recovery at the 600s active rate - Kellan held a 6-12cm left shrug for the rest
+	// of the session (mp.ClavicleShrugFusion: restRef 47 -> 40 while heightCm returned to
+	// 46-53). The gate mirrors the up direction: drops deeper than the band below rest
+	// are an active pose (squat, forward lean), not a new rest posture.
+	TAutoConsoleVariable<int32> CVarShrugRestRefDownGate(
+		TEXT("mp.ShrugRestRefDownGate"),
+		0,
+		TEXT("When non-zero, the clavicle-shrug rest reference's fast (2.5s) down-adapt only applies within mp.ShrugRestRefDownBandCm below the current rest reference; deeper drops (squat / forward-lean compressed torso) learn at the same 600s half-life as active lifts. Default 0 = legacy ungated down-adapt (a sustained squat re-bases rest and reads as a standing shrug afterwards)."));
+
+	TAutoConsoleVariable<float> CVarShrugRestRefDownBandCm(
+		TEXT("mp.ShrugRestRefDownBandCm"),
+		2.5f,
+		TEXT("Band (cm) below the shrug rest reference that still counts as posture settling for mp.ShrugRestRefDownGate - matches the 2.5cm near-rest band of the up-adapt quiet gate."));
+
+	// Symmetric in-band rest-ref learning (2026-07-12, worn Emory right-shrug session).
+	// The down-gate above stopped DEEP drops from re-basing rest, but the in-band down
+	// path still learned at 2.5s while in-band up-recovery ran 90s - a 36x asymmetry
+	// that makes the reference track the LOWER ENVELOPE of shoulder noise instead of
+	// its mean. Worn rows: both rest refs sagged ~2.7cm over 4.5 minutes (L 48.9->46.0,
+	// R 45.8->43.2), the right ref sat ~3cm low throughout and rendered ~2x the left's
+	// applied shrug (median 4.5 vs 2.05cm) with minutes-long recovery; Manny on the
+	// same camera feed showed the identical bias, so the ratchet - not the avatar - is
+	// the mechanism. At the candidate 90s the in-band down learner is symmetric with
+	// the up direction and noise averages out instead of ratcheting. Trade-off: a
+	// genuine slouch now converges over minutes, not seconds - the same contract the
+	// up direction has always had ("posture shifts still converge over minutes").
+	TAutoConsoleVariable<float> CVarShrugRestRefInBandDownHalfLifeS(
+		TEXT("mp.ShrugRestRefInBandDownHalfLifeS"),
+		2.5f,
+		TEXT("Half-life (seconds) of the clavicle-shrug rest reference's fast down-adapt - the in-band region (0..mp.ShrugRestRefDownBandCm below the reference) when mp.ShrugRestRefDownGate is armed, or every below-rest sample when the gate is 0 (deeper drops then use the gated 600s rate). Engine default 2.5 = legacy fast-down (the reference ratchets toward the lower noise envelope and inflates applied shrug); 90 makes down-learning symmetric with the in-band up direction so noise averages out."));
+
+	// Small-lift shrug response (2026-07-12, worn session): a real arms-down trap shrug
+	// only moves the webcam shoulder LANDMARK 1.5-3cm (the keypoint sits at the joint
+	// center, which rises far less than the traps), while arm raises lift the measured
+	// shoulder 5-9cm. The fixed 1.5cm soft-knee deadband therefore ate most of a real
+	// shrug (rows 00:12:41-44: peak appliedCm 3.5 decaying to 0.5 while the user held a
+	// shrug) but passed arm-raise elevation in full - "shoulders only shrug when I
+	// stretch my arms". Both knobs default to the legacy constants (bit-identical);
+	// the candidate variant arms 1.0cm / 1.5x. The knee still zeroes resting jitter
+	// FIRST - the gain only amplifies what survives the deadband.
+	TAutoConsoleVariable<float> CVarShrugDeadbandCm(
+		TEXT("mp.ShrugDeadbandCm"),
+		1.5f,
+		TEXT("Soft-knee deadband (cm) on shoulder elevation over the shrug rest reference - elevation at or below this applies zero clavicle lift (kills resting jitter/breathing), and the knee restores full amplitude a few cm above it. Engine default 1.5 = the legacy hardcoded constant."));
+
+	TAutoConsoleVariable<float> CVarShrugLiftGain(
+		TEXT("mp.ShrugLiftGain"),
+		1.0f,
+		TEXT("Multiplier on the post-deadband shrug lift (before the rig-scale and the 14cm clamp). Amplifies the webcam's small arms-down shrug signal without re-admitting rest noise (the deadband zeroes noise before the gain applies). Engine default 1.0 = legacy."));
+
 	TAutoConsoleVariable<int32> CVarMediaPipeHolisticShoulderSolve(
 		TEXT("mp.MediaPipeHolisticShoulderSolve"),
 		0,
@@ -1752,4 +1807,160 @@ namespace MediaPipeRuntimeCVars
 		TEXT("mp.MediaPipeTorsoDebug"),
 		0,
 		TEXT("When non-zero, log the live MediaPipe torso basis and the clamped basis used by Manny once per second."));
+
+	// --- Tracking-quality tracers (Docs/TRACKING_QUALITY_PLAN.md Phase 0, 2026-07-11).
+	// Report-only rows, armed manually per session like mp.MediaPipeCameraHandTrace;
+	// deliberately NOT in any settings-variant list. Throttles live in the keyed
+	// runtime stores (per actor+side), never in node members.
+
+	TAutoConsoleVariable<int32> CVarFootSkateTrace(
+		TEXT("mp.FootSkateTrace"),
+		0,
+		TEXT("When non-zero, emit per-foot mp.FootSkateTrace rows from the leg solve: provisional contact label (height+velocity), planar/vertical foot speed, lift above the observed source floor, and rendered-ankle penetration below the rig's planted height. The foot-skate scoreboard for TRACKING_QUALITY_PLAN Phase 0/4; report-only, no behavior change."));
+
+	TAutoConsoleVariable<int32> CVarWristLimitTrace(
+		TEXT("mp.WristLimitTrace"),
+		0,
+		TEXT("When non-zero, emit mp.WristLimitTrace rows at every final wrist write (quest/held/camera paths): swing+twist of the written hand rotation away from the neutral wrist pose on the current forearm, and how far outside the report-only anatomical envelope it sits. Measures what a Phase 2 anatomical clamp WOULD have caught; report-only, no behavior change."));
+
+	TAutoConsoleVariable<int32> CVarEmbodimentScaleTrace(
+		TEXT("mp.EmbodimentScaleTrace"),
+		0,
+		TEXT("When non-zero, emit per-actor ~1Hz mp.EmbodimentScaleTrace rows from the final solved pose: native reference spans (hip height, pelvis->head torso chain, per-side leg and arm segment sums) vs the driven spans measured from the posed component-space transforms, the per-region stretch ratios, the dark once-per-session embodiment scale latch S = avatar ref height / user standing ref (plus its raw inputs), and the per-writer contribution evidence (fused-pose write flag + owners + world target heights, HMD scaffold state, FK root grounding offset, believed avatar eye height). AVATAR_METRIC_LOCK_PLAN Phase 0; report-only, no behavior change."));
+
+	TAutoConsoleVariable<int32> CVarAvatarMetricLock(
+		TEXT("mp.AvatarMetricLock"),
+		0,
+		TEXT("When non-zero, map user-metric ABSOLUTE pose targets into avatar space using the once-per-session embodiment scale latch S = avatar reference height / user standing reference height (HMD scaffold baseline preferred, camera standing-hip fallback; latch-once, never a live learner). Phase 1 scope: every fused-pose world target height is mapped about the stage floor by S before DriveBodyFusionPoseCS consumes it - the avatar keeps ITS stature when the user is taller/shorter; the user's POSE (angles, timing, planar motion) is untouched. Inert until the latch fires and mp.BodyFusion.WritePose arms the fused writes (the accepted live stack runs WritePose=0, so this is dark there by construction). Default 0 = byte-identical legacy behavior. AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12."));
+
+	// Foot contact + lock (TRACKING_QUALITY_PLAN Phase 4, 2026-07-11). 4a: per-foot
+	// contact detector - height above the observed source floor + planar/upward ankle
+	// velocity, with HYSTERESIS (separate acquire/release thresholds) and entry/exit
+	// DWELLS (the bias-eraser switch recipe; the live direct-segment leg path has no
+	// plant subsystem at all - the June plant lock exists only on the IK path, which
+	// the live trial runs disabled). The detector consumes the Phase-3-cleaned ankle
+	// reliability and FREEZES on distrusted frames. 4b: while in contact the rendered
+	// foot pins at its contact-entry world position (cm-bounded re-anchor for slow
+	// drift, hard cap on the applied correction so a bad label can never drag a leg),
+	// solved through the EXISTING leg chain - two-bone to the pin with the
+	// scaffold-corrected directions as the plane/pole, eased release.
+	TAutoConsoleVariable<int32> CVarFootContactDetect(
+		TEXT("mp.FootContactDetect"),
+		0,
+		TEXT("When non-zero, run the per-foot contact detector (height + velocity, hysteresis + dwells, keyed state, frozen on distrusted measurements). Report-only by itself - mp.FootSkateTrace rows carry the contact state; mp.FootLock consumes it. TRACKING_QUALITY_PLAN Phase 4a; default 0."));
+
+	TAutoConsoleVariable<float> CVarFootContactAcquireHeightCm(
+		TEXT("mp.FootContactAcquireHeightCm"),
+		4.0f,
+		TEXT("Contact acquire: foot must be within this height (cm) above the observed source floor. Release uses mp.FootContactReleaseHeightCm (hysteresis)."));
+
+	TAutoConsoleVariable<float> CVarFootContactReleaseHeightCm(
+		TEXT("mp.FootContactReleaseHeightCm"),
+		7.0f,
+		TEXT("Contact release: foot leaving contact must exceed this height (cm) above the observed source floor (or the release speed thresholds)."));
+
+	TAutoConsoleVariable<float> CVarFootContactAcquireSpeedCmS(
+		TEXT("mp.FootContactAcquireSpeedCmS"),
+		15.0f,
+		TEXT("Contact acquire: planar foot speed (cm/s) must be at or below this."));
+
+	TAutoConsoleVariable<float> CVarFootContactReleaseSpeedCmS(
+		TEXT("mp.FootContactReleaseSpeedCmS"),
+		40.0f,
+		TEXT("Contact release: planar foot speed (cm/s) at or above this releases contact (with the exit dwell)."));
+
+	TAutoConsoleVariable<float> CVarFootContactEnterDwellSeconds(
+		TEXT("mp.FootContactEnterDwellSeconds"),
+		0.10f,
+		TEXT("Seconds the acquire conditions must hold before contact latches."));
+
+	TAutoConsoleVariable<float> CVarFootContactExitDwellSeconds(
+		TEXT("mp.FootContactExitDwellSeconds"),
+		0.08f,
+		TEXT("Seconds the release conditions must hold before contact unlatches."));
+
+	TAutoConsoleVariable<int32> CVarFootLock(
+		TEXT("mp.FootLock"),
+		0,
+		TEXT("When non-zero (and mp.FootContactDetect is on), pin each in-contact rendered foot at its contact-entry world position: two-bone solve to the pin through the scaffold-corrected leg directions, cm-bounded re-anchor, hard correction cap, eased release. TRACKING_QUALITY_PLAN Phase 4b; default 0."));
+
+	TAutoConsoleVariable<float> CVarFootLockMaxCorrectionCm(
+		TEXT("mp.FootLockMaxCorrectionCm"),
+		10.0f,
+		TEXT("Hard cap (cm) on the pin correction - a bad contact label can never drag a leg further than this."));
+
+	TAutoConsoleVariable<float> CVarFootLockReanchorCmPerSec(
+		TEXT("mp.FootLockReanchorCmPerSec"),
+		2.0f,
+		TEXT("Slow re-anchor budget (cm/s): the pin drifts toward the raw solve at most this fast, absorbing source drift without visible slide."));
+
+	TAutoConsoleVariable<float> CVarFootLockReleaseBlendSeconds(
+		TEXT("mp.FootLockReleaseBlendSeconds"),
+		0.25f,
+		TEXT("Easing window (seconds) blending the leg back to the raw solve after contact release."));
+
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11). ManiPose
+	// insight, pragmatic form: 2D->3D lifting is ill-posed exactly when a limb segment's
+	// IMAGE-PLANE length collapses (segment pointing into the camera's depth axis). The
+	// per-segment ratio (current planar length / decaying-max planar length) uses only
+	// image-plane geometry - the suspect Z never feeds its own distrust. Distrust scales
+	// the landmark reliability fed to the solver's gates (arm-direction learn/vote, hand
+	// arm gate, leg stabilizer when enabled) and eases foreshortened LEG segment planar
+	// headings toward the sagittal plane (the azimuth is the ill-conditioned part; the
+	// image-reliable elevation - the raise cue - is preserved). NOTE: the leg solve's
+	// only reliability consumer (mp.MediaPipeLegReliabilityStabilize) is OFF by user
+	// acceptance (2026-06-13, full-extent legs), so the sagittal ease is the leg-side
+	// consumer of this signal - stateless target, bounded by the smoothed alpha, no
+	// learning, asymmetric engage/release smoothing.
+	TAutoConsoleVariable<int32> CVarMediaPipeForeshortenZDistrust(
+		TEXT("mp.MediaPipeForeshortenZDistrust"),
+		0,
+		TEXT("When non-zero, per-limb-segment image-plane foreshortening scales down the landmark reliability fed to Z consumers (dwell-smoothed, floor 0.25) and eases foreshortened leg segment planar headings toward the sagittal plane (elevation preserved). TRACKING_QUALITY_PLAN Phase 3; default 0 = no distrust."));
+
+	TAutoConsoleVariable<int32> CVarForeshortenTrace(
+		TEXT("mp.ForeshortenTrace"),
+		0,
+		TEXT("When non-zero, emit per-actor mp.ForeshortenTrace rows (4 Hz, keyed throttle): per limb segment the image-plane foreshorten ratio, the smoothed distrust alpha, and the applied reliability scale. Report-only; the distrust itself is gated by mp.MediaPipeForeshortenZDistrust."));
+
+	// Anatomical wrist clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11). Swing-twist
+	// guardrail on the FINAL wrist rotation, the LAST op before the bone write at every
+	// wrist write site (quest/held/camera - the same three sites the palm trim covers).
+	// A guardrail against anatomically impossible frames (the 2026-07-09 20-130deg flap
+	// class), NOT a stylistic limit: ranges are generous (Kenwright twist-and-swing;
+	// ECCV 2020 biomech hand constraints). Clamped frames never feed any learner - the
+	// clamp writes only the pose, never state; continuity/hold state keeps the unclamped
+	// value. Clamp events emit on mp.WristLimitTrace with the pre-clamp excess.
+	TAutoConsoleVariable<int32> CVarWristAnatomicalClamp(
+		TEXT("mp.WristAnatomicalClamp"),
+		0,
+		TEXT("When non-zero, clamp the final wrist rotation's twist (about the forearm axis) and swing (cone from the neutral wrist pose on the current forearm) to the anatomical ranges below, as the last operation before the wrist bone write. Guardrail only; in-range frames pass through bit-exactly. TRACKING_QUALITY_PLAN Phase 2; default 0 = no clamp."));
+
+	TAutoConsoleVariable<float> CVarWristTwistRangeDeg(
+		TEXT("mp.WristTwistRangeDeg"),
+		90.0f,
+		TEXT("Anatomical twist envelope (degrees, +-) about the forearm axis for mp.WristAnatomicalClamp - pronation/supination expressed at the hand-vs-lowerarm joint of the two-bone rig. Generous by design (biomech ~85-90)."));
+
+	TAutoConsoleVariable<float> CVarWristSwingRangeDeg(
+		TEXT("mp.WristSwingRangeDeg"),
+		85.0f,
+		TEXT("Anatomical swing-cone envelope (degrees) away from the neutral wrist pose for mp.WristAnatomicalClamp - flexion/extension (~80/70) and radial/ulnar deviation (~20/30) bounded by the widest direction as a single cone. Generous by design."));
+
+	// Timestamp-aligned corrector residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11).
+	// Out-of-sequence-measurement fix: a webcam measurement is ~80-130ms old at fuse time,
+	// so comparing it against the CURRENT pose manufactures phantom residuals during motion
+	// (the transient class behind the July arm arc). When 1, the arm-direction and heading
+	// learners compare each measurement against the buffered pose at the measurement's own
+	// effective capture time (capture timestamp + conditioner forward prediction; rings in
+	// the keyed store / body-solver state). Apply() is unchanged - corrections still apply
+	// to the current pose. Default 0 = byte-identical legacy behavior; candidate variant
+	// arms it for the Phase 6 worn A/B.
+	TAutoConsoleVariable<int32> CVarMediaPipeTimestampAlignedResiduals(
+		TEXT("mp.MediaPipeTimestampAlignedResiduals"),
+		0,
+		TEXT("When non-zero, corrector learners (arm direction, heading) compare webcam measurements against the buffered solved pose at the measurement's effective capture time instead of the current pose. Application of corrections is unchanged. TRACKING_QUALITY_PLAN Phase 1; default 0 = legacy current-pose residuals."));
+
+	TAutoConsoleVariable<int32> CVarWebcamAgeTrace(
+		TEXT("mp.WebcamAgeTrace"),
+		0,
+		TEXT("When non-zero, emit mp.WebcamAgeTrace rows at the arm-direction corrector call site: webcam measurement age at solve time (capture timestamp vs now), the conditioner's forward-prediction horizon, the effective residual age, and the camera-vs-chain direction residuals the corrector currently computes against the CURRENT pose - the number TRACKING_QUALITY_PLAN Phase 1 (timestamp-aligned residuals) is expected to shrink during motion. Report-only, no behavior change."));
 }

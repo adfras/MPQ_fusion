@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MediaPipePoseDiagnostics.h"
+#include "MediaPipePoseHistoryRing.h"
 
 struct FQuestHandRotationTrace;
 
@@ -156,6 +157,21 @@ struct FQuestWristSideRuntimeState
 	// per-actor-side timers survive resets and give every actor its own cadence.
 	double ArmRescueLastLogTimeSeconds = -1.0;
 	double QuestWristSolveLastLogTimeSeconds = -1.0;
+	// Tracking-quality tracer throttles (TRACKING_QUALITY_PLAN Phase 0, 2026-07-11):
+	// mp.WristLimitTrace (1 Hz status row + 4 Hz out-of-range event rows) and
+	// mp.WebcamAgeTrace (4 Hz). Keyed per actor-side for the same CacheBones /
+	// cross-actor starvation reasons as the throttles above; like them, deliberately
+	// not cleared by Reset().
+	double WristLimitTraceLastLogTimeSeconds = -1.0;
+	double WristLimitTraceLastEventLogTimeSeconds = -1.0;
+	double WebcamAgeTraceLastLogTimeSeconds = -1.0;
+	// Timestamp-aligned residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11): recent RAW
+	// chain arm poses (pre-correction shoulder/elbow/wrist) so the arm-direction learner
+	// can compare a webcam measurement against the chain at the measurement's effective
+	// capture time. Pushed ONLY while mp.MediaPipeTimestampAlignedResiduals=1 (byte-inert
+	// disarmed). Keyed for the CacheBones reason; not touched by Reset() - entries
+	// self-invalidate within the ~250ms window.
+	MediaPipePoseHistory::FMediaPipeArmChainHistoryRing ArmChainHistory;
 	// Quest-reach chain extension (mp.MediaPipeChainReachFromQuestHand, 2026-07-10): smoothed
 	// radial extension (cm) of the chain-direct wrist target toward the REAL hand-tracking
 	// wrist's reach fraction. Smoothed so tracked-flag flickers cannot pop the wrist; decays

@@ -162,8 +162,18 @@ void ApplyMediaPipeArmDirectionCorrection(
 				const FVector CamPlanar = CamDir - DepthAxis * FVector::DotProduct(CamDir, DepthAxis);
 				return (CamPlanar + DepthAxis * ChainDepth).GetSafeNormal();
 			};
-			const FVector ChainElbowDir = ChainElbowOffset.GetSafeNormal();
-			const FVector ChainWristDir = ChainWristOffset.GetSafeNormal();
+			// Timestamp-aligned residuals (Phase 1, 2026-07-11): when the call site supplied
+			// the chain arm at the measurement's effective capture time, the learner compares
+			// the camera against THAT pose - during motion the current-frame chain is
+			// ~80-130ms newer than what the camera saw, and the difference reads as a phantom
+			// standing bias. bHasAlignedChainArm=false reproduces the golden-locked original
+			// expressions exactly.
+			const FVector ChainElbowDir = In.bHasAlignedChainArm
+				? (In.AlignedChainElbowWorld - In.AlignedChainShoulderWorld).GetSafeNormal()
+				: ChainElbowOffset.GetSafeNormal();
+			const FVector ChainWristDir = In.bHasAlignedChainArm
+				? (In.AlignedChainWristWorld - In.AlignedChainShoulderWorld).GetSafeNormal()
+				: ChainWristOffset.GetSafeNormal();
 			// Full-3D correction target (2026-07-05 late): the aniso split reserved the
 			// depth axis for the chain to keep camera depth-jitter out of LIVE control -
 			// but the left chain's synthesized depth is itself biased (arm hung BEHIND

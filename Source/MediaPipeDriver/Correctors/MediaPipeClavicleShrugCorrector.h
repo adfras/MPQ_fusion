@@ -9,7 +9,10 @@ struct FMediaPipeBodySolverState;
 // The exact geometric shrug drive from
 // MediaPipePoseDrivenAnimInstance_BodyPoseSolve.cpp / DriveClavicleShrugCS -
 // including the quiet-gated asymmetric rest reference (2.5s down / 90s near-rest
-// up / 600s active up, 2026-07-09), the soft-knee 1.5cm deadband, the
+// up / 600s active up, 2026-07-09; mp.ShrugRestRefDownGate additionally slows
+// deep-drop down-adapt to 600s, 2026-07-12 squat-poisoning fix, default off =
+// legacy), the soft-knee deadband + post-knee gain (mp.ShrugDeadbandCm /
+// mp.ShrugLiftGain, 2026-07-12, defaults 1.5cm / 1.0x = the legacy constants), the
 // shoulder-width rig scale, the 0.85 sin cap, the 0.12s sin smoothing, the
 // per-instance ShrugGate/ClavicleShrugFusion throttles, and the appliedCm
 // post-write measurement - character for character. The pose side goes through

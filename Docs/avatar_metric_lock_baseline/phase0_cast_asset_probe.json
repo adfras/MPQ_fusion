@@ -1,0 +1,57 @@
+{
+  "probe": "SkeletalMesh.get_bounds() top vs bare-actor ref-skeleton bone Z (editor idle, 2026-07-12)",
+  "Wallace": {
+    "boundsTopZ": 136.7,
+    "pelvis": 93.7,
+    "head": 153.3,
+    "neck_01": 143.1,
+    "foot_l": 8.2,
+    "cutRatio": 0.955
+  },
+  "Emory": {
+    "boundsTopZ": 97.3,
+    "pelvis": 88.6,
+    "head": 147.2,
+    "neck_01": 138.1,
+    "foot_l": 7.9,
+    "cutRatio": 0.705
+  },
+  "Hudson": {
+    "boundsTopZ": 106.8,
+    "pelvis": 92.7,
+    "head": 163.2,
+    "neck_01": 151.2,
+    "foot_l": 8.2,
+    "cutRatio": 0.706
+  },
+  "Kellan": {
+    "boundsTopZ": 136.6,
+    "pelvis": 91.4,
+    "head": 155.8,
+    "neck_01": 145.8,
+    "foot_l": 7.9,
+    "cutRatio": 0.937
+  },
+  "Maria": {
+    "boundsTopZ": 95.2,
+    "pelvis": 87.1,
+    "head": 143.4,
+    "neck_01": 133.0,
+    "foot_l": 7.2,
+    "cutRatio": 0.716
+  },
+  "Payton": {
+    "boundsTopZ": 96.6,
+    "pelvis": 87.1,
+    "head": 143.4,
+    "neck_01": 133.0,
+    "foot_l": 7.2,
+    "cutRatio": 0.726
+  },
+  "idle_BP_Emory_full_stack": {
+    "pelvis": 88.6,
+    "head": 147.2,
+    "foot_l": 7.9,
+    "note": "identical to bare mesh and to the plan's 'driven' numbers"
+  }
+}

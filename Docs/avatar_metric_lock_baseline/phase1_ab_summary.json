@@ -1,0 +1,57 @@
+{
+  "protocol": "canonical replay PIE; live bisect mp.AvatarMetricLock 1->0->1 mid-session, bone probes 8s apart; Manny (never mapped) is the replay-motion control",
+  "kellan": {
+    "lockON": {
+      "pelvisZ": 87.56,
+      "headZ": 151.94,
+      "footLZ": 7.88
+    },
+    "lockOFF": {
+      "pelvisZ": 87.2,
+      "headZ": 151.67,
+      "footLZ": 7.88
+    },
+    "manny_drift": 0.38,
+    "raw_delta_cm": 0.36,
+    "flag_attributable_cm": 0.02
+  },
+  "emory": {
+    "lockON": {
+      "pelvisZ": 84.98,
+      "headZ": 143.13,
+      "footLZ": 7.92
+    },
+    "lockOFF": {
+      "pelvisZ": 85.04,
+      "headZ": 143.18,
+      "footLZ": 7.92
+    },
+    "manny_drift": 0.04,
+    "raw_delta_cm": 0.06,
+    "flag_attributable_cm": 0.02,
+    "native_ref_pelvis": 88.6,
+    "pelvis_vs_native_pct": 95.9,
+    "native_floor": 7.9
+  },
+  "latch": {
+    "kellan": {
+      "S": 0.965,
+      "avatarRefCm": 163.0,
+      "userRefCm": 168.8,
+      "src": "hmd"
+    },
+    "emory": {
+      "S": 0.911,
+      "avatarRefCm": 154.4,
+      "userRefCm": 169.4,
+      "src": "hmd"
+    },
+    "manny": {
+      "S": 0.963,
+      "avatarRefCm": 162.6,
+      "userRefCm": 168.8,
+      "src": "hmd"
+    },
+    "held": "userRef drifted 168.8->170.3 live; latched S unchanged (latch-once proven)"
+  }
+}

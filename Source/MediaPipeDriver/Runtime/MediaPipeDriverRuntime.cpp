@@ -870,6 +870,82 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// radially (stretch-only, smoothed, elbow re-solved two-bone). This is the chain-path
 		// successor to the old quest-wrist reach-scale calibration.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.MediaPipeChainReachFromQuestHand"), 1.0f),
+		// Timestamp-aligned corrector residuals (TRACKING_QUALITY_PLAN Phase 1, 2026-07-11):
+		// arm-direction + heading learners compare each webcam measurement against the
+		// buffered pose at the measurement's own effective capture time (OOSM fix) instead
+		// of the ~80-130ms-newer current pose; application unchanged. Byte-identical at the
+		// engine default 0. AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeTimestampAlignedResiduals"), 1),
+		// Anatomical wrist clamp (TRACKING_QUALITY_PLAN Phase 2, 2026-07-11): swing-twist
+		// guardrail on the final wrist rotation at every write site - catches the
+		// 2026-07-09 impossible-flap class (20-130deg) while in-range frames pass through
+		// bit-exactly. Ranges stay at the generous engine defaults
+		// (mp.WristTwistRangeDeg 90 / mp.WristSwingRangeDeg 85), live-tunable.
+		// AWAITING WORN VERDICT (Phase 6 consolidated A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.WristAnatomicalClamp"), 1),
+		// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11):
+		// image-plane-only foreshorten ratio per limb segment scales the reliability fed
+		// to Z consumers and eases foreshortened leg planar headings toward the sagittal
+		// plane (elevation/raise cue preserved; the rejected 2026-06-13 reference-stance
+		// stabilizer stays off). AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.MediaPipeForeshortenZDistrust"), 1),
+		// Foot contact + lock (TRACKING_QUALITY_PLAN Phase 4, 2026-07-11): hysteresis+
+		// dwell contact detector plus a world-pinned rendered foot solved through the
+		// existing scaffold-corrected leg chain (cm-bounded re-anchor, 10cm hard cap,
+		// eased release). The live direct-segment path had NO plant subsystem. Detector
+		// thresholds stay at engine defaults, live-tunable from the panel.
+		// AWAITING WORN VERDICT (Phase 6 A/B; live-bisectable).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootContactDetect"), 1),
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.FootLock"), 1),
+		// Squat-proof shrug rest reference (2026-07-12, first candidate worn session):
+		// the ungated 2.5s down-adapt learned the squat/knee-raise segment's compressed
+		// shoulder-above-hip height as posture (restRef 47->40) and the quiet up-gate
+		// then froze recovery - Kellan held a 6-12cm left shrug while standing at rest
+		// (mp.ClavicleShrugFusion rows + worn screenshot). Deep drops (beyond
+		// mp.ShrugRestRefDownBandCm below rest, engine default 2.5cm) now learn at the
+		// active 600s rate, symmetric with the up direction. Byte-identical at engine
+		// default 0. ACCEPTED (worn 2026-07-12 follow-up: restRef held 44.4-45.4cm across
+		// the whole session vs the 47->40 collapse the fix answered; user verdict "good").
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.ShrugRestRefDownGate"), 1),
+		// Small-lift shrug response (2026-07-12, same worn session): a real arms-down
+		// shrug reads only 1.5-3cm at the webcam shoulder landmark and the legacy fixed
+		// 1.5cm knee ate most of it (rows 00:12:41-44: peak appliedCm 3.5 -> 0.5 while
+		// the user held a shrug); arm raises read 5-9cm and applied 8-11cm. Modest
+		// arming: knee 1.0cm + 1.5x post-knee gain makes a 2-3cm measured shrug apply
+		// ~3-6cm without re-admitting the ~+-1cm rest noise (knee zeroes noise BEFORE
+		// the gain). Honest ceiling note: the webcam signal for an arms-down shrug is
+		// small - if this still reads weak, tune mp.ShrugDeadbandCm / mp.ShrugLiftGain
+		// live at the mirror rather than pushing the gain past ~2 (flicker risk).
+		// ACCEPTED (worn 2026-07-12 follow-up, same session as the down-gate; user
+		// verdict "good"). Live-bisectable.
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
+		// Symmetric in-band rest-ref learning (2026-07-12, worn Emory right-shrug
+		// session): with deep drops gated above, the in-band 2.5s-down / 90s-up
+		// asymmetry still ratcheted the rest reference toward the lower noise envelope
+		// - both refs sagged ~2.7cm over 4.5min (L 48.9->46.0, R 45.8->43.2), the right
+		// sat ~3cm low throughout and applied ~2x the left's shrug (median 4.5 vs
+		// 2.05cm) with minutes-long recovery ("right shoulder shrugs more and takes a
+		// while to correct"). Manny on the same camera feed showed the identical bias
+		// and identical refs - the ratchet, not the avatar, is the mechanism (Kellan's
+		// earlier pass even flipped it left). 90s makes in-band down-learning symmetric
+		// with the up direction; noise then averages out instead of ratcheting.
+		// Trade-off: a genuine slouch converges over minutes, matching the up
+		// direction's long-standing contract. Engine default 2.5 = legacy bit-exact.
+		// AWAITING WORN VERDICT (2026-07-12; live-bisectable:
+		// mp.ShrugRestRefInBandDownHalfLifeS 2.5 <-> 90, no restart).
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugRestRefInBandDownHalfLifeS"), 90.0f),
+		// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12): fused-pose
+		// world target heights map about the stage floor by the once-per-session
+		// embodiment scale latch S = avatar reference height / user standing reference,
+		// so the avatar keeps ITS stature under a taller/shorter user; pose untouched.
+		// Phase 0 rows refuted the plan's "Emory driven at 130%" premise (that was a
+		// bounds-metadata artifact; driven == native to 0.7% everywhere), so this is a
+		// guard for the real user-metric writers, not a fix for a live defect. Inert in
+		// the accepted stack (mp.BodyFusion.WritePose=0 keeps the fused writer off);
+		// byte-identical at the engine default 0. AWAITING WORN VERDICT (2026-07-12;
+		// live-bisectable: mp.AvatarMetricLock 0 <-> 1, no restart).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.AvatarMetricLock"), 1),
 	};
 }
 
@@ -1230,6 +1306,114 @@ const AMediaPipeEmbodiedAvatarPawn* FindPlacedMetaHumanEmbodiedAvatarPawn(UWorld
 	const AMediaPipeEmbodiedAvatarPawn* PlacedPawn = FindPlacedEmbodiedAvatarPawn(World);
 	return PlacedPawn && PlacedPawn->ShouldUseMetaHumanAvatar() ? PlacedPawn : nullptr;
 }
+
+// Mirror-avatar switch (2026-07-12): the placed pawn's MetaHumanProfileId is the real
+// selector - ApplySelectedAvatarProfileToRuntimeCVars re-applies it to
+// mp.MetaHumanActiveProfile at every play start, so typing that CVar into the console
+// is silently stomped ("still Kellan"), and flipping the CVar DURING a session
+// de-activates the spawned avatar's profile, which hard-disables the full arm-chain
+// retargeter (the mangled-shoulders report). This command writes the pawn property
+// itself so the switch works from the console on any machine, no editor UI, no agent.
+FAutoConsoleCommand CmdMirrorAvatar(
+	TEXT("mp.MirrorAvatar"),
+	TEXT("Select the mirror avatar for the NEXT session, e.g. 'mp.MirrorAvatar Emory' (valid: Wallace, Emory, Hudson, Kellan, Maria, Payton, or Manny for the internal Manny baseline). Writes the placed embodied pawn's properties - the real selector; the CVar alone is stomped at play start. Run while the editor is idle, then press VR Preview. No argument = print the current selection and valid ids."),
+	FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args)
+	{
+		auto BuildValidIdList = []() -> FString
+		{
+			TArray<FMediaPipeMetaHumanProfileDefinition> Profiles;
+			GetMediaPipeAvailableMetaHumanProfiles(Profiles);
+			FString Ids;
+			for (const FMediaPipeMetaHumanProfileDefinition& Profile : Profiles)
+			{
+				Ids += Ids.IsEmpty() ? TEXT("") : TEXT(", ");
+				Ids += Profile.ProfileId.ToString();
+			}
+			return Ids;
+		};
+
+		UWorld* EditorWorld = nullptr;
+		bool bPlayWorldActive = false;
+		if (GEngine)
+		{
+			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			{
+				if (Context.WorldType == EWorldType::Editor && Context.World())
+				{
+					EditorWorld = Context.World();
+				}
+				else if ((Context.WorldType == EWorldType::PIE || Context.WorldType == EWorldType::Game) && Context.World())
+				{
+					bPlayWorldActive = true;
+				}
+			}
+		}
+		AMediaPipeEmbodiedAvatarPawn* PlacedPawn = EditorWorld ? FindPlacedEmbodiedAvatarPawn(EditorWorld) : nullptr;
+
+		if (Args.Num() == 0)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MirrorAvatar: current=%s validIds=%s, Manny"),
+				!PlacedPawn ? TEXT("<no placed pawn in editor world>")
+					: (PlacedPawn->ShouldUseMetaHumanAvatar()
+						? *PlacedPawn->MetaHumanProfileId.ToString()
+						: TEXT("Manny (internal baseline)")),
+				*BuildValidIdList());
+			return;
+		}
+
+		const FString RequestedText = Args[0].TrimStartAndEnd();
+		const bool bWantManny = RequestedText.Equals(TEXT("Manny"), ESearchCase::IgnoreCase);
+		FMediaPipeMetaHumanProfileDefinition Definition;
+		if (!bWantManny && !TryGetMediaPipeMetaHumanProfile(FName(*RequestedText), Definition))
+		{
+			UE_LOG(LogMediaPipePose, Warning,
+				TEXT("mp.MirrorAvatar: unknown profile '%s'. Valid ids: %s, Manny"),
+				*Args[0], *BuildValidIdList());
+			return;
+		}
+		if (!PlacedPawn)
+		{
+			UE_LOG(LogMediaPipePose, Warning,
+				TEXT("mp.MirrorAvatar: no placed embodied pawn in the editor world - open the preview room map first."));
+			return;
+		}
+
+		PlacedPawn->Modify();
+		const FString StoredLabel = bWantManny ? FString(TEXT("Manny (internal baseline)")) : Definition.ProfileId.ToString();
+		if (bWantManny)
+		{
+			PlacedPawn->AvatarType = EMediaPipeEmbodiedAvatarType::InternalManny;
+		}
+		else
+		{
+			PlacedPawn->AvatarType = EMediaPipeEmbodiedAvatarType::MetaHuman;
+			PlacedPawn->MetaHumanProfileId = Definition.ProfileId;
+		}
+		if (bPlayWorldActive)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MirrorAvatar: %s stored on %s. A session is RUNNING - the switch applies on the NEXT VR Preview; the live session was left untouched (mid-session profile flips disable the arm chain)."),
+				*StoredLabel, *PlacedPawn->GetActorNameOrLabel());
+			return;
+		}
+		// Idle: align the runtime CVars the pawn would stomp at play start anyway, so
+		// read-backs agree with the selection immediately.
+		if (IConsoleVariable* AutoQuestAvatarVar = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.AutoQuestAvatar")))
+		{
+			AutoQuestAvatarVar->Set(bWantManny ? 0 : 1, ECVF_SetByConsole);
+		}
+		if (!bWantManny)
+		{
+			if (IConsoleVariable* ActiveProfileVar = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MetaHumanActiveProfile")))
+			{
+				ActiveProfileVar->Set(*Definition.ProfileId.ToString(), ECVF_SetByConsole);
+			}
+		}
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.MirrorAvatar: %s stored on %s and runtime CVars aligned. Press VR Preview."),
+			*StoredLabel, *PlacedPawn->GetActorNameOrLabel());
+	}));
 
 FName GetMetaHumanProfileTag(const FName ProfileId)
 {

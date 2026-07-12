@@ -83,6 +83,7 @@ function Invoke-UnrealConsoleCommands {
     param([string[]]$Commands)
 
     $commandsLiteral = ($Commands | ForEach-Object { ConvertTo-PythonSingleQuotedLiteral $_ }) -join ",`n    "
+    $profileLiteral = ConvertTo-PythonSingleQuotedLiteral $Profile
     $code = @"
 import unreal
 
@@ -101,6 +102,18 @@ cmds = [
 for cmd in cmds:
     unreal.SystemLibrary.execute_console_command(world, cmd)
     print("CODEX_PROFILE_PREP_CMD " + cmd)
+
+# The placed embodied pawn re-applies ITS OWN MetaHumanProfileId to
+# mp.MetaHumanActiveProfile at every play start (2026-07-12 finding), so setting only
+# the CVar is silently overwritten in rooms with a placed pawn. The pawn property is
+# the real selector - set it too.
+try:
+    for actor in unreal.EditorLevelLibrary.get_all_level_actors():
+        if 'Embodied' in actor.get_class().get_name():
+            actor.set_editor_property('MetaHumanProfileId', $profileLiteral)
+            print("CODEX_PROFILE_PREP_PAWN %s -> %s" % (actor.get_actor_label(), $profileLiteral))
+except Exception as exc:
+    print("CODEX_PROFILE_PREP_PAWN_ERR %s" % exc)
 
 readbacks = [
     "mp.MetaHumanActiveProfile",

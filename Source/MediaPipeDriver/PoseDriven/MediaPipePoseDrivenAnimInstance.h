@@ -743,6 +743,36 @@ private:
 	void DriveArmTwistBonesCS(FCSPose<FCompactPose>& CSPose, float DeltaSeconds);
 	void DriveLegCS(FCSPose<FCompactPose>& CSPose, bool bIsLeft, float DeltaSeconds);
 	void EmitLegScaffoldDiagnostics(float DeltaSeconds);
+	// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 0, 2026-07-12): per-actor ~1Hz
+	// mp.EmbodimentScaleTrace rows measuring the FINAL solved pose against the avatar's
+	// native reference spans, plus the once-per-session embodiment scale latch.
+	// Report-only: reads CSPose, mutates only keyed trace/latch state.
+	void EmitEmbodimentScaleTraceCS(FCSPose<FCompactPose>& CSPose, bool bBodyFusionPoseWritten);
+	// Builds the two candidate S pairs: HMD scaffold baseline vs the avatar's resolved
+	// eye height (preferred), and the camera standing source hip vs the avatar rig hip.
+	void BuildEmbodimentScaleLatchPairs(
+		MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutHmdPair,
+		MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutCameraPair) const;
+	// Marches the once-per-session S latch (keyed store) whenever the tracer or
+	// mp.AvatarMetricLock is armed. Latch-once: trusted reference -> hold for the
+	// session (iron rule 2); re-latch only via solver continuity reset.
+	void UpdateEmbodimentScaleLatchState();
+	// Anatomical wrist envelope, LAST op before every wrist bone write (quest/held/
+	// camera). Phase 0 (2026-07-11): mp.WristLimitTrace report-only rows. Phase 2:
+	// mp.WristAnatomicalClamp additionally clamps the returned rotation's swing/twist
+	// to mp.WristTwistRangeDeg / mp.WristSwingRangeDeg; in-range frames return the
+	// input BIT-EXACTLY. Mutates no pose or solver state itself (keyed log throttles
+	// only) - callers write the returned value to the bone and must NOT store it into
+	// any cross-frame/learner state (clamped frames never teach anything).
+	FQuat ApplyWristLimitClampAndTrace(FCSPose<FCompactPose>& CSPose, bool bIsLeft, const FQuat& FinalHandRotCS, const FVector& ForearmAxisComp, const TCHAR* SourceTag);
+	// Foreshortening -> Z-distrust (TRACKING_QUALITY_PLAN Phase 3, 2026-07-11): per-new-
+	// frame update of the keyed per-segment distrust alphas (image-plane ratios from the
+	// RAW camera-space landmarks), plus the mp.ForeshortenTrace row. No-op unless
+	// mp.MediaPipeForeshortenZDistrust is armed and RuntimeStateKey != 0.
+	void UpdateForeshortenDistrust();
+	// Reliability multiplier for a landmark from the max distrust along its limb chain;
+	// 1.0 whenever the feature is disarmed (GetLandmarkReliability stays byte-identical).
+	float GetForeshortenReliabilityScaleForLandmark(int32 LmIdx) const;
 };
 
 USTRUCT()
