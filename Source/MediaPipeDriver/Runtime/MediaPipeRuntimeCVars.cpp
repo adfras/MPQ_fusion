@@ -1811,6 +1811,11 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, emit per-actor ~1Hz mp.EmbodimentScaleTrace rows from the final solved pose: native reference spans (hip height, pelvis->head torso chain, per-side leg and arm segment sums) vs the driven spans measured from the posed component-space transforms, the per-region stretch ratios, the dark once-per-session embodiment scale latch S = avatar ref height / user standing ref (plus its raw inputs), and the per-writer contribution evidence (fused-pose write flag + owners + world target heights, HMD scaffold state, FK root grounding offset, believed avatar eye height). AVATAR_METRIC_LOCK_PLAN Phase 0; report-only, no behavior change."));
 
+	TAutoConsoleVariable<int32> CVarAvatarMetricLock(
+		TEXT("mp.AvatarMetricLock"),
+		0,
+		TEXT("When non-zero, map user-metric ABSOLUTE pose targets into avatar space using the once-per-session embodiment scale latch S = avatar reference height / user standing reference height (HMD scaffold baseline preferred, camera standing-hip fallback; latch-once, never a live learner). Phase 1 scope: every fused-pose world target height is mapped about the stage floor by S before DriveBodyFusionPoseCS consumes it - the avatar keeps ITS stature when the user is taller/shorter; the user's POSE (angles, timing, planar motion) is untouched. Inert until the latch fires and mp.BodyFusion.WritePose arms the fused writes (the accepted live stack runs WritePose=0, so this is dark there by construction). Default 0 = byte-identical legacy behavior. AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12."));
+
 	// Foot contact + lock (TRACKING_QUALITY_PLAN Phase 4, 2026-07-11). 4a: per-foot
 	// contact detector - height above the observed source floor + planar/upward ankle
 	// velocity, with HYSTERESIS (separate acquire/release thresholds) and entry/exit

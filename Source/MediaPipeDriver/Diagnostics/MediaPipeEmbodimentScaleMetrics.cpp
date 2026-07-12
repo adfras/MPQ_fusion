@@ -93,4 +93,53 @@ bool UpdateEmbodimentScaleLatch(
 	return true;
 }
 
+float MapHeightAboutFloor(const float WorldZ, const float FloorZ, const float Scale)
+{
+	if (!FMath::IsFinite(WorldZ) || !FMath::IsFinite(FloorZ) || !FMath::IsFinite(Scale))
+	{
+		return WorldZ;
+	}
+	return FloorZ + Scale * (WorldZ - FloorZ);
+}
+
+void MapFusedAvatarPoseHeightsAboutFloor(
+	FMediaPipeFusedAvatarPose& InOutPose,
+	const float FloorZ,
+	const float Scale)
+{
+	FMediaPipeFusedBodyPoint* const Points[] = {
+		&InOutPose.Root,
+		&InOutPose.Eye,
+		&InOutPose.Head,
+		&InOutPose.Neck,
+		&InOutPose.Chest,
+		&InOutPose.Spine,
+		&InOutPose.Pelvis,
+		&InOutPose.LeftShoulder,
+		&InOutPose.LeftElbow,
+		&InOutPose.LeftWrist,
+		&InOutPose.RightShoulder,
+		&InOutPose.RightElbow,
+		&InOutPose.RightWrist,
+		&InOutPose.LeftHip,
+		&InOutPose.LeftKnee,
+		&InOutPose.LeftAnkle,
+		&InOutPose.LeftHeel,
+		&InOutPose.LeftFoot,
+		&InOutPose.RightHip,
+		&InOutPose.RightKnee,
+		&InOutPose.RightAnkle,
+		&InOutPose.RightHeel,
+		&InOutPose.RightFoot,
+	};
+	for (FMediaPipeFusedBodyPoint* const Point : Points)
+	{
+		if (Point->bValid)
+		{
+			Point->LocationWorld.Z = MapHeightAboutFloor(
+				static_cast<float>(Point->LocationWorld.Z), FloorZ, Scale);
+		}
+	}
+}
+
 } // namespace MediaPipeEmbodimentScale

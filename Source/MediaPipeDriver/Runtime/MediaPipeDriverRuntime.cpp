@@ -920,6 +920,17 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// verdict "good"). Live-bisectable.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
+		// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12): fused-pose
+		// world target heights map about the stage floor by the once-per-session
+		// embodiment scale latch S = avatar reference height / user standing reference,
+		// so the avatar keeps ITS stature under a taller/shorter user; pose untouched.
+		// Phase 0 rows refuted the plan's "Emory driven at 130%" premise (that was a
+		// bounds-metadata artifact; driven == native to 0.7% everywhere), so this is a
+		// guard for the real user-metric writers, not a fix for a live defect. Inert in
+		// the accepted stack (mp.BodyFusion.WritePose=0 keeps the fused writer off);
+		// byte-identical at the engine default 0. AWAITING WORN VERDICT (2026-07-12;
+		// live-bisectable: mp.AvatarMetricLock 0 <-> 1, no restart).
+		FMediaPipeCVarSetting::MakeInt(TEXT("mp.AvatarMetricLock"), 1),
 	};
 }
 

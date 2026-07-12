@@ -368,6 +368,8 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<int32> CVarForeshortenTrace;
 	// Avatar metric lock tracer (AVATAR_METRIC_LOCK_PLAN Phase 0, 2026-07-12; report-only).
 	extern TAutoConsoleVariable<int32> CVarEmbodimentScaleTrace;
+	// Avatar metric lock feature (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12; default 0, candidate-armed).
+	extern TAutoConsoleVariable<int32> CVarAvatarMetricLock;
 	// Tracking-quality features (TRACKING_QUALITY_PLAN 2026-07, default 0, candidate-armed).
 	extern TAutoConsoleVariable<int32> CVarMediaPipeTimestampAlignedResiduals;
 	extern TAutoConsoleVariable<int32> CVarWristAnatomicalClamp;

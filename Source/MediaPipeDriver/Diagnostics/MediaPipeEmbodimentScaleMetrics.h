@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MediaPipeFusedAvatarPose.h"
 
 // Avatar metric lock (Docs/AVATAR_METRIC_LOCK_PLAN.md): pure math for the
 // mp.EmbodimentScaleTrace rows and the once-per-session embodiment scale latch
@@ -102,4 +103,17 @@ namespace MediaPipeEmbodimentScale
 	MEDIAPIPEDRIVER_API bool UpdateEmbodimentScaleLatch(
 		FMediaPipeEmbodimentScaleLatchState& State,
 		const FMediaPipeEmbodimentScaleLatchInput& Input);
+
+	// Height mapped about the floor: Z' = FloorZ + S * (Z - FloorZ). The floor
+	// itself is a fixed point, so planted feet stay planted; only proportions map
+	// (mp.AvatarMetricLock Phase 1). Non-finite inputs pass through unchanged so
+	// a bad frame can never invent a height.
+	MEDIAPIPEDRIVER_API float MapHeightAboutFloor(float WorldZ, float FloorZ, float Scale);
+
+	// Applies MapHeightAboutFloor to every VALID point of a fused avatar pose.
+	// XY (planar motion) is never touched - proportions map, motion does not.
+	MEDIAPIPEDRIVER_API void MapFusedAvatarPoseHeightsAboutFloor(
+		FMediaPipeFusedAvatarPose& InOutPose,
+		float FloorZ,
+		float Scale);
 }

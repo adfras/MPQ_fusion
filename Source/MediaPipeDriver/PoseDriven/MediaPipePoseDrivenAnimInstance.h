@@ -745,9 +745,18 @@ private:
 	void EmitLegScaffoldDiagnostics(float DeltaSeconds);
 	// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 0, 2026-07-12): per-actor ~1Hz
 	// mp.EmbodimentScaleTrace rows measuring the FINAL solved pose against the avatar's
-	// native reference spans, plus the dark once-per-session embodiment scale latch.
+	// native reference spans, plus the once-per-session embodiment scale latch.
 	// Report-only: reads CSPose, mutates only keyed trace/latch state.
 	void EmitEmbodimentScaleTraceCS(FCSPose<FCompactPose>& CSPose, bool bBodyFusionPoseWritten);
+	// Builds the two candidate S pairs: HMD scaffold baseline vs the avatar's resolved
+	// eye height (preferred), and the camera standing source hip vs the avatar rig hip.
+	void BuildEmbodimentScaleLatchPairs(
+		MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutHmdPair,
+		MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutCameraPair) const;
+	// Marches the once-per-session S latch (keyed store) whenever the tracer or
+	// mp.AvatarMetricLock is armed. Latch-once: trusted reference -> hold for the
+	// session (iron rule 2); re-latch only via solver continuity reset.
+	void UpdateEmbodimentScaleLatchState();
 	// Anatomical wrist envelope, LAST op before every wrist bone write (quest/held/
 	// camera). Phase 0 (2026-07-11): mp.WristLimitTrace report-only rows. Phase 2:
 	// mp.WristAnatomicalClamp additionally clamps the returned rotation's swing/twist

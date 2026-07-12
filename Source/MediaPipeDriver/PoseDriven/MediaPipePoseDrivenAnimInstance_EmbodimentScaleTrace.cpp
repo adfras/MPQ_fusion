@@ -42,12 +42,18 @@ void FAnimNode_MediaPipePoseDriven::EmitEmbodimentScaleTraceCS(
 		? RefHeadPosComp.Z - RefFootFloorZComp
 		: 0.0f;
 
-	// Frames matter here (measured 2026-07-12, replay rows): the HMD pose lives in
-	// WORLD space while the MediaPipe source landmarks (and their observed floor)
-	// live in the hip-centered SOURCE frame (source hip Z ~ 0, source floor ~ -90).
-	// The HMD pair therefore measures against the world floor under the avatar
-	// (the component's world height); the source floor is reported separately as
-	// pure source-frame evidence.
+	// The latch itself marches from UpdateEmbodimentScaleLatchState() (called every
+	// evaluation while the tracer or mp.AvatarMetricLock is armed); the row rebuilds
+	// the same pairs purely for reporting.
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput HmdPair;
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput CameraPair;
+	BuildEmbodimentScaleLatchPairs(HmdPair, CameraPair);
+	const MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput SelectedPair =
+		MediaPipeEmbodimentScale::SelectEmbodimentScaleLatchInput(HmdPair, CameraPair);
+
+	// Source-frame floor: reported as evidence only (the MediaPipe landmarks live in
+	// the hip-centered SOURCE frame - source hip Z ~ 0, source floor ~ -90 - while
+	// the HMD pose is world-frame; the pairs never mix the two).
 	const FMediaPipeFootContactRuntimeState& FootContactState = GetFootContactRuntimeState(RuntimeStateKey);
 	const float WorldFloorZ = static_cast<float>(TargetCompTransform.GetLocation().Z);
 	float SourceFloorZ = 0.0f;
@@ -67,32 +73,7 @@ void FAnimNode_MediaPipePoseDriven::EmitEmbodimentScaleTraceCS(
 		SourceFloorZ = FootContactState.Right.ObservedSourceFloorZ;
 		bHasSourceFloor = true;
 	}
-
-	const bool bScaffoldHasBaseline = BodyState.HmdHeightScaffold.bHasBaseline;
-	const float UserStandingRefCm = bScaffoldHasBaseline
-		? BodyState.ScaffoldHmdBaselineZ - WorldFloorZ
-		: 0.0f;
-
-	// Two candidate user references for S: the worn HMD scaffold standing baseline
-	// (head-height pair, preferred) and the camera's latched standing source hip
-	// (hip-height pair, the headset-free fallback). Both dark in Phase 0.
-	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput HmdPair;
-	HmdPair.AvatarRefHeightCm = AvatarRefHeightCm;
-	HmdPair.UserStandingRefHeightCm = UserStandingRefCm;
-	HmdPair.UserRefConfidence01 = bScaffoldHasBaseline ? BodyState.ScaffoldHmdConfidence : 0.0f;
-	HmdPair.Source = MediaPipeEmbodimentScale::LatchSourceHmd;
-	HmdPair.NowSeconds = NowSeconds;
-
-	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput CameraPair;
-	CameraPair.AvatarRefHeightCm = BodyState.ReferenceRigHipHeightCm;
-	CameraPair.UserStandingRefHeightCm = BodyState.ReferenceHipHeightCm;
-	CameraPair.UserRefConfidence01 = BodyState.bHasReferenceHipHeight ? 1.0f : 0.0f;
-	CameraPair.Source = MediaPipeEmbodimentScale::LatchSourceCamera;
-	CameraPair.NowSeconds = NowSeconds;
-
-	const MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput SelectedPair =
-		MediaPipeEmbodimentScale::SelectEmbodimentScaleLatchInput(HmdPair, CameraPair);
-	MediaPipeEmbodimentScale::UpdateEmbodimentScaleLatch(ScaleState.ScaleLatch, SelectedPair);
+	const float UserStandingRefCm = HmdPair.UserStandingRefHeightCm;
 
 	if (!FMediaPipePoseDiagnosticReporter::ShouldEmitThrottled(
 			NowSeconds, 1.0, ScaleState.TraceLastLogTimeSeconds))
@@ -238,9 +219,11 @@ void FAnimNode_MediaPipePoseDriven::EmitEmbodimentScaleTraceCS(
 		}
 	}
 
-	const float LiveS = MediaPipeEmbodimentScale::ComputeEmbodimentScale(AvatarRefHeightCm, UserStandingRefCm);
+	const float LiveS = MediaPipeEmbodimentScale::ComputeEmbodimentScale(
+		HmdPair.AvatarRefHeightCm, HmdPair.UserStandingRefHeightCm);
 	const float LiveCameraS = MediaPipeEmbodimentScale::ComputeEmbodimentScale(
-		BodyState.ReferenceRigHipHeightCm, BodyState.ReferenceHipHeightCm);
+		CameraPair.AvatarRefHeightCm, CameraPair.UserStandingRefHeightCm);
+	const bool bMetricLockOn = CVarAvatarMetricLock.GetValueOnAnyThread() != 0;
 
 	// BIND-pose native spans (root-cause evidence, 2026-07-12): the bind pose is
 	// the authored geometry; when the asset's reference skeleton was assembled at
@@ -326,7 +309,7 @@ void FAnimNode_MediaPipePoseDriven::EmitEmbodimentScaleTraceCS(
 	}
 
 	UE_LOG(LogMediaPipePose, Log,
-		TEXT("mp.EmbodimentScaleTrace: actor=%s natHipCm=%.1f natTorsoCm=%.1f natHeadCm=%.1f natLegL=%.1f natLegR=%.1f natArmL=%.1f natArmR=%.1f drvFloorZ=%.1f drvHipCm=%.1f drvTorsoCm=%.1f drvHeadCm=%.1f drvLegL=%.1f drvLegR=%.1f drvArmL=%.1f drvArmR=%.1f hipR=%.3f torsoR=%.3f headR=%.3f legRL=%.3f legRR=%.3f armRL=%.3f armRR=%.3f fused=%d pelvOwn=%d pelvWz=%.1f chestWz=%.1f eyeWz=%.1f eyeVal=%d hmdZ=%.1f hmdVal=%d worn=%d scafBaseZ=%.1f scafConf=%.2f scafAlpha=%.2f fusedAlpha=%.2f rootOffZ=%.1f srcHipZ=%.1f hasSrcHip=%d srcFloorZ=%.1f hasSrcFloor=%d compWz=%.1f belEyeZ=%.1f avatarRefCm=%.1f userRefCm=%.1f S=%.3f camAvRefCm=%.1f camUserRefCm=%.1f Scam=%.3f selSrc=%d SL=%.3f latchSrc=%d latched=%d key=%u"),
+		TEXT("mp.EmbodimentScaleTrace: actor=%s natHipCm=%.1f natTorsoCm=%.1f natHeadCm=%.1f natLegL=%.1f natLegR=%.1f natArmL=%.1f natArmR=%.1f drvFloorZ=%.1f drvHipCm=%.1f drvTorsoCm=%.1f drvHeadCm=%.1f drvLegL=%.1f drvLegR=%.1f drvArmL=%.1f drvArmR=%.1f hipR=%.3f torsoR=%.3f headR=%.3f legRL=%.3f legRR=%.3f armRL=%.3f armRR=%.3f fused=%d pelvOwn=%d pelvWz=%.1f chestWz=%.1f eyeWz=%.1f eyeVal=%d hmdZ=%.1f hmdVal=%d worn=%d scafBaseZ=%.1f scafConf=%.2f scafAlpha=%.2f fusedAlpha=%.2f rootOffZ=%.1f srcHipZ=%.1f hasSrcHip=%d srcFloorZ=%.1f hasSrcFloor=%d compWz=%.1f belEyeZ=%.1f avatarRefCm=%.1f userRefCm=%.1f S=%.3f camAvRefCm=%.1f camUserRefCm=%.1f Scam=%.3f selSrc=%d SL=%.3f latchSrc=%d latched=%d lockOn=%d key=%u"),
 		*TargetActorName.ToString(),
 		NatHipCm, NatTorsoCm, NatHeadCm, NatLegCmL, NatLegCmR, NatArmCmL, NatArmCmR,
 		DrivenFloorZ, DrvHipCm, DrvTorsoCm, DrvHeadCm, DrvLegCmL, DrvLegCmR, DrvArmCmL, DrvArmCmR,
@@ -357,15 +340,80 @@ void FAnimNode_MediaPipePoseDriven::EmitEmbodimentScaleTraceCS(
 		bHasSourceFloor ? 1 : 0,
 		WorldFloorZ,
 		bHasTargetEyeLocalOffset ? static_cast<float>(TargetEyeLocalOffset.Z) : -1.0f,
-		AvatarRefHeightCm,
+		HmdPair.AvatarRefHeightCm,
 		UserStandingRefCm,
 		LiveS,
-		BodyState.ReferenceRigHipHeightCm,
-		BodyState.ReferenceHipHeightCm,
+		CameraPair.AvatarRefHeightCm,
+		CameraPair.UserStandingRefHeightCm,
 		LiveCameraS,
 		static_cast<int32>(SelectedPair.Source),
 		ScaleState.ScaleLatch.LatchedS,
 		static_cast<int32>(ScaleState.ScaleLatch.LatchedSource),
 		ScaleState.ScaleLatch.bLatched ? 1 : 0,
+		bMetricLockOn ? 1 : 0,
 		RuntimeStateKey);
+}
+
+void FAnimNode_MediaPipePoseDriven::BuildEmbodimentScaleLatchPairs(
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutHmdPair,
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput& OutCameraPair) const
+{
+	const double NowSeconds = FPlatformTime::Seconds();
+
+	// HMD pair: eye-to-eye semantics. Avatar side = the resolved profile eye height
+	// (head bone + profile eye offset; per-avatar, e.g. Kellan 163.0 / Emory 154.4);
+	// user side = the scaffold's standing HMD baseline above the WORLD floor under
+	// the avatar (never the hip-centered source-frame floor - measured 2026-07-12,
+	// the frames differ by ~90cm).
+	const float AvatarEyeHeightCm = bHasTargetEyeLocalOffset
+		? static_cast<float>(TargetEyeLocalOffset.Z)
+		: (bHasRefFootFloorZ && !RefHeadPosComp.IsNearlyZero()
+			? static_cast<float>(RefHeadPosComp.Z) - RefFootFloorZComp
+			: 0.0f);
+	const float WorldFloorZ = static_cast<float>(TargetCompTransform.GetLocation().Z);
+	const bool bScaffoldHasBaseline = BodyState.HmdHeightScaffold.bHasBaseline;
+	OutHmdPair.AvatarRefHeightCm = AvatarEyeHeightCm;
+	OutHmdPair.UserStandingRefHeightCm = bScaffoldHasBaseline
+		? BodyState.ScaffoldHmdBaselineZ - WorldFloorZ
+		: 0.0f;
+	OutHmdPair.UserRefConfidence01 = bScaffoldHasBaseline ? BodyState.ScaffoldHmdConfidence : 0.0f;
+	OutHmdPair.Source = MediaPipeEmbodimentScale::LatchSourceHmd;
+	OutHmdPair.NowSeconds = NowSeconds;
+
+	// Camera pair: hip-to-hip semantics, both sides already maintained by the body
+	// solve (avatar rig standing hip vs the camera's latched standing source hip).
+	OutCameraPair.AvatarRefHeightCm = BodyState.ReferenceRigHipHeightCm;
+	OutCameraPair.UserStandingRefHeightCm = BodyState.ReferenceHipHeightCm;
+	OutCameraPair.UserRefConfidence01 = BodyState.bHasReferenceHipHeight ? 1.0f : 0.0f;
+	OutCameraPair.Source = MediaPipeEmbodimentScale::LatchSourceCamera;
+	OutCameraPair.NowSeconds = NowSeconds;
+}
+
+void FAnimNode_MediaPipePoseDriven::UpdateEmbodimentScaleLatchState()
+{
+	if ((CVarEmbodimentScaleTrace.GetValueOnAnyThread() == 0 &&
+		 CVarAvatarMetricLock.GetValueOnAnyThread() == 0) ||
+		RuntimeStateKey == 0 ||
+		!bHasReferencePose)
+	{
+		return;
+	}
+
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput HmdPair;
+	MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchInput CameraPair;
+	BuildEmbodimentScaleLatchPairs(HmdPair, CameraPair);
+	FMediaPipeEmbodimentScaleRuntimeState& ScaleState = GetEmbodimentScaleRuntimeState(RuntimeStateKey);
+	if (MediaPipeEmbodimentScale::UpdateEmbodimentScaleLatch(
+			ScaleState.ScaleLatch,
+			MediaPipeEmbodimentScale::SelectEmbodimentScaleLatchInput(HmdPair, CameraPair)))
+	{
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.AvatarMetricLock: S latched actor=%s S=%.3f avatarRefCm=%.1f userRefCm=%.1f src=%d key=%u"),
+			*TargetActorName.ToString(),
+			ScaleState.ScaleLatch.LatchedS,
+			ScaleState.ScaleLatch.LatchedAvatarRefHeightCm,
+			ScaleState.ScaleLatch.LatchedUserStandingRefHeightCm,
+			static_cast<int32>(ScaleState.ScaleLatch.LatchedSource),
+			RuntimeStateKey);
+	}
 }

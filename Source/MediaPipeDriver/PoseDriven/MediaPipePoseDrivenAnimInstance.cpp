@@ -1693,6 +1693,30 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		: FMediaPipeAvatarEmbodimentProfile();
 	ConfigureBodyFusionProfileForCurrentTarget(ForwardProfile);
 
+	// Avatar metric lock (AVATAR_METRIC_LOCK_PLAN Phase 1, 2026-07-12): the fused
+	// world targets consumed below are user-metric ABSOLUTES (census H1-H3: pelvis
+	// translation, spine span, eye-anchored head). With the lock armed and the
+	// session S latched, every valid point's HEIGHT maps about the stage floor by
+	// S before any write consumes it - the avatar keeps its own stature under a
+	// taller/shorter user while planar motion and timing stay the user's. Disarmed
+	// or unlatched, the original pose is consumed untouched (byte-identical).
+	const FMediaPipeFusedAvatarPose* FusedPose = &BodyFusionFrame.Pose;
+	FMediaPipeFusedAvatarPose MetricLockedPose;
+	if (CVarAvatarMetricLock.GetValueOnAnyThread() != 0 && RuntimeStateKey != 0)
+	{
+		const MediaPipeEmbodimentScale::FMediaPipeEmbodimentScaleLatchState& ScaleLatch =
+			GetEmbodimentScaleRuntimeState(RuntimeStateKey).ScaleLatch;
+		if (ScaleLatch.bLatched)
+		{
+			MetricLockedPose = BodyFusionFrame.Pose;
+			MediaPipeEmbodimentScale::MapFusedAvatarPoseHeightsAboutFloor(
+				MetricLockedPose,
+				static_cast<float>(TargetCompTransform.GetLocation().Z),
+				ScaleLatch.LatchedS);
+			FusedPose = &MetricLockedPose;
+		}
+	}
+
 	// BodyFusion owns the fused torso/lower-body writes once enabled; the legacy
 	// MediaPipeDrive* CVars only gate the raw landmark path.
 	if (Pelvis.IsValidToEvaluate())
@@ -1758,11 +1782,11 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 
 		FVector TargetPelvisOffsetComp = FVector::ZeroVector;
 		bool bHasTargetPelvisOffset = false;
-		if (BodyFusionFrame.Pose.Pelvis.bValid &&
-			(BodyFusionFrame.Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe ||
-			 BodyFusionFrame.Pose.Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused))
+		if (FusedPose->Pelvis.bValid &&
+			(FusedPose->Pelvis.Owner == EMediaPipeBodyFusionOwner::MediaPipe ||
+			 FusedPose->Pelvis.Owner == EMediaPipeBodyFusionOwner::Fused))
 		{
-			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Pelvis.LocationWorld);
+			const FVector TargetPelvisComp = WorldToComponent.TransformPosition(FusedPose->Pelvis.LocationWorld);
 			TargetPelvisOffsetComp = TargetPelvisComp - RefPelvisTranslationComp;
 			bHasTargetPelvisOffset = !TargetPelvisOffsetComp.ContainsNaN();
 		}
@@ -1804,12 +1828,12 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		return true;
 	}
 
-	if (!BodyFusionFrame.Pose.Pelvis.bValid || !BodyFusionFrame.Pose.Chest.bValid || !BodyFusionFrame.Pose.Head.bValid)
+	if (!FusedPose->Pelvis.bValid || !FusedPose->Chest.bValid || !FusedPose->Head.bValid)
 	{
 		return true;
 	}
 
-	FVector ResolvedPelvisComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Pelvis.LocationWorld);
+	FVector ResolvedPelvisComp = WorldToComponent.TransformPosition(FusedPose->Pelvis.LocationWorld);
 	bool bHasResolvedPelvisComp = false;
 	if (Pelvis.IsValidToEvaluate())
 	{
@@ -1818,7 +1842,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	}
 
 	FMediaPipeBodyFusionPoseWriteContextInput WriteContextInput;
-	WriteContextInput.Pose = &BodyFusionFrame.Pose;
+	WriteContextInput.Pose = FusedPose;
 	WriteContextInput.TargetComponentToWorld = TargetCompTransform;
 	WriteContextInput.Profile = ForwardProfile;
 	WriteContextInput.ResolvedPelvisComp = ResolvedPelvisComp;
@@ -2025,7 +2049,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 		: HeadAnchorProfile.DefaultEyeLocalOffset;
 	const bool bCanAnchorHeadFromEye =
 		bHasHeadRotationCS &&
-		BodyFusionFrame.Pose.Eye.bValid &&
+		FusedPose->Eye.bValid &&
 		Head.IsValidToEvaluate() &&
 		!RefHeadPosComp.IsNearlyZero() &&
 		!HeadAnchorProfile.DefaultEyeLocalOffset.ContainsNaN();
@@ -2045,7 +2069,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 	}
 	if (bCanAnchorHeadFromEye)
 	{
-		const FVector TargetEyeComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Eye.LocationWorld);
+		const FVector TargetEyeComp = WorldToComponent.TransformPosition(FusedPose->Eye.LocationWorld);
 		FVector EyeAnchoredHeadComp = FVector::ZeroVector;
 		if (bHasEyeLocalInHeadForPose)
 		{
@@ -2112,7 +2136,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			CSPose.GetComponentSpaceTransform(Head.CachedCompactPoseIndex);
 		const FVector PosedEyeComp = HeadPoseComp.TransformPosition(
 			bHasEyeLocalInHeadForPose ? EyeLocalInHeadForPose : EyeLocalInHeadForSolve);
-		const FVector TargetEyeComp = WorldToComponent.TransformPosition(BodyFusionFrame.Pose.Eye.LocationWorld);
+		const FVector TargetEyeComp = WorldToComponent.TransformPosition(FusedPose->Eye.LocationWorld);
 		FVector EyeLockDeltaComp = TargetEyeComp - PosedEyeComp;
 		if (!EyeLockDeltaComp.ContainsNaN())
 		{
@@ -2206,16 +2230,16 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				? FVector::Distance(HmdWorld, ExpectedCameraFromPosedEye)
 				: -1.0f;
 			const FVector SolverCameraFromEye =
-				BodyFusionFrame.Pose.Eye.LocationWorld + AvatarForwardWorld * DebugProfile.EmbodiedCameraForwardOffsetCm;
+				FusedPose->Eye.LocationWorld + AvatarForwardWorld * DebugProfile.EmbodiedCameraForwardOffsetCm;
 			const float CameraToSolverCameraCm = bHasHmd
 				? FVector::Distance(HmdWorld, SolverCameraFromEye)
 				: -1.0f;
 			const float SolverEyeToPosedEyeCm =
-				FVector::Distance(BodyFusionFrame.Pose.Eye.LocationWorld, PosedEyeWorld);
+				FVector::Distance(FusedPose->Eye.LocationWorld, PosedEyeWorld);
 			const float SolverHeadToPosedHeadCm =
-				FVector::Distance(BodyFusionFrame.Pose.Head.LocationWorld, PosedHeadWorld);
+				FVector::Distance(FusedPose->Head.LocationWorld, PosedHeadWorld);
 			const float SolverChestToPosedChestCm =
-				FVector::Distance(BodyFusionFrame.Pose.Chest.LocationWorld, PosedChestWorld);
+				FVector::Distance(FusedPose->Chest.LocationWorld, PosedChestWorld);
 			const FVector HmdToPosedChestWorld = PosedChestWorld - HmdWorld;
 			const float HmdToPosedChestCm = bHasHmd ? HmdToPosedChestWorld.Size() : -1.0f;
 			const float HmdToPosedChestForwardCm = bHasHmd
@@ -2299,26 +2323,26 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 			const float PosedPelvisChestLeanDeg = ForwardLeanDegrees(PosedChestWorld - PosedPelvisWorld);
 			const float PosedChestHeadLeanDeg = ForwardLeanDegrees(PosedHeadWorld - PosedChestWorld);
 			const float SolverPelvisChestLeanDeg =
-				ForwardLeanDegrees(BodyFusionFrame.Pose.Chest.LocationWorld - BodyFusionFrame.Pose.Pelvis.LocationWorld);
+				ForwardLeanDegrees(FusedPose->Chest.LocationWorld - FusedPose->Pelvis.LocationWorld);
 			const float SolverChestHeadLeanDeg =
-				ForwardLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld);
+				ForwardLeanDegrees(FusedPose->Head.LocationWorld - FusedPose->Chest.LocationWorld);
 			const float PosedPelvisChestSideLeanDeg = SideLeanDegrees(PosedChestWorld - PosedPelvisWorld);
 			const float PosedChestNeckSideLeanDeg = SideLeanDegrees(PosedNeckWorld - PosedChestWorld);
 			const float PosedNeckHeadSideLeanDeg = SideLeanDegrees(PosedHeadWorld - PosedNeckWorld);
 			const float PosedChestHeadSideLeanDeg = SideLeanDegrees(PosedHeadWorld - PosedChestWorld);
 			const float SolverPelvisChestSideLeanDeg =
-				SideLeanDegrees(BodyFusionFrame.Pose.Chest.LocationWorld - BodyFusionFrame.Pose.Pelvis.LocationWorld);
+				SideLeanDegrees(FusedPose->Chest.LocationWorld - FusedPose->Pelvis.LocationWorld);
 			const float SolverChestHeadSideLeanDeg =
-				SideLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld);
-			const bool bHasSolverNeck = BodyFusionFrame.Pose.Neck.bValid;
+				SideLeanDegrees(FusedPose->Head.LocationWorld - FusedPose->Chest.LocationWorld);
+			const bool bHasSolverNeck = FusedPose->Neck.bValid;
 			const float SolverChestNeckSideLeanDeg = bHasSolverNeck
-				? SideLeanDegrees(BodyFusionFrame.Pose.Neck.LocationWorld - BodyFusionFrame.Pose.Chest.LocationWorld)
+				? SideLeanDegrees(FusedPose->Neck.LocationWorld - FusedPose->Chest.LocationWorld)
 				: 0.0f;
 			const float SolverNeckHeadSideLeanDeg = bHasSolverNeck
-				? SideLeanDegrees(BodyFusionFrame.Pose.Head.LocationWorld - BodyFusionFrame.Pose.Neck.LocationWorld)
+				? SideLeanDegrees(FusedPose->Head.LocationWorld - FusedPose->Neck.LocationWorld)
 				: 0.0f;
 			const FVector SolverNeckToPosedNeckWorld = bHasSolverNeck
-				? PosedNeckWorld - BodyFusionFrame.Pose.Neck.LocationWorld
+				? PosedNeckWorld - FusedPose->Neck.LocationWorld
 				: FVector::ZeroVector;
 			const float SolverNeckToPosedNeckCm = bHasSolverNeck
 				? SolverNeckToPosedNeckWorld.Size()
@@ -2364,10 +2388,10 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				? FVector::Distance(HmdWorld, MediaPipeHeadAvatarWorld)
 				: -1.0f;
 			const float MediaPipeHeadToSolverHeadCm = bHasMediaPipeHead
-				? FVector::Distance(BodyFusionFrame.Pose.Head.LocationWorld, MediaPipeHeadAvatarWorld)
+				? FVector::Distance(FusedPose->Head.LocationWorld, MediaPipeHeadAvatarWorld)
 				: -1.0f;
 			const float MediaPipeShoulderToSolverChestCm = bHasMediaPipeShoulder
-				? FVector::Distance(BodyFusionFrame.Pose.Chest.LocationWorld, MediaPipeShoulderAvatarWorld)
+				? FVector::Distance(FusedPose->Chest.LocationWorld, MediaPipeShoulderAvatarWorld)
 				: -1.0f;
 
 			UE_LOG(LogMediaPipePose, Log,
@@ -2380,7 +2404,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(HmdWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(SolverCameraFromEye),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(ExpectedCameraFromPosedEye),
-				*FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionFrame.Pose.Eye.LocationWorld),
+				*FMediaPipeBodyFusionDebugFormatter::VectorString(FusedPose->Eye.LocationWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedEyeWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedHeadWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedChestWorld),
@@ -2434,7 +2458,7 @@ bool FAnimNode_MediaPipePoseDriven::DriveBodyFusionPoseCS(FCSPose<FCompactPose>&
 				SolverChestHeadSideLeanDeg,
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedNeckWorld),
 				*FMediaPipeBodyFusionDebugFormatter::VectorString(PosedNeck02World),
-				bHasSolverNeck ? *FMediaPipeBodyFusionDebugFormatter::VectorString(BodyFusionFrame.Pose.Neck.LocationWorld) : TEXT("(missing)"),
+				bHasSolverNeck ? *FMediaPipeBodyFusionDebugFormatter::VectorString(FusedPose->Neck.LocationWorld) : TEXT("(missing)"),
 				SolverNeckToPosedNeckCm,
 				SolverNeckToPosedNeckRightCm,
 				SolverNeckToPosedNeckForwardCm,
@@ -2562,6 +2586,10 @@ void FAnimNode_MediaPipePoseDriven::Evaluate_AnyThread(FPoseContext& Output)
 
 	LeftLegState.bCurrentSourceFootGrounded = false;
 	RightLegState.bCurrentSourceFootGrounded = false;
+
+	// Avatar metric lock: march the once-per-session S latch before any consumer
+	// (no-op unless mp.EmbodimentScaleTrace or mp.AvatarMetricLock is armed).
+	UpdateEmbodimentScaleLatchState();
 
 	const bool bBodyFusionFullPoseInput = ShouldUseBodyFusionPoseForEvaluation();
 	const bool bBodyFusionPoseWritten = DriveBodyFusionPoseCS(CSPose, DeltaSeconds);

@@ -210,4 +210,57 @@ bool FMediaPipeEmbodimentScaleLatchSourceSelectTest::RunTest(const FString& Para
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeEmbodimentScaleMapHeightTest,
+	"TestingKit5.MediaPipe.EmbodimentScale.MapHeightAboutFloor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeEmbodimentScaleMapHeightTest::RunTest(const FString& Parameters)
+{
+	// S = 1 is bit-exact identity: FloorZ + 1*(Z - FloorZ) == Z for floats.
+	TestTrue(TEXT("S=1 identity"), MapHeightAboutFloor(147.2f, 0.0f, 1.0f) == 147.2f);
+	// The floor is a fixed point at any S - planted feet never move.
+	TestTrue(TEXT("Floor invariant"), MapHeightAboutFloor(10.0f, 10.0f, 0.7f) == 10.0f);
+	// A child S compresses heights toward the floor.
+	TestTrue(TEXT("Child S compresses"),
+		FMath::IsNearlyEqual(MapHeightAboutFloor(166.0f, 0.0f, 0.5f), 83.0f, 1e-3f));
+	// Non-zero floor: mapping is about the FLOOR, not the origin.
+	TestTrue(TEXT("Maps about the floor"),
+		FMath::IsNearlyEqual(MapHeightAboutFloor(120.0f, 20.0f, 0.5f), 70.0f, 1e-3f));
+	// Below-floor targets scale symmetrically (no clamping surprises).
+	TestTrue(TEXT("Below-floor scales"),
+		FMath::IsNearlyEqual(MapHeightAboutFloor(-10.0f, 0.0f, 0.5f), -5.0f, 1e-3f));
+	// Non-finite input passes through unchanged.
+	const float NanZ = std::numeric_limits<float>::quiet_NaN();
+	TestTrue(TEXT("Non-finite scale passthrough"), MapHeightAboutFloor(100.0f, 0.0f, NanZ) == 100.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMediaPipeEmbodimentScaleMapFusedPoseTest,
+	"TestingKit5.MediaPipe.EmbodimentScale.MapFusedPoseHeights",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMediaPipeEmbodimentScaleMapFusedPoseTest::RunTest(const FString& Parameters)
+{
+	FMediaPipeFusedAvatarPose Pose;
+	Pose.Pelvis.bValid = true;
+	Pose.Pelvis.LocationWorld = FVector(30.0, -12.0, 92.0);
+	Pose.Eye.bValid = true;
+	Pose.Eye.LocationWorld = FVector(5.0, 7.0, 166.0);
+	Pose.Head.bValid = false;
+	Pose.Head.LocationWorld = FVector(1.0, 2.0, 160.0);
+
+	MapFusedAvatarPoseHeightsAboutFloor(Pose, 0.0f, 0.5f);
+
+	// Valid points: Z mapped, XY untouched (pose is the user's, proportions map).
+	TestTrue(TEXT("Pelvis Z mapped"), FMath::IsNearlyEqual(static_cast<float>(Pose.Pelvis.LocationWorld.Z), 46.0f, 1e-3f));
+	TestTrue(TEXT("Pelvis XY untouched"),
+		Pose.Pelvis.LocationWorld.X == 30.0 && Pose.Pelvis.LocationWorld.Y == -12.0);
+	TestTrue(TEXT("Eye Z mapped"), FMath::IsNearlyEqual(static_cast<float>(Pose.Eye.LocationWorld.Z), 83.0f, 1e-3f));
+	// Invalid points are never touched - a bad frame cannot invent a height.
+	TestTrue(TEXT("Invalid point untouched"), Pose.Head.LocationWorld.Z == 160.0);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
