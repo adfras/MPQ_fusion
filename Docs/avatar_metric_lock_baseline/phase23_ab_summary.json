@@ -1,0 +1,138 @@
+{
+  "protocol": "canonical replay PIE per avatar, 55s mp.AvatarMetricLock=1 then 55s =0 (live bisect); windows differ in replay motion content (planted-row counts show it), so cross-avatar same-window comparison is the control",
+  "phase2_arms": {
+    "kellan_lockON": {
+      "label": "Kellan lock=1",
+      "wristLimit_rows": 80,
+      "wristLimit_out": 5,
+      "twist_med": -5.9,
+      "swing_med": 15.1,
+      "chainReach_rows": 82,
+      "frac_med": 0.89,
+      "appliedExt_med": 0.0,
+      "appliedExt_max": 0.3,
+      "fullReach_med": 52.0,
+      "chainReach_max": 48.9,
+      "reach_within_envelope": true,
+      "armRL_med": 1.0,
+      "webcamAge_rows": 259,
+      "effAgeMs_med": 1.1
+    },
+    "kellan_lockOFF": {
+      "label": "Kellan lock=0",
+      "wristLimit_rows": 92,
+      "wristLimit_out": 6,
+      "twist_med": -4.3,
+      "swing_med": 24.9,
+      "chainReach_rows": 92,
+      "frac_med": 0.87,
+      "appliedExt_med": 0.0,
+      "appliedExt_max": 0.3,
+      "fullReach_med": 52.0,
+      "chainReach_max": 49.0,
+      "reach_within_envelope": true,
+      "armRL_med": 1.0,
+      "webcamAge_rows": 294,
+      "effAgeMs_med": 1.1
+    },
+    "emory_lockON": {
+      "label": "Emory lock=1",
+      "wristLimit_rows": 78,
+      "wristLimit_out": 5,
+      "twist_med": 1.4,
+      "swing_med": 8.3,
+      "chainReach_rows": 80,
+      "frac_med": 0.88,
+      "appliedExt_med": 0.0,
+      "appliedExt_max": 0.2,
+      "fullReach_med": 49.7,
+      "chainReach_max": 46.4,
+      "reach_within_envelope": true,
+      "armRL_med": 1.0,
+      "webcamAge_rows": 282,
+      "effAgeMs_med": 1.1
+    },
+    "emory_lockOFF": {
+      "label": "Emory lock=0",
+      "wristLimit_rows": 96,
+      "wristLimit_out": 9,
+      "twist_med": 3.7,
+      "swing_med": 20.1,
+      "chainReach_rows": 92,
+      "frac_med": 0.88,
+      "appliedExt_med": 0.0,
+      "appliedExt_max": 0.5,
+      "fullReach_med": 49.7,
+      "chainReach_max": 46.6,
+      "reach_within_envelope": true,
+      "armRL_med": 1.0,
+      "webcamAge_rows": 298,
+      "effAgeMs_med": 1.1
+    }
+  },
+  "phase2_verdict": {
+    "emory_envelope": "chainReach max 46.4-46.6 < fullReach 49.7 (HIS native span; Kellan 52.0) - no overstretch; armR=1.000",
+    "chain_fraction_avatar_native_proof": "frac_med 0.87-0.89 identical across avatars while fullReachCm differs per avatar (49.7 vs 52.0): fraction source-native, application avatar-native",
+    "kellan_stats_flat": "WristLimit out-rate 6.3% vs 6.5%, effAgeMs 1.1 both states, appliedExt max 0.3 both",
+    "no_code": "reach-scale calibration deliberately disabled in the accepted stack (ApplyAutoQuestProfile sets mp.QuestConstrainedArmReachScaleCalibration=0; chain-path successor); adding the ratio map would duplicate it and pre-scale the arm-length calibration's own reach measurements (learner poisoning). No row convicts a defect - iron rule 1 forbids the change."
+  },
+  "phase3_legs": {
+    "kellan_lockON": {
+      "footSkate_rows": 260,
+      "planted_rows": 214,
+      "planted_planarSpd_p90": 23.2,
+      "planted_planarSpd_med": 8.4,
+      "penetr_max": 1.45,
+      "legRL_med": 1.0,
+      "legRR_med": 1.0,
+      "legRL_minmax": [
+        1.0,
+        1.0
+      ]
+    },
+    "kellan_lockOFF": {
+      "footSkate_rows": 294,
+      "planted_rows": 137,
+      "planted_planarSpd_p90": 33.9,
+      "planted_planarSpd_med": 13.9,
+      "penetr_max": 0.25,
+      "legRL_med": 1.0,
+      "legRR_med": 1.0,
+      "legRL_minmax": [
+        1.0,
+        1.0
+      ]
+    },
+    "emory_lockON": {
+      "footSkate_rows": 282,
+      "planted_rows": 237,
+      "planted_planarSpd_p90": 21.7,
+      "planted_planarSpd_med": 8.7,
+      "penetr_max": 1.47,
+      "legRL_med": 1.0,
+      "legRR_med": 1.0,
+      "legRL_minmax": [
+        1.0,
+        1.0
+      ]
+    },
+    "emory_lockOFF": {
+      "footSkate_rows": 298,
+      "planted_rows": 138,
+      "planted_planarSpd_p90": 33.3,
+      "planted_planarSpd_med": 13.4,
+      "penetr_max": 0.42,
+      "legRL_med": 1.0,
+      "legRR_med": 1.0,
+      "legRL_minmax": [
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "phase3_verdict": {
+    "leg_span_native": "legRL/legRR = 1.000 exactly (min=max) on Kellan AND Emory, both states - within +-5% trivially",
+    "ref_lengths_source": "RefThighLen/RefCalfLen cached from the TARGET skeleton ref pose (census L1, _ReferenceCache.cpp:812-813); nothing user/source-sourced; no swap needed",
+    "footskate_p90": "planted planarSpd p90 tracks the replay window, not the avatar/flag: window A 23.2 (Kellan) vs 21.7 (Emory); window B 33.9 vs 33.3; baseline full-run envelope ~29-33"
+  }
+}
