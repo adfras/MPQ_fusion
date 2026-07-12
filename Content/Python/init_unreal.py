@@ -30,7 +30,21 @@ try:
     # get_command_line() returns empty here - probed live 2026-07-05.
     _is_automation = any(flag in _cmdline for flag in ("-unattended", "-nullrhi", "runtests"))
     if not _is_automation:
-        unreal.SystemLibrary.execute_console_command(None, "mp.MetaHumanActiveProfile Kellan")
+        # Mirror avatar (2026-07-12): the placed pawn's MetaHumanProfileId is the real
+        # selector (it stomps this CVar at every play start), so align the CVar to the
+        # pawn instead of hardcoding Kellan - a saved avatar choice survives reboots,
+        # and mp.MirrorAvatar <Name> switches between sessions.
+        _profile = "Kellan"
+        try:
+            for _actor in unreal.EditorLevelLibrary.get_all_level_actors():
+                if "Embodied" in _actor.get_class().get_name():
+                    _pid = str(_actor.get_editor_property("MetaHumanProfileId"))
+                    if _pid and _pid != "None":
+                        _profile = _pid
+                    break
+        except Exception:  # noqa: BLE001 - map may not have a placed pawn
+            pass
+        unreal.SystemLibrary.execute_console_command(None, "mp.MetaHumanActiveProfile " + _profile)
         # Worn A/B rig (2026-07-06): interactive boots run the CANDIDATE settings variant -
         # the referee-verified stack (heavy model, pelvis HMD anchor, gain-calibrated palm
         # trims, geometric shrug, rescue divergence, open knee clamps). The variant must be
@@ -45,7 +59,19 @@ try:
         # handovers (camera latch / handback), so it is worn-session cheap. It was off in the
         # session that needed it; keep it armed for interactive boots.
         unreal.SystemLibrary.execute_console_command(None, "mp.MediaPipeCameraHandTrace 1")
-        unreal.log("[AutoTrial] layered fusion applied at startup (CANDIDATE variant, worn A/B rig 2026-07-06)")
+        # Tracking-quality tracers (2026-07-12): the full row set the scoreboards mine
+        # (throttled ~1Hz/side, worn-session cheap). Armed at boot so a bare interactive
+        # boot needs NOTHING before VR Preview - previously these were bridge-armed by
+        # hand each session. Automation boots keep raw defaults via the guard above.
+        for _tracer in (
+            "mp.FootSkateTrace",
+            "mp.WristLimitTrace",
+            "mp.WebcamAgeTrace",
+            "mp.ForeshortenTrace",
+            "mp.QuestWristTrace",
+        ):
+            unreal.SystemLibrary.execute_console_command(None, _tracer + " 1")
+        unreal.log("[AutoTrial] layered fusion applied at startup (CANDIDATE variant, worn A/B rig 2026-07-06; tracking-quality tracers armed 2026-07-12)")
     else:
         unreal.log("[AutoTrial] automation session detected - raw defaults kept")
 except Exception as error:  # noqa: BLE001 - never break editor startup

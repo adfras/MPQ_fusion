@@ -1281,6 +1281,114 @@ const AMediaPipeEmbodiedAvatarPawn* FindPlacedMetaHumanEmbodiedAvatarPawn(UWorld
 	return PlacedPawn && PlacedPawn->ShouldUseMetaHumanAvatar() ? PlacedPawn : nullptr;
 }
 
+// Mirror-avatar switch (2026-07-12): the placed pawn's MetaHumanProfileId is the real
+// selector - ApplySelectedAvatarProfileToRuntimeCVars re-applies it to
+// mp.MetaHumanActiveProfile at every play start, so typing that CVar into the console
+// is silently stomped ("still Kellan"), and flipping the CVar DURING a session
+// de-activates the spawned avatar's profile, which hard-disables the full arm-chain
+// retargeter (the mangled-shoulders report). This command writes the pawn property
+// itself so the switch works from the console on any machine, no editor UI, no agent.
+FAutoConsoleCommand CmdMirrorAvatar(
+	TEXT("mp.MirrorAvatar"),
+	TEXT("Select the mirror avatar for the NEXT session, e.g. 'mp.MirrorAvatar Emory' (valid: Wallace, Emory, Hudson, Kellan, Maria, Payton, or Manny for the internal Manny baseline). Writes the placed embodied pawn's properties - the real selector; the CVar alone is stomped at play start. Run while the editor is idle, then press VR Preview. No argument = print the current selection and valid ids."),
+	FConsoleCommandWithArgsDelegate::CreateStatic([](const TArray<FString>& Args)
+	{
+		auto BuildValidIdList = []() -> FString
+		{
+			TArray<FMediaPipeMetaHumanProfileDefinition> Profiles;
+			GetMediaPipeAvailableMetaHumanProfiles(Profiles);
+			FString Ids;
+			for (const FMediaPipeMetaHumanProfileDefinition& Profile : Profiles)
+			{
+				Ids += Ids.IsEmpty() ? TEXT("") : TEXT(", ");
+				Ids += Profile.ProfileId.ToString();
+			}
+			return Ids;
+		};
+
+		UWorld* EditorWorld = nullptr;
+		bool bPlayWorldActive = false;
+		if (GEngine)
+		{
+			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			{
+				if (Context.WorldType == EWorldType::Editor && Context.World())
+				{
+					EditorWorld = Context.World();
+				}
+				else if ((Context.WorldType == EWorldType::PIE || Context.WorldType == EWorldType::Game) && Context.World())
+				{
+					bPlayWorldActive = true;
+				}
+			}
+		}
+		AMediaPipeEmbodiedAvatarPawn* PlacedPawn = EditorWorld ? FindPlacedEmbodiedAvatarPawn(EditorWorld) : nullptr;
+
+		if (Args.Num() == 0)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MirrorAvatar: current=%s validIds=%s, Manny"),
+				!PlacedPawn ? TEXT("<no placed pawn in editor world>")
+					: (PlacedPawn->ShouldUseMetaHumanAvatar()
+						? *PlacedPawn->MetaHumanProfileId.ToString()
+						: TEXT("Manny (internal baseline)")),
+				*BuildValidIdList());
+			return;
+		}
+
+		const FString RequestedText = Args[0].TrimStartAndEnd();
+		const bool bWantManny = RequestedText.Equals(TEXT("Manny"), ESearchCase::IgnoreCase);
+		FMediaPipeMetaHumanProfileDefinition Definition;
+		if (!bWantManny && !TryGetMediaPipeMetaHumanProfile(FName(*RequestedText), Definition))
+		{
+			UE_LOG(LogMediaPipePose, Warning,
+				TEXT("mp.MirrorAvatar: unknown profile '%s'. Valid ids: %s, Manny"),
+				*Args[0], *BuildValidIdList());
+			return;
+		}
+		if (!PlacedPawn)
+		{
+			UE_LOG(LogMediaPipePose, Warning,
+				TEXT("mp.MirrorAvatar: no placed embodied pawn in the editor world - open the preview room map first."));
+			return;
+		}
+
+		PlacedPawn->Modify();
+		const FString StoredLabel = bWantManny ? FString(TEXT("Manny (internal baseline)")) : Definition.ProfileId.ToString();
+		if (bWantManny)
+		{
+			PlacedPawn->AvatarType = EMediaPipeEmbodiedAvatarType::InternalManny;
+		}
+		else
+		{
+			PlacedPawn->AvatarType = EMediaPipeEmbodiedAvatarType::MetaHuman;
+			PlacedPawn->MetaHumanProfileId = Definition.ProfileId;
+		}
+		if (bPlayWorldActive)
+		{
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.MirrorAvatar: %s stored on %s. A session is RUNNING - the switch applies on the NEXT VR Preview; the live session was left untouched (mid-session profile flips disable the arm chain)."),
+				*StoredLabel, *PlacedPawn->GetActorNameOrLabel());
+			return;
+		}
+		// Idle: align the runtime CVars the pawn would stomp at play start anyway, so
+		// read-backs agree with the selection immediately.
+		if (IConsoleVariable* AutoQuestAvatarVar = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.AutoQuestAvatar")))
+		{
+			AutoQuestAvatarVar->Set(bWantManny ? 0 : 1, ECVF_SetByConsole);
+		}
+		if (!bWantManny)
+		{
+			if (IConsoleVariable* ActiveProfileVar = IConsoleManager::Get().FindConsoleVariable(TEXT("mp.MetaHumanActiveProfile")))
+			{
+				ActiveProfileVar->Set(*Definition.ProfileId.ToString(), ECVF_SetByConsole);
+			}
+		}
+		UE_LOG(LogMediaPipePose, Log,
+			TEXT("mp.MirrorAvatar: %s stored on %s and runtime CVars aligned. Press VR Preview."),
+			*StoredLabel, *PlacedPawn->GetActorNameOrLabel());
+	}));
+
 FName GetMetaHumanProfileTag(const FName ProfileId)
 {
 	const FString ProfileText = ProfileId.IsNone()

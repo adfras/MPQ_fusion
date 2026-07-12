@@ -123,25 +123,44 @@ Steps:
 
 The selector is a PROPERTY ON THE PLACED PAWN, not a console variable. Verified
 2026-07-12 (PIE spawned `MP_LiveMetaHumanEmory` + self-view, profile resolved
-`active=1 valid=1`):
+`active=1 valid=1`).
 
-1. In the editor (NOT during play), select **`MP_PlacedEmbodiedMetaHumanPawn`** in the
-   Outliner and set its **`MetaHuman Profile Id`** to the cast member you want
-   (`Kellan`, `Maria`, `Wallace`, `Emory`, `Hudson`, `Payton`).
-2. Press VR Preview. The pawn spawns that MetaHuman as the live mirror actor and its
-   self-view copy; there is no per-character level setup.
-3. `Manny` is not a profile id — the placed `MP_LiveMediaPipeManny` runs alongside
-   every session, and setting the pawn's `Avatar Type` to non-MetaHuman drops the
-   embodiment to the Manny baseline (`mp.AutoQuestAvatar 0`).
+**The one-line way (any machine, no agent, no editor UI):** in the editor console,
+while NOT playing:
 
-Bridge one-liner (same thing without clicking, editor idle):
-
-```python
-import unreal
-for a in unreal.EditorLevelLibrary.get_all_level_actors():
-    if 'Embodied' in a.get_class().get_name():
-        a.set_editor_property('MetaHumanProfileId', 'Maria')
 ```
+mp.MirrorAvatar Emory
+```
+
+then press VR Preview. The command writes the placed pawn's properties (the real
+selector) and aligns the runtime CVars. Run it with no argument to print the current
+selection and the valid ids (`Wallace`, `Emory`, `Hudson`, `Kellan`, `Maria`,
+`Payton`, `Manny`). `mp.MirrorAvatar Manny` switches the pawn to the internal Manny
+baseline (`Avatar Type` non-MetaHuman, `mp.AutoQuestAvatar 0`); any cast name
+switches back to MetaHuman mode automatically. If a session is already running the
+command stores the choice for the NEXT preview and deliberately leaves the live
+session alone.
+
+Equivalent manual path: select **`MP_PlacedEmbodiedMetaHumanPawn`** in the Outliner
+and set its **`Avatar Type`** / **`MetaHuman Profile Id`** in the Details panel. The
+placed `MP_LiveMediaPipeManny` reference runs alongside every session regardless of
+this selection.
+
+### 7c. The showcase loop (zero-setup, any machine)
+
+A bare interactive editor boot needs NOTHING typed before the first preview: the
+editor opens straight into the showcase room (`EditorStartupMap`), and
+`Content/Python/init_unreal.py` arms the whole gold standard — candidate variant,
+live trial, heavy pose model, and every tracer — at startup (interactive boots only;
+automation keeps raw defaults). The loop is:
+
+1. Open the editor (double-click the `.uproject`). Optional sanity check:
+   `mp.DumpLiveProfileSettings` → candidate variant, rescue/legs/panel at 1.
+2. **VR Preview** → showcase the current avatar → **Esc** to stop.
+3. `mp.MirrorAvatar Maria` (or any cast id) → **VR Preview** again. Repeat.
+4. Nothing needs re-arming between sessions — variant, trial, and tracers survive
+   preview stop/start. The avatar choice resets to the level's saved default on the
+   next editor restart unless you save the level (Ctrl+S) after switching.
 
 **Why `mp.MetaHumanActiveProfile` alone does NOT work here, and is dangerous
 mid-session:** the placed pawn re-applies its own property to that CVar at every play
