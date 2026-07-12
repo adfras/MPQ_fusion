@@ -904,7 +904,8 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// (mp.ClavicleShrugFusion rows + worn screenshot). Deep drops (beyond
 		// mp.ShrugRestRefDownBandCm below rest, engine default 2.5cm) now learn at the
 		// active 600s rate, symmetric with the up direction. Byte-identical at engine
-		// default 0. AWAITING WORN VERDICT (squat -> stand must not leave a shrug).
+		// default 0. ACCEPTED (worn 2026-07-12 follow-up: restRef held 44.4-45.4cm across
+		// the whole session vs the 47->40 collapse the fix answered; user verdict "good").
 		FMediaPipeCVarSetting::MakeInt(TEXT("mp.ShrugRestRefDownGate"), 1),
 		// Small-lift shrug response (2026-07-12, same worn session): a real arms-down
 		// shrug reads only 1.5-3cm at the webcam shoulder landmark and the legacy fixed
@@ -915,7 +916,8 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// the gain). Honest ceiling note: the webcam signal for an arms-down shrug is
 		// small - if this still reads weak, tune mp.ShrugDeadbandCm / mp.ShrugLiftGain
 		// live at the mirror rather than pushing the gain past ~2 (flicker risk).
-		// AWAITING WORN VERDICT (live-bisectable).
+		// ACCEPTED (worn 2026-07-12 follow-up, same session as the down-gate; user
+		// verdict "good"). Live-bisectable.
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
 		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
 	};
