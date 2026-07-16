@@ -175,7 +175,10 @@ Goal: two independent apps exchanging one TCP connection of JSON lines.
   crash the session — a dropped partner must not end the participant's recording.
 - Deliverable alongside the module: `Tools/dyad_partner_player.py` — the recorded
   seat B described above. Full protocol, original-timing row streaming from any
-  schema-v2 cache, configurable READY delay, clean BYE. Python because it's
+  schema-v2 cache, configurable READY delay, clean BYE. **Loops the recording
+  seamlessly**: timestamps rebased each pass so the stream never stops;
+  `--start/--duration` select a clean segment so the loop seam lands on a calm pose
+  (the drive path's existing gap tolerance absorbs the seam). Python because it's
   text-first, runs without UE, and doubles as the protocol's reference client.
 - Gates: loopback on one machine — the partner player on localhost streams the
   canonical cache as seat B; assert seat A's partner pawn animates and the control
@@ -221,14 +224,13 @@ touching the console.
   session log; item lists live in the condition file. (Which instrument — e.g. the
   standardized embodiment questionnaire — is a study-design choice, not a build
   choice; the hook just renders items and records answers.)
-- **Partner performance recording**: capture a dedicated ~5–10 minute scripted
-  partner session (Alan solo — gesturing, listening postures, conversational turns;
-  needs no ethics approval because it is the researcher). This, not the calibration
-  dataset, is what the partner player streams in pilots — the calibration blocks look
-  like exercises, not a conversation partner. Store under
-  `Saved/DyadStudy/partner_performances/` with the canonical-dataset protection rule:
-  a hash-verified copy under `D:\Backups\` (and the Seagate) before it is ever relied
-  on; never delete or move without a verified copy.
+- **Partner source: the canonical replay dataset, on loop** (Alan's call 2026-07-16 —
+  no new recording; the partner player loops a chosen segment seamlessly). Pick and
+  document the segment in the condition file (`--start/--duration`) so every session
+  streams the identical partner behavior — which is also a standardization win for
+  pilots. A dedicated conversational performance recording stays an optional later
+  upgrade; if one is ever made, it gets the canonical-dataset protection rules
+  (hash-verified backup before anything relies on it).
 - Gates: a scripted dry run (partner player + canned condition file) produces two
   complete session folders and the miner emits every scoreboard column without
   hand-editing. Tests grow (miner unit test on a fixture folder).
@@ -236,7 +238,7 @@ touching the console.
 ## Phase 6 — Solo pilot with the recorded partner (the human gate)
 
 The single batched human check for this plan — Alan alone, one machine, the partner
-player as seat B streaming the partner performance recording:
+player as seat B streaming the looped canonical recording:
 
 - Full journey twice, in-headset: lobby → choose self + partner avatars → confirm →
   "waiting" → travel → interaction room with the recorded partner across the table —
