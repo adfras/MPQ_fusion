@@ -48,9 +48,11 @@ and gotchas is `SETUP_NEW_MACHINE.md` §7-7d.
 
 - `DYADIC_STUDY_PLAN.md`: the ACTIVE 2026-07 plan for the two-participant research
   platform — asymmetric avatar choice (each participant picks their own AND their
-  partner's appearance, per-viewer), lobby/menu flow, source-row streaming over LAN
-  through the replay drive path, experiment harness with yoked-control conditions,
-  one piloted dyad session at the end.
+  partner's appearance, per-viewer), lobby/menu flow, source-row streaming through
+  the replay drive path, experiment harness with yoked-control conditions. Until
+  ethics approval, seat B is a recording played through the real wire
+  (`Tools/dyad_partner_player.py`); the human gate is a solo pilot, and the live
+  dyad is a parked checklist phase that activates on approval.
 - `TRACKING_QUALITY_PLAN.md`: the ACTIVE 2026-07 plan for stability/realism upgrades
   (timestamped residuals, wrist anatomical clamp, foreshortening Z-distrust, foot
   contact + lock, learned-prior bake-off) — research-derived, phased, desk-gated,

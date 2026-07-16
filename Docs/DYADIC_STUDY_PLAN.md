@@ -8,8 +8,14 @@ you see is yours, and the two never conflict. Research frame: embodiment + how c
 (vs. assignment) shapes experience, task behavior, and self-disclosure.
 
 This plan is in the house style: **one phase = one commit + push**, desk-verifiable
-gates per phase, **one piloted dyad session at the end** — no per-phase human gates.
+gates per phase, one piloted session at the end — no per-phase human gates.
 Written 2026-07-16 against main at 5be2d75 (208 tests).
+
+**Amendment (same day): the live two-person pilot is deferred until ethics approval.**
+Until then the partner seat is played by a **recording** through the real wire — see
+"The recorded partner is a first-class seat" below and Phases 6–7. The build target
+is unchanged; the guarantee to preserve at every phase is that switching from
+recorded to live partner changes *which process connects as seat B* and nothing else.
 
 ## The load-bearing architectural decision
 
@@ -38,6 +44,16 @@ Blueprints/UMG only as thin widget skins whose buttons call one C++ function eac
 built once in the editor by a human, rarely touched. MCP is a build-time tool for the
 implementing agent; it has no runtime role.
 
+**The recorded partner is a first-class seat.** `Tools/dyad_partner_player.py`
+connects to the host exactly as a human seat would: it speaks the complete control
+protocol (HELLO with clock exchange, CHOICES, auto-READY after a configurable delay,
+GO acknowledgment) and streams a recorded session's rows at original timing. The host
+seat cannot tell — and must never need to know — whether seat B is a person or the
+player. This is what makes the eventual live pilot a same-day switch instead of a
+build phase: when approval lands, seat B becomes the second rig instead of the
+player script, and nothing on the host changes. The player is also the development
+loopback for every phase from 3 on, so it stays exercised rather than rotting.
+
 ## Iron rules (all phases)
 
 - **The accepted tracking stack is untouched.** Dyad code is additive: new module(s),
@@ -62,12 +78,11 @@ implementing agent; it has no runtime role.
 
 ## Prerequisites
 
-- Seat 2 hardware: second PC set up per `SETUP_NEW_MACHINE.md` (build green, full test
-  count, gold-standard boot verified), second Quest + webcam. The Seagate copy
-  (verified 2026-07-16) is the transport.
-- Phases 0–2 need **one machine only**. Phase 3+ can be developed single-machine via
-  loopback (a `-game` second instance on localhost) and only needs the second rig for
-  the final LAN check and the Phase 6 pilot.
+- Phases 0–6 need **one machine only** — the entire platform, including the solo
+  pilot, runs with the partner player as seat B on localhost.
+- Seat 2 hardware (second PC per `SETUP_NEW_MACHINE.md`, second Quest + webcam; the
+  Seagate copy verified 2026-07-16 is the transport) is needed **only for Phase 7**,
+  the ethics-gated live dyad.
 - 5.8 MetaHuman note: the new in-editor MetaHuman Creator changes authoring of NEW
   MetaHumans only. The existing cast assets are unaffected and are used as-is.
   Creator-made additions to the cast are out of scope (they'd need proportion-matrix
@@ -158,11 +173,16 @@ Goal: two independent apps exchanging one TCP connection of JSON lines.
 - Failure behavior: heartbeat timeout (2 s) freezes the partner pawn in place and
   raises an experimenter-visible warning row; reconnect resumes the stream. Never
   crash the session — a dropped partner must not end the participant's recording.
-- Gates: loopback on one machine — a `-game` instance on localhost as seat B replaying
-  the canonical cache as its "live" source; assert seat A's partner pawn animates and
-  the control handshake round-trips. Unit tests: message framing (partial reads,
-  interleaved control+rows), clock-offset math, timeout/freeze path. LAN smoke test
-  deferred to whenever seat 2 exists — not a gate for this phase's commit. Tests grow.
+- Deliverable alongside the module: `Tools/dyad_partner_player.py` — the recorded
+  seat B described above. Full protocol, original-timing row streaming from any
+  schema-v2 cache, configurable READY delay, clean BYE. Python because it's
+  text-first, runs without UE, and doubles as the protocol's reference client.
+- Gates: loopback on one machine — the partner player on localhost streams the
+  canonical cache as seat B; assert seat A's partner pawn animates and the control
+  handshake round-trips. Unit tests: message framing (partial reads, interleaved
+  control+rows), clock-offset math, timeout/freeze path, plus a player self-test
+  against a fixture server. LAN smoke test deferred to Phase 7 — not a gate here.
+  Tests grow.
 
 ## Phase 4 — Ready handshake and travel to the interaction level
 
@@ -201,22 +221,52 @@ touching the console.
   session log; item lists live in the condition file. (Which instrument — e.g. the
   standardized embodiment questionnaire — is a study-design choice, not a build
   choice; the hook just renders items and records answers.)
-- Gates: a scripted dry run (loopback, canned condition file) produces two complete
-  session folders and the miner emits every scoreboard column without hand-editing.
-  Tests grow (miner unit test on a fixture folder).
+- **Partner performance recording**: capture a dedicated ~5–10 minute scripted
+  partner session (Alan solo — gesturing, listening postures, conversational turns;
+  needs no ethics approval because it is the researcher). This, not the calibration
+  dataset, is what the partner player streams in pilots — the calibration blocks look
+  like exercises, not a conversation partner. Store under
+  `Saved/DyadStudy/partner_performances/` with the canonical-dataset protection rule:
+  a hash-verified copy under `D:\Backups\` (and the Seagate) before it is ever relied
+  on; never delete or move without a verified copy.
+- Gates: a scripted dry run (partner player + canned condition file) produces two
+  complete session folders and the miner emits every scoreboard column without
+  hand-editing. Tests grow (miner unit test on a fixture folder).
 
-## Phase 6 — Pilot dyad (the human gate)
+## Phase 6 — Solo pilot with the recorded partner (the human gate)
 
-The single batched human check, same contract as the worn A/B sessions:
+The single batched human check for this plan — Alan alone, one machine, the partner
+player as seat B streaming the partner performance recording:
 
-- Two rigs on LAN, Alan + one partner, full journey twice: once Free-choice, once
-  Assigned (the yoked machinery exercised for real).
-- Judged on: menu usability in-headset, partner motion plausibility and latency feel,
-  travel smoothness, and the mined scoreboard being complete and sane.
+- Full journey twice, in-headset: lobby → choose self + partner avatars → confirm →
+  "waiting" → travel → interaction room with the recorded partner across the table —
+  once Free-choice, once Assigned via condition file (yoked machinery exercised).
+- Judged on: menu usability in-headset (pinch targets, readability, swap settling),
+  partner motion plausibility and latency feel, travel smoothness, and the mined
+  scoreboard being complete and sane for both "seats."
 - Escape hatches live: `mp.DyadRespawnAvatar` for a bad swap, partner-freeze on
-  disconnect, and everything bisectable by CVar without restart.
+  disconnect, everything bisectable by CVar without restart.
 - Output: verdict + a pilot session bundle checked in under
-  `Docs/dyad_pilot_baseline/` as the reference fingerprint for future changes.
+  `Docs/dyad_pilot_baseline/` as the reference fingerprint. **This closes the build.**
+  Everything after is study operations, not construction.
+
+## Phase 7 — Live dyad (PARKED — activates on ethics approval)
+
+Nothing here is buildable now by design; it is the checklist that makes approval day
+a setup day, not a development day:
+
+1. Stand up seat 2 from the Seagate copy per `SETUP_NEW_MACHINE.md` (build green,
+   full test count, gold-standard boot verified).
+2. LAN smoke: HELLO/clock exchange, row stream both directions, heartbeat/reconnect,
+   measured round-trip logged (expect ~5–15 ms).
+3. Run the exact Phase 6 script with a human at seat 2 instead of the player — same
+   levels, same condition files, same miner. The host-side experience is identical by
+   the seat-B guarantee; the only new checks are two-way latency feel and voice
+   logistics (external to this codebase).
+4. Re-baseline: check the first live-dyad bundle in under `Docs/dyad_pilot_baseline/`
+   beside the solo one.
+- If any step requires code changes beyond configuration, that is a defect against
+  the seat-B guarantee — file it and fix it as such, don't absorb it silently.
 
 ---
 
