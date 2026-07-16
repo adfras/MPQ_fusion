@@ -20,6 +20,11 @@
 			"LoadingPhase": "PostConfigInit"
 		},
 		{
+			"Name": "DyadLink",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "DyadStudy",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"

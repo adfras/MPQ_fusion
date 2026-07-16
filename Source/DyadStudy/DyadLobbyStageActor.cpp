@@ -4,6 +4,7 @@
 #include "Components/WidgetInteractionComponent.h"
 #include "DyadAvatarMenuWidget.h"
 #include "DyadAvatarSwapLibrary.h"
+#include "DyadLinkSubsystem.h"
 #include "EmbodiedFusionComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -145,6 +146,7 @@ void ADyadLobbyStageActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		Session->OnAvatarChoiceChanged.Remove(ChoiceChangedHandle);
 	}
 	FDyadAvatarRigFactory::DestroyRig(GetWorld(), PartnerPreviewRig);
+	FDyadAvatarRigFactory::DestroyRig(GetWorld(), WirePartnerRig);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -319,10 +321,53 @@ void ADyadLobbyStageActor::TickAutoJourney(const float DeltaSeconds)
 	AutoJourneyStep++;
 }
 
+void ADyadLobbyStageActor::TickWirePartner()
+{
+	UWorld* World = GetWorld();
+	UDyadLinkSubsystem* Link = World && World->GetGameInstance()
+		? World->GetGameInstance()->GetSubsystem<UDyadLinkSubsystem>()
+		: nullptr;
+	if (!World || !Link)
+	{
+		return;
+	}
+	const bool bWantWirePartner = Link->HasWireRows();
+	if (!bWantWirePartner)
+	{
+		if (WirePartnerRig.IsSpawned())
+		{
+			FDyadAvatarRigFactory::DestroyRig(World, WirePartnerRig);
+		}
+		return;
+	}
+
+	// The wire partner wears MY choice for the partner slot (per-viewer appearance, the
+	// load-bearing design decision); Kellan until a choice exists.
+	const UDyadSessionSubsystem* Session = GetSession();
+	FName WireAvatarId = Session ? Session->GetPartnerAvatarId() : NAME_None;
+	if (WireAvatarId.IsNone())
+	{
+		WireAvatarId = FName(TEXT("Kellan"));
+	}
+	if (WirePartnerRig.IsSpawned() && WirePartnerRig.AvatarId == WireAvatarId)
+	{
+		return;
+	}
+	FDyadAvatarRigFactory::DestroyRig(World, WirePartnerRig);
+	FDyadAvatarRigFactory::SpawnRig(
+		World,
+		WireAvatarId,
+		WirePartnerRelativeTransform * GetActorTransform(),
+		Link->GetWireSource(),
+		TEXT("MP_DyadWirePartner"),
+		WirePartnerRig);
+}
+
 void ADyadLobbyStageActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	PublishLiveTee();
 	EnsurePinchInteraction();
+	TickWirePartner();
 	TickAutoJourney(DeltaSeconds);
 }

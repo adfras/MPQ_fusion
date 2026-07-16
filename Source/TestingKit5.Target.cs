@@ -10,6 +10,6 @@ public class TestingKit5Target : TargetRules
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V6;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
-		ExtraModuleNames.AddRange(new string[] { "TestingKit5", "MediaPipeDriver", "DyadStudy" });
+		ExtraModuleNames.AddRange(new string[] { "TestingKit5", "MediaPipeDriver", "DyadLink", "DyadStudy" });
 	}
 }

@@ -46,6 +46,18 @@ public:
 		double StampNowSeconds,
 		FEmbodiedFusionSourceObservations& OutObservations,
 		FString* OutPhaseName = nullptr) const;
+	// The schema-v2 source-row parser, exposed for the dyad wire (DYADIC_STUDY_PLAN
+	// Phase 3): inbound ROW payloads parse through the exact code path replay caches
+	// parse through, so a wire-driven partner and a file-driven ghost see identical
+	// observations for identical rows.
+	static bool ParseSourceRowObject(
+		const TSharedPtr<FJsonObject>& RowObject,
+		double& OutTimeSeconds,
+		FString* OutPhaseName,
+		FEmbodiedFusionSourceObservations& OutObservations);
+	// The parser's landmark-name table (name -> EMediaPipePoseLandmark), exposed so the
+	// wire's row SERIALIZER emits exactly the names the parser accepts.
+	static const TMap<FString, EMediaPipePoseLandmark>& GetSourceRowLandmarkNames();
 	FMediaPipeTrackingFusionReplayStatus GetStatus() const;
 
 private:

@@ -1,9 +1,9 @@
 using System.IO;
 using UnrealBuildTool;
 
-public class DyadStudy : ModuleRules
+public class DyadLink : ModuleRules
 {
-	public DyadStudy(ReadOnlyTargetRules Target) : base(Target)
+	public DyadLink(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		bUseUnity = false;
@@ -19,13 +19,9 @@ public class DyadStudy : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"Json",
-			"InputCore",
-			"HeadMountedDisplay",
-			"UMG",
-			"Slate",
-			"SlateCore",
-			"MediaPipeDriver",
-			"DyadLink"
+			"Sockets",
+			"Networking",
+			"MediaPipeDriver"
 		});
 	}
 }

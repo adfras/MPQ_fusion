@@ -1032,6 +1032,31 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::GetCurrentObservations(
 	return true;
 }
 
+bool FMediaPipeTrackingFusionDatasetReplayRuntime::ParseSourceRowObject(
+	const TSharedPtr<FJsonObject>& RowObject,
+	double& OutTimeSeconds,
+	FString* OutPhaseName,
+	FEmbodiedFusionSourceObservations& OutObservations)
+{
+	FReplaySample Sample;
+	if (!ParseSampleObject(RowObject, Sample))
+	{
+		return false;
+	}
+	OutTimeSeconds = Sample.TimeSeconds;
+	if (OutPhaseName)
+	{
+		*OutPhaseName = Sample.PhaseName;
+	}
+	OutObservations = Sample.Observations;
+	return true;
+}
+
+const TMap<FString, EMediaPipePoseLandmark>& FMediaPipeTrackingFusionDatasetReplayRuntime::GetSourceRowLandmarkNames()
+{
+	return LandmarkNameMap();
+}
+
 bool FMediaPipeTrackingFusionDatasetReplayRuntime::GetObservationsAtDatasetTime(
 	const double DatasetTimeSeconds,
 	const double StampNowSeconds,

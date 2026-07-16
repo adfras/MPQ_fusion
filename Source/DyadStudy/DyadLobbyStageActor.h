@@ -44,11 +44,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "DyadStudy")
 	FTransform PartnerPreviewRelativeTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector(-100.0f, 50.0f, 0.0f));
 
+	// Where a WIRE-driven partner stands while still in the lobby (Phase 3 loopback
+	// proof; Phase 4 moves the wire partner into the interaction room).
+	UPROPERTY(EditAnywhere, Category = "DyadStudy")
+	FTransform WirePartnerRelativeTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector(-180.0f, -60.0f, 0.0f));
+
 private:
 	void HandleAvatarChoiceChanged(EDyadAvatarSlot Slot, FName AvatarId);
 	void RespawnPartnerPreview(FName AvatarId);
 	void PublishLiveTee();
 	void EnsurePinchInteraction();
+	void TickWirePartner();
 	void TickAutoJourney(float DeltaSeconds);
 	UDyadSessionSubsystem* GetSession() const;
 
@@ -63,6 +69,7 @@ private:
 
 	TSharedPtr<FMediaPipeDyadLiveObservationTee> LiveTee;
 	FDyadAvatarRig PartnerPreviewRig;
+	FDyadAvatarRig WirePartnerRig;
 	FDelegateHandle ChoiceChangedHandle;
 
 	int32 AutoJourneyStep = 0;
