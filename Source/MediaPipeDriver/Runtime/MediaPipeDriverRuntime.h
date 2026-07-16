@@ -109,7 +109,10 @@ AActor* FindOrSpawnMetaHumanSelfViewActor(
 	const FTransform& SpawnTransform,
 	const FMediaPipeMetaHumanProfileDefinition& Profile,
 	AActor* Owner);
-USkeletalMeshComponent* FindMetaHumanBodyMesh(
+// Exported for the DyadStudy module (DYADIC_STUDY_PLAN Phase 0): the ghost/partner
+// assembly resolves the drivable body mesh on its own spawned MetaHuman the same way
+// the live pawn does.
+MEDIAPIPEDRIVER_API USkeletalMeshComponent* FindMetaHumanBodyMesh(
 	AActor* MetaHumanActor,
 	const FMediaPipeMetaHumanProfileDefinition& Profile);
 USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(

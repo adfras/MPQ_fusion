@@ -1,5 +1,6 @@
 #include "MediaPipeMetaHumanProfile.h"
 
+#include "MediaPipeDyadRowStream.h"
 #include "MediaPipePoseLog.h"
 #include "MediaPipeRuntimeCVars.h"
 
@@ -720,6 +721,20 @@ bool ResolveMediaPipeMetaHumanProfileForComponent(
 	OutTarget.Profile = MatchedProfile;
 	OutTarget.ProfileId = MatchedProfile.ProfileId;
 	OutTarget.bIsActiveProfile = MatchedProfile.ProfileId == ActiveProfileId;
+	// Dyad per-mesh active profile (DYADIC_STUDY_PLAN Phase 0): a dyad-owned mesh declared
+	// to wear MatchedProfile counts as active for ITSELF, so per-avatar arm retargeting
+	// runs on a second avatar that differs from the mirror's global active profile. With
+	// no overrides registered this is one atomic read and nothing changes.
+	if (!OutTarget.bIsActiveProfile)
+	{
+		FName DyadDeclaredProfileId;
+		if (FMediaPipeDyadAvatarProfileOverrides::GetMeshProfileOverride(
+				MeshComponent->GetUniqueID(), DyadDeclaredProfileId) &&
+			DyadDeclaredProfileId == MatchedProfile.ProfileId)
+		{
+			OutTarget.bIsActiveProfile = true;
+		}
+	}
 	OutTarget.bUseTargetFaceForwardAxis = MatchedProfile.FaceForwardAxis == EMediaPipeMetaHumanForwardAxis::Y;
 	OutTarget.TargetActor = const_cast<AActor*>(TargetActor);
 	OutTarget.TargetMesh = MeshComponent;

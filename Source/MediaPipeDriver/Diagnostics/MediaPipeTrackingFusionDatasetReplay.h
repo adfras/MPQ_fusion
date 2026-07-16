@@ -38,6 +38,14 @@ public:
 		double NowSeconds,
 		FEmbodiedFusionSourceObservations& OutObservations,
 		FString* OutPhaseName = nullptr);
+	// Direct row access for per-instance readers (dyad row streams): returns the sample at
+	// DatasetTimeSeconds restamped to StampNowSeconds, requiring only bLoaded — playback
+	// state (Start/Stop, CVar pacing) is bypassed so callers own their own pacing/looping.
+	bool GetObservationsAtDatasetTime(
+		double DatasetTimeSeconds,
+		double StampNowSeconds,
+		FEmbodiedFusionSourceObservations& OutObservations,
+		FString* OutPhaseName = nullptr) const;
 	FMediaPipeTrackingFusionReplayStatus GetStatus() const;
 
 private:

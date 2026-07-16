@@ -20,6 +20,11 @@
 			"LoadingPhase": "PostConfigInit"
 		},
 		{
+			"Name": "DyadStudy",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "MediaPipeDriverEditor",
 			"Type": "Editor",
 			"LoadingPhase": "Default"

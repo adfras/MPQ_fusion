@@ -18,8 +18,17 @@ import sys
 from collections import defaultdict
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SOURCE_ROOT = os.path.join(PROJECT_ROOT, "Source", "MediaPipeDriver")
-EDITOR_SOURCE_ROOT = os.path.join(PROJECT_ROOT, "Source", "MediaPipeDriverEditor")
+# Modules that may define or touch mp.* CVars. Missing directories are skipped so this
+# list can name modules before they exist (DyadLink lands in DYADIC_STUDY_PLAN Phase 3).
+SOURCE_ROOTS = tuple(
+    os.path.join(PROJECT_ROOT, "Source", module)
+    for module in (
+        "MediaPipeDriver",
+        "MediaPipeDriverEditor",
+        "DyadStudy",
+        "DyadLink",
+    )
+)
 ENGINE_INI = os.path.join(PROJECT_ROOT, "Config", "DefaultEngine.ini")
 OUTPUT_PATH = os.path.join(PROJECT_ROOT, "Docs", "CVAR_REFERENCE.md")
 
@@ -39,7 +48,9 @@ FINDSET_RE = re.compile(
 
 
 def iter_source_files():
-    for root_dir in (SOURCE_ROOT, EDITOR_SOURCE_ROOT):
+    for root_dir in SOURCE_ROOTS:
+        if not os.path.isdir(root_dir):
+            continue
         for dirpath, _dirnames, filenames in os.walk(root_dir):
             for fn in filenames:
                 if fn.endswith((".cpp", ".h", ".inl")):

@@ -14,6 +14,7 @@
 #include "MediaPipePoseDiagnosticReporter.h"
 #include "MediaPipePoseDiagnostics.h"
 #include "MediaPipePoseFrameContinuity.h"
+#include "MediaPipeDyadRowStream.h"
 #include "MediaPipeRuntimeCVars.h"
 #include "MediaPipeStage2ShoulderEvidence.h"
 #include "MediaPipeTrackingFusionDatasetReplay.h"
@@ -526,10 +527,25 @@ void FAnimNode_MediaPipePoseDriven::PreUpdate(const UAnimInstance* InAnimInstanc
 	const bool bBodyFusionRuntimeActive = BodyFusionRuntimePolicy.bBodyFusionEnabled;
 	FEmbodiedFusionSourceObservations ReplayObservations;
 	FString ReplayPhaseName;
-	if (FMediaPipeTrackingFusionDatasetReplayRuntime::Get().GetCurrentObservations(
-		FPlatformTime::Seconds(),
-		ReplayObservations,
-		&ReplayPhaseName))
+	// Dyad row-stream binding (DYADIC_STUDY_PLAN Phase 0): a mesh bound to a per-actor row
+	// stream (ghost/partner avatars) consumes ITS stream through this same injection block;
+	// it never falls through to the global dataset replay or to live sensor polling, even
+	// on stream gaps (empty observations park it — the seat-B guarantee). Unbound meshes
+	// take the pre-dyad path exactly; with no bindings the Fetch is one atomic read.
+	bool bHasInjectedRowObservations =
+		FMediaPipeDyadRowStreamRegistry::Fetch(
+			RuntimeStateKey,
+			FPlatformTime::Seconds(),
+			ReplayObservations,
+			&ReplayPhaseName) == EMediaPipeDyadRowStreamFetch::Bound;
+	if (!bHasInjectedRowObservations)
+	{
+		bHasInjectedRowObservations = FMediaPipeTrackingFusionDatasetReplayRuntime::Get().GetCurrentObservations(
+			FPlatformTime::Seconds(),
+			ReplayObservations,
+			&ReplayPhaseName);
+	}
+	if (bHasInjectedRowObservations)
 	{
 		const double ReplayNowSeconds = ReplayObservations.NowSeconds >= 0.0
 			? ReplayObservations.NowSeconds

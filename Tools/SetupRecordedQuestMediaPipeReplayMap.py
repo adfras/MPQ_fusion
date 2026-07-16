@@ -8,9 +8,12 @@ import unreal
 
 SOURCE_MAP = "/Game/MetaHumanRooms/L_MetaHumanPreviewRoom_MPQSignalCompare_01"
 DEST_MAP = "/Game/MetaHumanRooms/L_MetaHumanRecordedQuestMediaPipeReplay_01"
+# Schema-v2 cache (2026-06-12): carries the recorded Quest hand skeletons that drive
+# wrist rotation and fingers during replay (Docs/README.md "Current MPQ Fusion State").
+# The v1 wrist-only manifest stays beside it for older comparisons.
 REPLAY_MANIFEST = (
     "Saved/CodexAgent/Diagnostics/"
-    "tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_manifest.json"
+    "tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_v2_manifest.json"
 )
 REPLAY_ACTOR_LABEL = "MP_Replay_QuestMediaPipeRecording_Startup"
 

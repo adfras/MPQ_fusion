@@ -1032,6 +1032,34 @@ bool FMediaPipeTrackingFusionDatasetReplayRuntime::GetCurrentObservations(
 	return true;
 }
 
+bool FMediaPipeTrackingFusionDatasetReplayRuntime::GetObservationsAtDatasetTime(
+	const double DatasetTimeSeconds,
+	const double StampNowSeconds,
+	FEmbodiedFusionSourceObservations& OutObservations,
+	FString* OutPhaseName) const
+{
+	FScopeLock Lock(&CriticalSection);
+	if (!Status.bLoaded || Samples.Num() <= 0)
+	{
+		return false;
+	}
+
+	const int32 SampleIndex = FindSampleIndexForElapsed(
+		FMath::Clamp(DatasetTimeSeconds, 0.0, Status.DurationSeconds));
+	if (!Samples.IsValidIndex(SampleIndex))
+	{
+		return false;
+	}
+
+	OutObservations = Samples[SampleIndex].Observations;
+	RetimestampObservations(OutObservations, StampNowSeconds);
+	if (OutPhaseName)
+	{
+		*OutPhaseName = Samples[SampleIndex].PhaseName;
+	}
+	return true;
+}
+
 FMediaPipeTrackingFusionReplayStatus FMediaPipeTrackingFusionDatasetReplayRuntime::GetStatus() const
 {
 	FScopeLock Lock(&CriticalSection);
