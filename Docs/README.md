@@ -46,6 +46,11 @@ and gotchas is `SETUP_NEW_MACHINE.md` §7-7d.
 
 ## Structure / Cleanup Work
 
+- `DYADIC_STUDY_PLAN.md`: the ACTIVE 2026-07 plan for the two-participant research
+  platform — asymmetric avatar choice (each participant picks their own AND their
+  partner's appearance, per-viewer), lobby/menu flow, source-row streaming over LAN
+  through the replay drive path, experiment harness with yoked-control conditions,
+  one piloted dyad session at the end.
 - `TRACKING_QUALITY_PLAN.md`: the ACTIVE 2026-07 plan for stability/realism upgrades
   (timestamped residuals, wrist anatomical clamp, foreshortening Z-distrust, foot
   contact + lock, learned-prior bake-off) — research-derived, phased, desk-gated,
