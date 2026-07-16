@@ -2,6 +2,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "DyadLinkSubsystem.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
@@ -199,11 +200,25 @@ void UDyadAvatarMenuWidget::RefreshFromSession()
 	}
 	if (StatusText)
 	{
-		const FString Status = bLocked
-			? FString::Printf(TEXT("Locked: you = %s, partner = %s"),
-				*Session->GetSelfAvatarId().ToString(), *Session->GetPartnerAvatarId().ToString())
-			: FString::Printf(TEXT("you = %s, partner = %s"),
+		FString Status;
+		const UWorld* World = GetWorld();
+		UDyadLinkSubsystem* Link = World && World->GetGameInstance()
+			? World->GetGameInstance()->GetSubsystem<UDyadLinkSubsystem>()
+			: nullptr;
+		if (bLocked && Link && Link->GetTravelState() == EDyadTravelState::WaitingForPeer)
+		{
+			Status = TEXT("Waiting for partner...");
+		}
+		else if (bLocked && Link && Link->GetTravelState() == EDyadTravelState::Traveling)
+		{
+			Status = TEXT("Starting...");
+		}
+		else
+		{
+			Status = FString::Printf(TEXT("%syou = %s, partner = %s"),
+				bLocked ? TEXT("Locked: ") : TEXT(""),
 				*Session->GetSelfAvatarId().ToString(), *Session->GetPartnerAvatarId().ToString());
+		}
 		StatusText->SetText(FText::FromString(Status));
 	}
 }

@@ -7,6 +7,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "MediaPipeEmbodiedAvatarPawn.h"
+#include "Kismet/GameplayStatics.h"
 #include "MediaPipeTrackingFusionDatasetReplay.h"
 #include "Misc/DateTime.h"
 
@@ -38,6 +39,12 @@ TAutoConsoleVariable<float> CVarDyadRowSendHz(
 TAutoConsoleVariable<float> CVarDyadHeartbeatIntervalSeconds(
 	TEXT("mp.DyadHeartbeatIntervalSeconds"), 0.5f,
 	TEXT("Dyad wire heartbeat send interval."));
+
+FString GDyadInteractionLevel = TEXT("/Game/MetaHumanRooms/L_DyadInteraction_01");
+FAutoConsoleVariableRef CVarDyadInteractionLevel(
+	TEXT("mp.DyadInteractionLevel"), GDyadInteractionLevel,
+	TEXT("Level both seats open at GO (DYADIC_STUDY_PLAN Phase 4)."),
+	ECVF_Default);
 
 TAutoConsoleVariable<float> CVarDyadHeartbeatTimeoutSeconds(
 	TEXT("mp.DyadHeartbeatTimeoutSeconds"), 2.0f,
@@ -140,6 +147,46 @@ void UDyadLinkSubsystem::SendChoicesFromSession()
 		Session->GetChoiceMode(EDyadAvatarSlot::Self) == EDyadChoiceMode::Free ? TEXT("free")
 			: (Session->GetChoiceMode(EDyadAvatarSlot::Self) == EDyadChoiceMode::Assigned ? TEXT("assigned") : TEXT("yoked")))));
 	bChoicesSent = true;
+}
+
+void UDyadLinkSubsystem::NotifyArrivedInInteraction()
+{
+	TravelMachine.OnArrivedInInteraction();
+	if (UDyadSessionSubsystem* Session = GetSession())
+	{
+		Session->RecordEvent(TEXT("travel_arrived"), GDyadInteractionLevel);
+	}
+}
+
+void UDyadLinkSubsystem::ApplyTravelStep(const FDyadTravelStateMachine::FStepOutput& Step)
+{
+	if (Step.bSendReady)
+	{
+		SendReady();
+	}
+	if (Step.bSendGo)
+	{
+		SendGo(GDyadInteractionLevel);
+	}
+	if (Step.bOpenLevel)
+	{
+		UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr;
+		if (World)
+		{
+			UE_LOG(LogDyadLinkSub, Log, TEXT("mp.DyadLinkTrace: TRAVEL -> %s"), *GDyadInteractionLevel);
+			if (UDyadSessionSubsystem* Session = GetSession())
+			{
+				Session->RecordEvent(TEXT("travel_open_level"), GDyadInteractionLevel);
+			}
+			UGameplayStatics::OpenLevel(World, FName(*GDyadInteractionLevel));
+		}
+	}
+}
+
+void UDyadLinkSubsystem::HandleChoicesLocked()
+{
+	SendChoicesFromSession();
+	ApplyTravelStep(TravelMachine.OnLocalChoicesLocked());
 }
 
 bool UDyadLinkSubsystem::SendReady()
@@ -250,6 +297,7 @@ void UDyadLinkSubsystem::HandleLine(const FString& Line, const double NowSeconds
 			Session->RecordEvent(TEXT("wire_peer_ready"), FString());
 		}
 		OnPeerReadyChanged.Broadcast();
+		ApplyTravelStep(TravelMachine.OnPeerReady());
 		return;
 	}
 
@@ -263,6 +311,11 @@ void UDyadLinkSubsystem::HandleLine(const FString& Line, const double NowSeconds
 		}
 		Connection.SendLine(DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeGoAck(Level)));
 		OnGoReceived.Broadcast(Level);
+		if (!Level.IsEmpty())
+		{
+			GDyadInteractionLevel = Level;
+		}
+		ApplyTravelStep(TravelMachine.OnGoReceived());
 		return;
 	}
 
@@ -288,6 +341,7 @@ void UDyadLinkSubsystem::HandleLine(const FString& Line, const double NowSeconds
 		}
 		bPeerReady = false;
 		OnPeerReadyChanged.Broadcast();
+		TravelMachine.OnPeerReadyLost();
 		// A gracefully departing peer never trips a socket error: release the socket now
 		// so the host is immediately listening for the next connection (freeze the
 		// partner where it stands until then).
@@ -336,6 +390,7 @@ void UDyadLinkSubsystem::Tick(float DeltaTime)
 		AppliedRole = DesiredRole;
 		bPeerReady = false;
 		bChoicesSent = false;
+		TravelMachine.Reset(DesiredRole == TEXT("host"));
 		if (DesiredRole == TEXT("host"))
 		{
 			Connection.StartHost(CVarDyadPort.GetValueOnGameThread());
@@ -354,7 +409,7 @@ void UDyadLinkSubsystem::Tick(float DeltaTime)
 			if (UDyadSessionSubsystem* Session = GetSession())
 			{
 				ChoicesLockedHandle = Session->OnChoicesLocked.AddUObject(
-					this, &UDyadLinkSubsystem::SendChoicesFromSession);
+					this, &UDyadLinkSubsystem::HandleChoicesLocked);
 			}
 		}
 	}
@@ -383,6 +438,7 @@ void UDyadLinkSubsystem::Tick(float DeltaTime)
 		}
 		bPeerReady = false;
 		OnPeerReadyChanged.Broadcast();
+		TravelMachine.OnPeerReadyLost();
 		UE_LOG(LogDyadLinkSub, Warning, TEXT("mp.DyadLinkTrace: WIRE DROPPED - partner frozen in place, awaiting reconnect."));
 		if (UDyadSessionSubsystem* Session = GetSession())
 		{

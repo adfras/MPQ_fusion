@@ -4,6 +4,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Tickable.h"
 #include "DyadLinkConnection.h"
+#include "DyadTravelStateMachine.h"
 #include "MediaPipeDyadRowStream.h"
 
 #include "DyadLinkSubsystem.generated.h"
@@ -76,15 +77,22 @@ public:
 	DECLARE_MULTICAST_DELEGATE(FDyadPeerReadyChanged);
 	FDyadPeerReadyChanged OnPeerReadyChanged;
 
+	// Travel flow (Phase 4): lock -> READY -> both-ready -> host GO -> both OpenLevel.
+	EDyadTravelState GetTravelState() const { return TravelMachine.GetState(); }
+	void NotifyArrivedInInteraction();
+
 private:
 	void HandleLine(const FString& Line, double NowSeconds);
 	void SendHello(double NowSeconds);
+	void HandleChoicesLocked();
 	void SendChoicesFromSession();
 	void PumpOutboundRows(double NowSeconds);
+	void ApplyTravelStep(const FDyadTravelStateMachine::FStepOutput& Step);
 	UDyadSessionSubsystem* GetSession() const;
 
 	FDyadLinkConnection Connection;
 	FDyadLinkClock Clock;
+	FDyadTravelStateMachine TravelMachine;
 	TSharedPtr<FDyadWireObservationSource> WireSource;
 
 	FString AppliedRole;
