@@ -119,6 +119,10 @@ AActor* FindOrSpawnMetaHumanSelfViewActor(
 MEDIAPIPEDRIVER_API USkeletalMeshComponent* FindMetaHumanBodyMesh(
 	AActor* MetaHumanActor,
 	const FMediaPipeMetaHumanProfileDefinition& Profile);
+// Exported for the DyadStudy module (Phase 2): dyad rigs get the same live-context
+// MetaHuman quality setup (groom/LOD/tick tuning) the mirror avatar gets — without it
+// hair renders as an unsimulated blob.
+MEDIAPIPEDRIVER_API void ApplyLiveMetaHumanQualityProfile(AActor* MetaHumanActor);
 USkeletalMeshComponent* FindMatchingMetaHumanSkeletalComponent(
 	USkeletalMeshComponent* TargetComponent,
 	const TArray<USkeletalMeshComponent*>& SourceComponents);

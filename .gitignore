@@ -3,6 +3,8 @@ Content/*
 !Content/
 !Content/Codex/
 !Content/Codex/**
+!Content/DyadStudy/
+!Content/DyadStudy/**
 !Content/CodexAgentTests/
 !Content/CodexAgentTests/**
 !Content/MCPBench/

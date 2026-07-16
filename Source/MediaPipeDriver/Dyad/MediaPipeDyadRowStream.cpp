@@ -18,9 +18,9 @@ FCriticalSection& StreamRegistryLock()
 	return Lock;
 }
 
-TMap<uint32, TSharedPtr<FMediaPipeDyadRowStream>>& StreamRegistryStore()
+TMap<uint32, TSharedPtr<FMediaPipeDyadObservationSource>>& StreamRegistryStore()
 {
-	static TMap<uint32, TSharedPtr<FMediaPipeDyadRowStream>> Store;
+	static TMap<uint32, TSharedPtr<FMediaPipeDyadObservationSource>> Store;
 	return Store;
 }
 
@@ -110,14 +110,14 @@ bool FMediaPipeDyadRowStream::GetObservationsNow(
 		OutPhaseName);
 }
 
-void FMediaPipeDyadRowStreamRegistry::BindMesh(const uint32 MeshKey, const TSharedPtr<FMediaPipeDyadRowStream>& Stream)
+void FMediaPipeDyadRowStreamRegistry::BindMesh(const uint32 MeshKey, const TSharedPtr<FMediaPipeDyadObservationSource>& Stream)
 {
 	if (MeshKey == 0u || !Stream.IsValid())
 	{
 		return;
 	}
 	FScopeLock Lock(&StreamRegistryLock());
-	TMap<uint32, TSharedPtr<FMediaPipeDyadRowStream>>& Store = StreamRegistryStore();
+	TMap<uint32, TSharedPtr<FMediaPipeDyadObservationSource>>& Store = StreamRegistryStore();
 	const bool bWasBound = Store.Contains(MeshKey);
 	Store.Add(MeshKey, Stream);
 	if (!bWasBound)
@@ -161,10 +161,10 @@ EMediaPipeDyadRowStreamFetch FMediaPipeDyadRowStreamRegistry::Fetch(
 		return EMediaPipeDyadRowStreamFetch::NotBound;
 	}
 
-	TSharedPtr<FMediaPipeDyadRowStream> Stream;
+	TSharedPtr<FMediaPipeDyadObservationSource> Stream;
 	{
 		FScopeLock Lock(&StreamRegistryLock());
-		if (const TSharedPtr<FMediaPipeDyadRowStream>* Found = StreamRegistryStore().Find(MeshKey))
+		if (const TSharedPtr<FMediaPipeDyadObservationSource>* Found = StreamRegistryStore().Find(MeshKey))
 		{
 			Stream = *Found;
 		}

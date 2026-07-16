@@ -1527,6 +1527,13 @@ void ApplyAutoQuestMetaHumanQualityProfile(
 	}
 }
 
+// Exported narrow wrapper (DYADIC_STUDY_PLAN Phase 2): dyad rigs receive the same
+// live-context quality setup as the mirror avatar.
+void ApplyLiveMetaHumanQualityProfile(AActor* MetaHumanActor)
+{
+	ApplyAutoQuestMetaHumanQualityProfile(MetaHumanActor, EMetaHumanQuestQualityContext::Live);
+}
+
 bool HasRequiredMannyLikePoseBones(const USkeletalMeshComponent* MeshComponent)
 {
 	const USkeletalMesh* MeshAsset = MeshComponent ? MeshComponent->GetSkeletalMeshAsset() : nullptr;

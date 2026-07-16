@@ -1,17 +1,11 @@
 #include "DyadGhostPartnerSubsystem.h"
 
-#include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "Kismet/GameplayStatics.h"
 #include "MediaPipeEmbodiedAvatarPawn.h"
-#include "MediaPipeMetaHumanProfile.h"
-#include "MediaPipePoseDrivenSkeletalActor.h"
-#include "MediaPipeDriverRuntime.h"
-#include "EmbodiedFusionComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogDyadGhost, Log, All);
 
@@ -54,8 +48,6 @@ TAutoConsoleVariable<float> CVarDyadGhostOffsetForwardCm(
 	TEXT("mp.DyadGhostOffsetForwardCm"), 0.0f,
 	TEXT("Ghost partner spawn offset along the live pawn's forward vector, in cm."));
 
-const FName DyadGhostTag(TEXT("MediaPipeDyadGhost"));
-
 // The canonical dataset (AGENTS.md): read-only test input for the dyad plan too.
 const TCHAR* DefaultGhostSourceManifest =
 	TEXT("Saved/CodexAgent/Diagnostics/")
@@ -90,22 +82,22 @@ void UDyadGhostPartnerSubsystem::Tick(float DeltaTime)
 	const bool bArmed = CVarDyadGhostPartner.GetValueOnGameThread() != 0;
 	if (!bArmed)
 	{
-		if (GhostDriverActor)
+		if (Rig.IsSpawned())
 		{
 			DespawnGhost();
 		}
 		return;
 	}
 
-	if (GhostDriverActor)
+	if (Rig.IsSpawned())
 	{
 		// Live avatar switch: respawn, never mutate (the 2026-07-08 lesson).
 		const FName DesiredAvatarId(*GDyadGhostAvatar.TrimStartAndEnd());
-		if (!DesiredAvatarId.IsNone() && DesiredAvatarId != SpawnedAvatarId)
+		if (!DesiredAvatarId.IsNone() && DesiredAvatarId != Rig.AvatarId)
 		{
 			UE_LOG(LogDyadGhost, Log,
 				TEXT("mp.DyadGhost: avatar change %s -> %s, respawning ghost."),
-				*SpawnedAvatarId.ToString(), *DesiredAvatarId.ToString());
+				*Rig.AvatarId.ToString(), *DesiredAvatarId.ToString());
 			DespawnGhost();
 			TrySpawnGhost();
 		}
@@ -162,15 +154,6 @@ void UDyadGhostPartnerSubsystem::TrySpawnGhost()
 	}
 
 	const FName AvatarId(*GDyadGhostAvatar.TrimStartAndEnd());
-	FMediaPipeMetaHumanProfileDefinition Profile;
-	if (AvatarId.IsNone() || !TryGetMediaPipeMetaHumanProfile(AvatarId, Profile))
-	{
-		UE_LOG(LogDyadGhost, Warning,
-			TEXT("mp.DyadGhost: unknown avatar profile '%s'; ghost not spawned (retry in %.0fs)."),
-			*GDyadGhostAvatar, SpawnRetryIntervalSeconds);
-		return;
-	}
-
 	FTransform AnchorTransform;
 	if (!ResolveGhostAnchorTransform(AnchorTransform))
 	{
@@ -197,97 +180,15 @@ void UDyadGhostPartnerSubsystem::TrySpawnGhost()
 	Stream->ConfigureSegment(
 		CVarDyadGhostSegmentStartSeconds.GetValueOnGameThread(),
 		CVarDyadGhostSegmentDurationSeconds.GetValueOnGameThread());
-
-	UClass* MetaHumanClass = LoadClass<AActor>(nullptr, *Profile.TargetBlueprintClass.ToString());
-	if (!MetaHumanClass)
-	{
-		UE_LOG(LogDyadGhost, Warning,
-			TEXT("mp.DyadGhost: avatar blueprint %s not loadable; ghost not spawned."),
-			*Profile.TargetBlueprintClass.ToString());
-		return;
-	}
-
-	AMediaPipePoseDrivenSkeletalActor* DriverActor = World->SpawnActorDeferred<AMediaPipePoseDrivenSkeletalActor>(
-		AMediaPipePoseDrivenSkeletalActor::StaticClass(),
-		AnchorTransform,
-		nullptr,
-		nullptr,
-		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-	if (!DriverActor)
-	{
-		UE_LOG(LogDyadGhost, Warning, TEXT("mp.DyadGhost: driver actor spawn failed."));
-		return;
-	}
-	DriverActor->Tags.AddUnique(DyadGhostTag);
-	DriverActor->bAutoPositionNextToSource = false;
-	DriverActor->bAutoAlignYawToPose = false;
-#if WITH_EDITOR
-	DriverActor->SetActorLabel(TEXT("MP_DyadGhostDriver"));
-#endif
-	UGameplayStatics::FinishSpawningActor(DriverActor, AnchorTransform);
-
-	AActor* MetaHumanActor = World->SpawnActorDeferred<AActor>(
-		MetaHumanClass,
-		AnchorTransform,
-		nullptr,
-		nullptr,
-		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-	if (!MetaHumanActor)
-	{
-		UE_LOG(LogDyadGhost, Warning, TEXT("mp.DyadGhost: MetaHuman spawn failed for %s."), *AvatarId.ToString());
-		World->DestroyActor(DriverActor);
-		return;
-	}
-	// Only the dyad tag: the live/self-view finders key on their own tags and must never
-	// return the ghost's MetaHuman as a reusable live actor.
-	MetaHumanActor->Tags.AddUnique(DyadGhostTag);
-#if WITH_EDITOR
-	MetaHumanActor->SetActorLabel(FString::Printf(TEXT("MP_DyadGhost%s"), *AvatarId.ToString()));
-#endif
-	UGameplayStatics::FinishSpawningActor(MetaHumanActor, AnchorTransform);
-
-	USkeletalMeshComponent* BodyMesh = MediaPipeDriverRuntime::FindMetaHumanBodyMesh(MetaHumanActor, Profile);
-	if (!BodyMesh)
-	{
-		UE_LOG(LogDyadGhost, Warning,
-			TEXT("mp.DyadGhost: no usable body mesh on %s; ghost not spawned."), *AvatarId.ToString());
-		World->DestroyActor(MetaHumanActor);
-		World->DestroyActor(DriverActor);
-		return;
-	}
-
-	// Own fusion component: the ghost's solve shares nothing with the live pawn's (or with
-	// the driver's default component, which keeps driving the hidden Manny witness mesh).
-	UEmbodiedFusionComponent* FusionComponent = NewObject<UEmbodiedFusionComponent>(
-		DriverActor, TEXT("DyadGhostFusion"));
-	FusionComponent->RegisterComponent();
-
-	DriverActor->SetPresentationActor(MetaHumanActor, BodyMesh);
-	DriverActor->SetEmbodiedFusionComponent(FusionComponent);
-
-	// Bind BOTH pose-driven meshes to the ghost stream: the presentation MetaHuman and the
-	// driver's own hidden Manny witness (its anim instance ticks regardless — in the global
-	// replay map both consume rows, and an unbound witness would fall through to the LIVE
-	// sensors and puppet from the local webcam at the ghost's spot).
-	const uint32 PresentationKey = BodyMesh->GetUniqueID();
-	const uint32 WitnessKey = DriverActor->Mesh ? DriverActor->Mesh->GetUniqueID() : 0u;
 	Stream->StartAt(FPlatformTime::Seconds());
-	FMediaPipeDyadRowStreamRegistry::BindMesh(PresentationKey, Stream);
-	if (WitnessKey != 0u)
-	{
-		FMediaPipeDyadRowStreamRegistry::BindMesh(WitnessKey, Stream);
-	}
-	// The ghost's avatar counts as active for its own mesh so per-avatar arm retargeting
-	// runs even when the mirror wears a different cast member.
-	FMediaPipeDyadAvatarProfileOverrides::SetMeshProfileOverride(PresentationKey, AvatarId);
 
-	GhostDriverActor = DriverActor;
-	GhostMetaHumanActor = MetaHumanActor;
-	GhostFusionComponent = FusionComponent;
-	GhostStream = Stream;
-	BoundPresentationMeshKey = PresentationKey;
-	BoundWitnessMeshKey = WitnessKey;
-	SpawnedAvatarId = AvatarId;
+	if (!FDyadAvatarRigFactory::SpawnRig(World, AvatarId, AnchorTransform, Stream, TEXT("MP_DyadGhost"), Rig))
+	{
+		UE_LOG(LogDyadGhost, Warning,
+			TEXT("mp.DyadGhost: rig assembly failed for '%s' (retry in %.0fs)."),
+			*AvatarId.ToString(), SpawnRetryIntervalSeconds);
+		return;
+	}
 
 	UE_LOG(LogDyadGhost, Log,
 		TEXT("mp.DyadGhost: spawned avatar=%s source=%s segment=%.1fs+%.1fs loadMs=%.0f ")
@@ -297,47 +198,21 @@ void UDyadGhostPartnerSubsystem::TrySpawnGhost()
 		Stream->GetSegmentStartSeconds(),
 		Stream->GetSegmentDurationSeconds(),
 		(FPlatformTime::Seconds() - LoadStartSeconds) * 1000.0,
-		PresentationKey,
-		WitnessKey,
+		Rig.PresentationMeshKey,
+		Rig.WitnessMeshKey,
 		*AnchorTransform.GetLocation().ToCompactString());
 }
 
 void UDyadGhostPartnerSubsystem::DespawnGhost()
 {
-	if (BoundPresentationMeshKey != 0u)
+	if (!Rig.IsSpawned() && Rig.PresentationMeshKey == 0u)
 	{
-		FMediaPipeDyadRowStreamRegistry::UnbindMesh(BoundPresentationMeshKey);
-		FMediaPipeDyadAvatarProfileOverrides::ClearMeshProfileOverride(BoundPresentationMeshKey);
-		BoundPresentationMeshKey = 0;
+		return;
 	}
-	if (BoundWitnessMeshKey != 0u)
+	const FName DespawnedAvatarId = Rig.AvatarId;
+	FDyadAvatarRigFactory::DestroyRig(GetWorld(), Rig);
+	if (!DespawnedAvatarId.IsNone())
 	{
-		FMediaPipeDyadRowStreamRegistry::UnbindMesh(BoundWitnessMeshKey);
-		BoundWitnessMeshKey = 0;
+		UE_LOG(LogDyadGhost, Log, TEXT("mp.DyadGhost: despawned avatar=%s."), *DespawnedAvatarId.ToString());
 	}
-	GhostStream.Reset();
-	GhostFusionComponent = nullptr;
-
-	UWorld* World = GetWorld();
-	if (GhostMetaHumanActor)
-	{
-		if (World)
-		{
-			World->DestroyActor(GhostMetaHumanActor);
-		}
-		GhostMetaHumanActor = nullptr;
-	}
-	if (GhostDriverActor)
-	{
-		if (World)
-		{
-			World->DestroyActor(GhostDriverActor);
-		}
-		GhostDriverActor = nullptr;
-	}
-	if (!SpawnedAvatarId.IsNone())
-	{
-		UE_LOG(LogDyadGhost, Log, TEXT("mp.DyadGhost: despawned avatar=%s."), *SpawnedAvatarId.ToString());
-	}
-	SpawnedAvatarId = NAME_None;
 }

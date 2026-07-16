@@ -18,6 +18,11 @@ public class DyadStudy : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"InputCore",
+			"HeadMountedDisplay",
+			"UMG",
+			"Slate",
+			"SlateCore",
 			"MediaPipeDriver"
 		});
 	}

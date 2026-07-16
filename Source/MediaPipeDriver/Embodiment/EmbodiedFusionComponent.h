@@ -233,6 +233,10 @@ public:
 		const TStaticArray<FVector, MediaPipePoseLandmarkCount>& LandmarksWorld,
 		const TStaticArray<uint8, MediaPipePoseLandmarkCount>& LandmarkValid);
 	void SetReplaySourceObservations_GameThread(const FEmbodiedFusionSourceObservations& Observations);
+	// Read-only view of the observations the last poll/read/replay-injection filled
+	// (DYADIC_STUDY_PLAN Phase 2+: the live pose tee re-publishes these to the local
+	// partner-preview, and Phase 3 serializes them onto the wire).
+	const FEmbodiedFusionSourceObservations& GetSourceObservations_GameThread() const { return SourceObservations; }
 	bool UpdateFusion_GameThread(const FEmbodiedFusionUpdateInput& Input);
 	void UpdateMovementReplicaPose_GameThread(const FEmbodiedFusionMovementReplicaPoseInput& Input);
 	const FEmbodiedFusionFrame& GetLatestFusionFrame() const { return LatestFrame; }

@@ -18,7 +18,55 @@ struct FEmbodiedFusionSourceObservations;
 //
 // With no bindings registered the registry is a single atomic read on the anim-node hot
 // path — byte-identical behavior to the pre-dyad build.
-class MEDIAPIPEDRIVER_API FMediaPipeDyadRowStream
+
+// Anything that can hand a mesh its observations for "now": a recorded row stream
+// (ghost/recorded partner), the local live pose tee (lobby partner-preview puppeting),
+// or — Phase 3 — the network wire. Game-thread contract.
+class MEDIAPIPEDRIVER_API FMediaPipeDyadObservationSource
+{
+public:
+	virtual ~FMediaPipeDyadObservationSource() = default;
+	virtual bool GetObservationsNow(
+		double WorldNowSeconds,
+		FEmbodiedFusionSourceObservations& OutObservations,
+		FString* OutPhaseName = nullptr) = 0;
+};
+
+// The local live pose, re-published: the lobby's partner-preview consumes the SAME
+// observations the live pawn's fusion just polled from its sensors, so one participant
+// puppets both preview avatars. Publish() each frame from whoever owns the tee.
+class MEDIAPIPEDRIVER_API FMediaPipeDyadLiveObservationTee : public FMediaPipeDyadObservationSource
+{
+public:
+	void Publish(const FEmbodiedFusionSourceObservations& Observations)
+	{
+		Latest = Observations;
+		bHasObservations = true;
+	}
+
+	virtual bool GetObservationsNow(
+		double WorldNowSeconds,
+		FEmbodiedFusionSourceObservations& OutObservations,
+		FString* OutPhaseName = nullptr) override
+	{
+		if (!bHasObservations)
+		{
+			return false;
+		}
+		OutObservations = Latest;
+		if (OutPhaseName)
+		{
+			*OutPhaseName = TEXT("live_tee");
+		}
+		return true;
+	}
+
+private:
+	FEmbodiedFusionSourceObservations Latest;
+	bool bHasObservations = false;
+};
+
+class MEDIAPIPEDRIVER_API FMediaPipeDyadRowStream : public FMediaPipeDyadObservationSource
 {
 public:
 	// Loads a schema-v2 replay cache (manifest .json or direct .jsonl) through the proven
@@ -35,10 +83,10 @@ public:
 	// Maps world time into the configured segment (looping seamlessly) and returns that
 	// row's observations restamped to WorldNowSeconds, so downstream freshness checks see
 	// a live-paced signal across loop seams. Returns false only when not loaded.
-	bool GetObservationsNow(
+	virtual bool GetObservationsNow(
 		double WorldNowSeconds,
 		FEmbodiedFusionSourceObservations& OutObservations,
-		FString* OutPhaseName = nullptr);
+		FString* OutPhaseName = nullptr) override;
 
 	// Pacing math exposed for unit tests: the dataset time a given world time maps to.
 	double ResolveDatasetTimeSeconds(double WorldNowSeconds) const;
@@ -72,7 +120,7 @@ class MEDIAPIPEDRIVER_API FMediaPipeDyadRowStreamRegistry
 {
 public:
 	// Key = skeletal mesh component GetUniqueID(). Key 0 is rejected (keyed-store rule).
-	static void BindMesh(uint32 MeshKey, const TSharedPtr<FMediaPipeDyadRowStream>& Stream);
+	static void BindMesh(uint32 MeshKey, const TSharedPtr<FMediaPipeDyadObservationSource>& Stream);
 	static void UnbindMesh(uint32 MeshKey);
 	static bool IsMeshBound(uint32 MeshKey);
 	static int32 GetBoundMeshCount();
