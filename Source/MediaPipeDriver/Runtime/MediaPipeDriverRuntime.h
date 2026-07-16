@@ -22,10 +22,14 @@ struct FMediaPipeMetaHumanProfileDefinition;
 
 namespace MediaPipeDriverRuntime
 {
-extern const FName LiveVideoTag;
-extern const FName LiveMannyTag;
-extern const FName LiveMetaHumanTag;
-extern const FName LiveMetaHumanSelfViewTag;
+// Exported tags (DYADIC_STUDY_PLAN Phase 1): the respawn library tag-scans for the
+// avatar-state satellite actors it must destroy so a fresh pawn re-assembles them
+// (fresh components = fresh keyed solver state). The webcam source (LiveVideoTag)
+// is deliberately NOT avatar state and survives a respawn.
+MEDIAPIPEDRIVER_API extern const FName LiveVideoTag;
+MEDIAPIPEDRIVER_API extern const FName LiveMannyTag;
+MEDIAPIPEDRIVER_API extern const FName LiveMetaHumanTag;
+MEDIAPIPEDRIVER_API extern const FName LiveMetaHumanSelfViewTag;
 extern const FName LiveWallaceTag;
 extern const FName MirrorCameraPawnTag;
 extern const FName EmbodiedMirrorPlaneTag;

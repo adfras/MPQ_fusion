@@ -1,3 +1,4 @@
+using System.IO;
 using UnrealBuildTool;
 
 public class DyadStudy : ModuleRules
@@ -6,6 +7,11 @@ public class DyadStudy : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		bUseUnity = false;
+		PublicIncludePaths.AddRange(new string[]
+		{
+			ModuleDirectory,
+			Path.Combine(ModuleDirectory, "Tests")
+		});
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
