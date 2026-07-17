@@ -4,6 +4,55 @@
 
 #include <atomic>
 
+void MediaPipeDyadRotateObservationsYaw(
+	FEmbodiedFusionSourceObservations& Observations, const float YawDegrees)
+{
+	if (FMath::IsNearlyZero(FMath::Fmod(YawDegrees, 360.0f)))
+	{
+		return;
+	}
+	const FQuat Yaw(FVector::UpVector, FMath::DegreesToRadians(YawDegrees));
+
+	Observations.HmdPose.LocationWorld = Yaw.RotateVector(Observations.HmdPose.LocationWorld);
+	Observations.HmdPose.RotationWorld = Yaw * Observations.HmdPose.RotationWorld;
+	Observations.HmdPose.TrackingUpWorld = Yaw.RotateVector(Observations.HmdPose.TrackingUpWorld);
+
+	for (int32 Index = 0; Index < Observations.Hands.LeftPositionsWorld.Num(); ++Index)
+	{
+		Observations.Hands.LeftPositionsWorld[Index] =
+			Yaw.RotateVector(Observations.Hands.LeftPositionsWorld[Index]);
+		Observations.Hands.LeftRotationsWorld[Index] =
+			Yaw * Observations.Hands.LeftRotationsWorld[Index];
+	}
+	for (int32 Index = 0; Index < Observations.Hands.RightPositionsWorld.Num(); ++Index)
+	{
+		Observations.Hands.RightPositionsWorld[Index] =
+			Yaw.RotateVector(Observations.Hands.RightPositionsWorld[Index]);
+		Observations.Hands.RightRotationsWorld[Index] =
+			Yaw * Observations.Hands.RightRotationsWorld[Index];
+	}
+
+	auto RotateChainSide = [&Yaw](FMediaPipeTrackingArmChainSideSnapshot& Side)
+	{
+		Side.ShoulderWorld = Yaw.RotateVector(Side.ShoulderWorld);
+		Side.ElbowWorld = Yaw.RotateVector(Side.ElbowWorld);
+		Side.WristWorld = Yaw.RotateVector(Side.WristWorld);
+	};
+	RotateChainSide(Observations.ArmChain.Left);
+	RotateChainSide(Observations.ArmChain.Right);
+	Observations.ArmChain.HipsLocationWorld =
+		Yaw.RotateVector(Observations.ArmChain.HipsLocationWorld);
+	Observations.ArmChain.HipsRotationWorld = Yaw * Observations.ArmChain.HipsRotationWorld;
+
+	for (int32 Index = 0; Index < Observations.BodyPose.LandmarksWorld.Num(); ++Index)
+	{
+		Observations.BodyPose.LandmarksWorld[Index] =
+			Yaw.RotateVector(Observations.BodyPose.LandmarksWorld[Index]);
+	}
+	// CameraHands stays untouched on purpose: camera-image space, never read on the
+	// replay-in path (Docs/dyad_evidence/phase0/README.md).
+}
+
 namespace
 {
 // Registry stores follow the keyed-runtime-state pattern (function-static lock + map,

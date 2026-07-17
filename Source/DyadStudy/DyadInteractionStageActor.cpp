@@ -4,6 +4,7 @@
 #include "DyadAvatarSwapLibrary.h"
 #include "DyadLinkSubsystem.h"
 #include "DyadQuestionnaireWidget.h"
+#include "DyadStudyRoomPolicy.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -123,12 +124,21 @@ void ADyadInteractionStageActor::EnsurePartnerRig()
 		return;
 	}
 	FDyadAvatarRigFactory::DestroyRig(World, PartnerRig);
+	// Same arm-coherence composition as the lobby preview (DyadLobbyStageActor.cpp
+	// yaw notes, 2026-07-17): rotate the DATA 180 to face the participant and keep the
+	// rig actor at the coherence yaw (180 world) — rotating the actor against raw data
+	// front-back-mirrors the arm solve (elbows bending forward across the table).
+	const TSharedPtr<FMediaPipeDyadObservationSource> RotatedWire =
+		MakeShared<FMediaPipeDyadYawRotatedSource>(Link->GetWireSource(), 180.0f);
+	const FTransform PartnerTransform(
+		FRotator(0.0f, 180.0f, 0.0f), GetActorLocation());
 	if (FDyadAvatarRigFactory::SpawnRig(
-		World, PartnerAvatarId, GetActorTransform(), Link->GetWireSource(),
+		World, PartnerAvatarId, PartnerTransform, RotatedWire,
 		TEXT("MP_DyadPartner"), PartnerRig))
 	{
 		UE_LOG(LogDyadInteraction, Log,
-			TEXT("DyadInteraction: partner rig %s bound to the wire (fresh keys %u/%u)."),
+			TEXT("DyadInteraction: partner rig %s bound to the wire, dataYaw=180 ")
+			TEXT("actorYaw=180 (fresh keys %u/%u)."),
 			*PartnerAvatarId.ToString(), PartnerRig.PresentationMeshKey, PartnerRig.WitnessMeshKey);
 	}
 }
@@ -141,6 +151,7 @@ void ADyadInteractionStageActor::Tick(const float DeltaSeconds)
 	{
 		return;
 	}
+	FDyadStudyRoomPolicy::TickParticipantFacingRoom();
 	if (!bArrivalReported)
 	{
 		bArrivalReported = true;
@@ -174,7 +185,10 @@ void ADyadInteractionStageActor::Tick(const float DeltaSeconds)
 		QuestionnaireComponent->SetupAttachment(GetRootComponent());
 		QuestionnaireComponent->SetWidgetSpace(EWidgetSpace::World);
 		QuestionnaireComponent->SetDrawSize(FVector2D(1200.0f, 800.0f));
-		QuestionnaireComponent->SetTwoSided(true);
+		// One-sided like the lobby menu: TwoSided widgets also render a dark,
+		// depth-ignoring, X-mirrored backface ghost (the lobby's "black board").
+		// The participant faces the panel's front from their seat.
+		QuestionnaireComponent->SetTwoSided(false);
 		QuestionnaireComponent->SetWidgetClass(UDyadQuestionnaireWidget::StaticClass());
 		QuestionnaireComponent->RegisterComponent();
 		QuestionnaireComponent->SetWorldScale3D(FVector(0.1f));

@@ -144,4 +144,63 @@ bool FDyadSessionChoiceDelegateTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDyadSessionLobbyFlowStageTest,
+	"TestingKit5.MediaPipe.Dyad.Session.LobbyFlowStages",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FDyadSessionLobbyFlowStageTest::RunTest(const FString& Parameters)
+{
+	// Sequential lobby flow (participant design 2026-07-17): confirm your avatar first,
+	// then the partner; the second confirm IS the lock.
+	UDyadSessionSubsystem* Session = MakeTestSession();
+	Session->BeginNewSession(TEXT("A"), TEXT("unit"));
+	TestTrue(TEXT("starts at self stage"),
+		Session->GetLobbyFlowStage() == EDyadLobbyFlowStage::SelfSelect);
+
+	TestFalse(TEXT("confirm without a self choice refuses"), Session->ConfirmLobbyStage());
+	TestTrue(TEXT("still self stage"),
+		Session->GetLobbyFlowStage() == EDyadLobbyFlowStage::SelfSelect);
+
+	TestTrue(TEXT("choose self"), Session->SelectSelfAvatar(FName(TEXT("Kellan"))));
+	TestTrue(TEXT("confirm self advances"), Session->ConfirmLobbyStage());
+	TestTrue(TEXT("partner stage"),
+		Session->GetLobbyFlowStage() == EDyadLobbyFlowStage::PartnerSelect);
+	TestFalse(TEXT("not locked yet"), Session->AreChoicesLocked());
+
+	TestFalse(TEXT("confirm without a partner choice refuses"), Session->ConfirmLobbyStage());
+	TestTrue(TEXT("choose partner"), Session->SelectPartnerAvatar(FName(TEXT("Maria"))));
+	TestTrue(TEXT("confirm partner locks"), Session->ConfirmLobbyStage());
+	TestTrue(TEXT("locked stage"),
+		Session->GetLobbyFlowStage() == EDyadLobbyFlowStage::Locked);
+	TestTrue(TEXT("choices locked"), Session->AreChoicesLocked());
+	TestFalse(TEXT("confirm after lock refuses"), Session->ConfirmLobbyStage());
+
+	// Assigned condition: presets fill both slots while the flow still walks both
+	// stages (two confirms breeze through without any Free selection).
+	UDyadSessionSubsystem* Assigned = MakeTestSession();
+	Assigned->BeginNewSession(TEXT("A"), TEXT("unit_assigned"));
+	TestTrue(TEXT("assign self"), Assigned->ConfigureSlot(
+		EDyadAvatarSlot::Self, EDyadChoiceMode::Assigned, FName(TEXT("Emory"))));
+	TestTrue(TEXT("assign partner"), Assigned->ConfigureSlot(
+		EDyadAvatarSlot::Partner, EDyadChoiceMode::Assigned, FName(TEXT("Maria"))));
+	TestTrue(TEXT("assigned confirm 1"), Assigned->ConfirmLobbyStage());
+	TestTrue(TEXT("assigned confirm 2 locks"), Assigned->ConfirmLobbyStage());
+	TestTrue(TEXT("assigned locked"), Assigned->AreChoicesLocked());
+
+	// Direct LockChoices (legacy/desk hatch) keeps the stage machine coherent.
+	UDyadSessionSubsystem* Direct = MakeTestSession();
+	Direct->BeginNewSession(TEXT("B"), TEXT("unit_direct"));
+	Direct->SelectSelfAvatar(FName(TEXT("Kellan")));
+	Direct->SelectPartnerAvatar(FName(TEXT("Payton")));
+	TestTrue(TEXT("direct lock"), Direct->LockChoices());
+	TestTrue(TEXT("direct lock lands Locked stage"),
+		Direct->GetLobbyFlowStage() == EDyadLobbyFlowStage::Locked);
+
+	// Reset returns to the self stage.
+	Direct->ResetChoices();
+	TestTrue(TEXT("reset returns to self stage"),
+		Direct->GetLobbyFlowStage() == EDyadLobbyFlowStage::SelfSelect);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

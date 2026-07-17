@@ -189,6 +189,8 @@ bool FDyadConditionFile::LoadAndApply(
 		}
 	}
 	Session.SetQuestionnaire(File.QuestionnaireItems, File.QuestionnaireAfterSeconds);
+	Session.SetPartnerStream(
+		File.PartnerCachePath, File.PartnerSegmentStartSeconds, File.PartnerSegmentDurationSeconds);
 	UE_LOG(LogDyadCondition, Log, TEXT("DyadCondition: applied '%s' (seat %s, tag %s)."),
 		*ResolvedPath, *Seat, *File.ConditionTag);
 	return true;

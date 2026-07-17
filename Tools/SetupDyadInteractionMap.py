@@ -13,14 +13,24 @@ Run headless AFTER building DyadStudy:
 """
 from __future__ import annotations
 
+import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import unreal
+
+from dyad_map_cosmetics import apply_room_cosmetics
 
 SOURCE_MAP = "/Game/MetaHumanRooms/L_MetaHumanPreviewRoom_MPQSignalCompare_01"
 DEST_MAP = "/Game/MetaHumanRooms/L_DyadInteraction_01"
 STAGE_ACTOR_LABEL = "MP_DyadInteractionStage"
 TABLE_ACTOR_LABEL = "MP_DyadTaskTable"
+
+# Exact labels to hide in-game — pinned from the cosmetics SMA log (see
+# dyad_map_cosmetics.py; this room's mirror wall carries self-visibility, so nothing
+# is hidden by pattern).
+HIDE_LABELS = ()
 
 # Pawn sits at (0, -170) facing +Y: partner spot 2.5 m in front, table midway.
 STAGE_LOCATION = unreal.Vector(0.0, 80.0, 0.0)
@@ -86,6 +96,7 @@ def main() -> int:
     table.set_actor_location_and_rotation(TABLE_LOCATION, unreal.Rotator(0.0, 0.0, 0.0), False, False)
     table.set_actor_scale3d(TABLE_SCALE)
 
+    apply_room_cosmetics(hide_labels=HIDE_LABELS)
     unreal.EditorLevelLibrary.save_current_level()
     unreal.log(f"Configured dyad interaction map {DEST_MAP}")
     return 0

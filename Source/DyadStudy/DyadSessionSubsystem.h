@@ -24,6 +24,17 @@ enum class EDyadAvatarSlot : uint8
 	Partner,
 };
 
+// The lobby's sequential selection flow (participant design, 2026-07-17): first you
+// face the mirror clone and pick YOUR avatar; confirming advances to the partner
+// stage (the mirror goes away, a recording-driven copy of the partner previews);
+// confirming again locks both choices and triggers the ready/travel handshake.
+enum class EDyadLobbyFlowStage : uint8
+{
+	SelfSelect,
+	PartnerSelect,
+	Locked,
+};
+
 DECLARE_MULTICAST_DELEGATE_TwoParams(FDyadAvatarChoiceChanged, EDyadAvatarSlot /*Slot*/, FName /*AvatarId*/);
 DECLARE_MULTICAST_DELEGATE(FDyadChoicesLocked);
 
@@ -57,6 +68,19 @@ public:
 
 	// Locks both choices; requires both slots to hold a valid avatar. Idempotent.
 	bool LockChoices();
+
+	// Advances the sequential lobby flow: SelfSelect needs a self choice and moves to
+	// PartnerSelect; PartnerSelect needs a partner choice and locks (LockChoices).
+	// The menu's confirm button and mp.DyadLockChoices both call this.
+	bool ConfirmLobbyStage();
+	EDyadLobbyFlowStage GetLobbyFlowStage() const { return LobbyFlowStage; }
+
+	// The pinned partner-stream segment from the condition file (lobby partner preview
+	// + documentation of what seat B plays). Empty cache path = the canonical cache.
+	void SetPartnerStream(const FString& CachePath, double StartSeconds, double DurationSeconds);
+	const FString& GetPartnerStreamCachePath() const { return PartnerStreamCachePath; }
+	double GetPartnerStreamStartSeconds() const { return PartnerStreamStartSeconds; }
+	double GetPartnerStreamDurationSeconds() const { return PartnerStreamDurationSeconds; }
 
 	FName GetAvatarId(EDyadAvatarSlot Slot) const;
 	FName GetSelfAvatarId() const { return SelfAvatarId; }
@@ -121,6 +145,12 @@ private:
 	EDyadChoiceMode PartnerChoiceMode = EDyadChoiceMode::Free;
 	FString YokedSourceSessionId;
 	bool bChoicesLocked = false;
+	EDyadLobbyFlowStage LobbyFlowStage = EDyadLobbyFlowStage::SelfSelect;
+
+	// Pinned partner segment (defaults = the canonical head block the condition files pin).
+	FString PartnerStreamCachePath;
+	double PartnerStreamStartSeconds = 2.0;
+	double PartnerStreamDurationSeconds = 26.0;
 
 	FString SessionId;
 	FString SeatId;

@@ -69,4 +69,18 @@ private:
 
 	UPROPERTY(Transient)
 	TMap<TObjectPtr<UDyadAvatarMenuButton>, TObjectPtr<UBorder>> ButtonFrames;
+
+	// Sequential-flow presentation (one stage at a time): the title, the visible row,
+	// and the confirm label all follow the session's lobby flow stage each tick.
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> TitleText = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> LockLabelText = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UWidget> SelfRow = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UWidget> PartnerRow = nullptr;
 };

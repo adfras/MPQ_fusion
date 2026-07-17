@@ -123,10 +123,16 @@ int32 UDyadAvatarSwapLibrary::DestroyAvatarStateSatellites(UWorld* World)
 		{
 			continue;
 		}
+		// The VR tracking panel is pawn-spawned but carries none of the satellite tags:
+		// destroying the pawn before its next EnsureVrTrackingPanel() poll orphans the
+		// panel forever (nothing else polls the CVar), and repeated respawns stack the
+		// orphans into a person-sized black board beside the couch (2026-07-17 trial).
+		// Class-name match so DyadStudy needs no link against the panel type.
 		const bool bAvatarStateSatellite =
 			Actor->Tags.Contains(MediaPipeDriverRuntime::LiveMannyTag) ||
 			Actor->Tags.Contains(MediaPipeDriverRuntime::LiveMetaHumanTag) ||
-			Actor->Tags.Contains(MediaPipeDriverRuntime::LiveMetaHumanSelfViewTag);
+			Actor->Tags.Contains(MediaPipeDriverRuntime::LiveMetaHumanSelfViewTag) ||
+			Actor->GetClass()->GetName() == TEXT("MediaPipeVrTrackingPanelActor");
 		if (bAvatarStateSatellite)
 		{
 			UE_LOG(LogDyadSwap, Log, TEXT("mp.DyadRespawn: destroying satellite %s."), *GetNameSafe(Actor));

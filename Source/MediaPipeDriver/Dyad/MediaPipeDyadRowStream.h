@@ -66,6 +66,45 @@ private:
 	bool bHasObservations = false;
 };
 
+// Rotates every WORLD-SPACE observation field by a yaw about the dataset origin: HMD
+// pose, hand keypoints/rotations, arm chains, hips, body-pose landmarks. CameraHands
+// stays untouched (camera-image space; never read on the replay-in path). Rotating the
+// DATA — camera frame included — keeps every internal reference coherent; rotating the
+// rig ACTOR against un-rotated data front-back-flips the arm solve (2026-07-17: every
+// 180-degree rig — lobby preview, interaction partner — wore its arms mirrored, elbows
+// bending forward, while the unrotated ghost articulated correctly).
+MEDIAPIPEDRIVER_API void MediaPipeDyadRotateObservationsYaw(
+	FEmbodiedFusionSourceObservations& Observations, float YawDegrees);
+
+// Wraps any observation source and yaw-rotates its output (see above). Used to face a
+// recorded partner toward the participant without breaking the arm drive.
+class MEDIAPIPEDRIVER_API FMediaPipeDyadYawRotatedSource : public FMediaPipeDyadObservationSource
+{
+public:
+	FMediaPipeDyadYawRotatedSource(TSharedPtr<FMediaPipeDyadObservationSource> InInner, float InYawDegrees)
+		: Inner(MoveTemp(InInner))
+		, YawDegrees(InYawDegrees)
+	{
+	}
+
+	virtual bool GetObservationsNow(
+		double WorldNowSeconds,
+		FEmbodiedFusionSourceObservations& OutObservations,
+		FString* OutPhaseName = nullptr) override
+	{
+		if (!Inner.IsValid() || !Inner->GetObservationsNow(WorldNowSeconds, OutObservations, OutPhaseName))
+		{
+			return false;
+		}
+		MediaPipeDyadRotateObservationsYaw(OutObservations, YawDegrees);
+		return true;
+	}
+
+private:
+	TSharedPtr<FMediaPipeDyadObservationSource> Inner;
+	float YawDegrees = 0.0f;
+};
+
 class MEDIAPIPEDRIVER_API FMediaPipeDyadRowStream : public FMediaPipeDyadObservationSource
 {
 public:

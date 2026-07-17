@@ -28,11 +28,14 @@ plausibility/comfort at 2.5 m, task-phase feel, and the artifact review afterwar
    `--ready-delay 15` gives you time in the menu before the partner "confirms". The
    segment 2 s + 26 s is the pinned head-block loop (hands at sides, gaze-like motion,
    calm seam) — the same one the condition files pin.
-4. In the lobby: pick your avatar and the partner's on the panel (pinch; if pinch is
-   uncooperative, the keyboard path is `mp.DyadSelectAvatar self <Name>` /
-   `mp.DyadSelectAvatar partner <Name>`), then Confirm choices
-   (`mp.DyadLockChoices`). The status line shows "Waiting for partner…" until the
-   player's READY lands, then both apps travel to the interaction room together.
+4. The lobby is a TWO-STAGE flow (2026-07-17 redesign): first you face your mirror
+   clone and pick YOUR avatar (menu shows only the "You" row; desk path
+   `mp.DyadSelectAvatar self <Name>`), then Confirm avatar (`mp.DyadLockChoices`).
+   The mirror goes away and the partner stage begins: pick the partner
+   (`mp.DyadSelectAvatar partner <Name>`) and a recording-driven copy of them stands
+   where the mirror was, moving on the pinned segment. Confirm partner
+   (`mp.DyadLockChoices` again) locks; "Waiting for partner…" until the player's
+   READY lands, then both apps travel together.
 5. In the interaction room: the partner stands across the table wearing YOUR
    partner-choice, driven by the recording. ~45 s in, the questionnaire panel appears
    between you and the table (Likert 1–7 per item; desk path
@@ -70,7 +73,10 @@ prints and writes the scoreboard (distance, orientation, gaze, energy, synchrony
 | Partner rig wrong/frozen and rows ARE flowing | `mp.DyadRespawnAvatar ghost <Name>` for the ghost slot; for the wire partner just re-pick partner pre-lock (respawns the rig) |
 | Partner frozen + "HEARTBEAT TIMEOUT" warning | expected freeze semantics — restart the player script; the host is already re-listening and resumes automatically |
 | Menu unusable by pinch | `mp.DyadSelectAvatar …` + `mp.DyadLockChoices` from the console |
-| Skip the lobby entirely | boot straight into `/Game/MetaHumanRooms/L_DyadInteraction_01` with the condition file set — the stage assembles from the session presets (Free condition needs choices, so use assigned) |
+| Skip the lobby entirely | KNOWN BROKEN 2026-07-17: only the lobby stage loads `mp.DyadConditionFile`, so a direct interaction boot runs without a session (and the partner rig did not render in the direct-boot check). Use the normal lobby → travel flow; a fix chip is pending |
+| Want the live-trial tracking panel back while in a dyad room | `mp.DyadKeepTrackingPanel 1` (the dyad stages suppress `mp.QuestVrTrackingPanel` every tick by default — the trial arm policy re-writes it 1 on every respawn, so the suppression has to keep winning) |
+| Want the webcam preview screen back while in a dyad room | `mp.DyadKeepWebcamPreview 1` (same tick-suppression for `mp.AutoQuestWebcamPreview`; it otherwise parks as the person-sized dark screen camera-right and hides the menu column — the back-wall self-view surface still shows the camera feed) |
+| Want the wire partner visible in the LOBBY (Phase 3-style debugging) | `mp.DyadLobbyWirePartner 1` (default 0: the lobby shows only your partner-choice preview; the recorded partner appears across the table after travel) |
 | Kill all dyad behavior instantly | `mp.DyadRole` "" (wire dark), `mp.DyadGhostPartner 0`; every mp.Dyad* default is off |
 | Second-guessing the drive path | `mp.TrackingFusionDatasetReplayStatus`, and the partner phase name in fetch traces reads `wire` / `wire_frozen` |
 
@@ -79,11 +85,29 @@ prints and writes the scoreboard (distance, orientation, gaze, energy, synchrony
 - Ghost/partner WRIST TWIST runs hot vs the replay-map baseline: the canonical dataset
   predates `camera_hands`, and row-stream rigs run the live wrist stack data-starved —
   the documented 2026-07-05 class, details + upgrade paths in
-  `Docs/dyad_evidence/phase0/README.md`. Judge partner plausibility with that in mind
-  (the pinned head-block segment keeps hands down precisely to minimize it).
+  `Docs/dyad_evidence/phase0/README.md`.
+- MORE GENERALLY (Alan, 2026-07-17): the rows carry raw observations, NOT calibration
+  state — every recorded-partner rig re-runs live calibration from scratch on the
+  segment it is fed, so the preview/partner can look wrong (proportions, reach,
+  wrists), worst in the first seconds after spawn. The pinned 2–26 s window IS the
+  recording's calibration block (hand raises), which converges the rig but reads as
+  calibration gestures, not natural behavior. Real fix = a purpose-made partner
+  recording (capture-session decision); cheap mitigation available on request =
+  pre-roll the partner stream hidden during stage 1 so it reveals already settled.
 - Terry is not in the built cast (only `MHC_Terry.uasset` exists, unassembled): menus
   list the six built MetaHumans. Creator-built additions stay out of scope per the plan.
 - Hudson's groom renders coarse at desk LOD; in-headset it is the real judgment call.
+- 2026-07-17 desk-trial composition pass: dyad rooms are lit (skylight + fills in both
+  maps), the live-trial tracking panel and the webcam preview card are auto-suppressed
+  inside dyad rooms (mp.DyadKeep* CVars restore them), the menu sits camera-left at
+  chest height with its dark rows below every face, and the lobby no longer spawns a
+  wire-driven rig behind the self-view mirror copy. The center avatar IS the self-view
+  mirror; the blue wall rect is wall art (renders pale blue until lit content settles).
+- KNOWN COSMETIC ISSUE: a dark board on the camera-RIGHT in desk views — a mirrored
+  ghost of the menu widget (reflects across the room's center plane, ignores depth,
+  no owning actor; mechanism unidentified after an exhaustive hunt — see the pending
+  task chip). It overlaps nothing interactive. If it is visible IN-HEADSET during the
+  pilot, say so — that observation picks the next diagnostic branch.
 
 ## After the pilot
 

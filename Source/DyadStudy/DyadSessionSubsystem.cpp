@@ -118,12 +118,57 @@ bool UDyadSessionSubsystem::LockChoices()
 		return false;
 	}
 	bChoicesLocked = true;
+	LobbyFlowStage = EDyadLobbyFlowStage::Locked;
 	RecordEvent(TEXT("lock"), FString::Printf(
 		TEXT("self=%s partner=%s"), *SelfAvatarId.ToString(), *PartnerAvatarId.ToString()));
 	UE_LOG(LogDyadSession, Log, TEXT("DyadSession: choices locked (self=%s partner=%s)."),
 		*SelfAvatarId.ToString(), *PartnerAvatarId.ToString());
 	OnChoicesLocked.Broadcast();
 	return true;
+}
+
+bool UDyadSessionSubsystem::ConfirmLobbyStage()
+{
+	switch (LobbyFlowStage)
+	{
+	case EDyadLobbyFlowStage::SelfSelect:
+		if (!IsKnownCastMember(SelfAvatarId))
+		{
+			UE_LOG(LogDyadSession, Warning,
+				TEXT("DyadSession: confirm rejected (no self avatar chosen yet)."));
+			RecordEvent(TEXT("confirm_rejected"), TEXT("stage=self_select reason=no_choice"));
+			return false;
+		}
+		LobbyFlowStage = EDyadLobbyFlowStage::PartnerSelect;
+		RecordEvent(TEXT("lobby_stage"), FString::Printf(
+			TEXT("stage=partner_select self=%s"), *SelfAvatarId.ToString()));
+		UE_LOG(LogDyadSession, Log,
+			TEXT("DyadSession: self avatar confirmed (%s); partner selection stage."),
+			*SelfAvatarId.ToString());
+		return true;
+
+	case EDyadLobbyFlowStage::PartnerSelect:
+		if (!IsKnownCastMember(PartnerAvatarId))
+		{
+			UE_LOG(LogDyadSession, Warning,
+				TEXT("DyadSession: confirm rejected (no partner avatar chosen yet)."));
+			RecordEvent(TEXT("confirm_rejected"), TEXT("stage=partner_select reason=no_choice"));
+			return false;
+		}
+		return LockChoices();
+
+	case EDyadLobbyFlowStage::Locked:
+	default:
+		return false;
+	}
+}
+
+void UDyadSessionSubsystem::SetPartnerStream(
+	const FString& CachePath, const double StartSeconds, const double DurationSeconds)
+{
+	PartnerStreamCachePath = CachePath;
+	PartnerStreamStartSeconds = StartSeconds;
+	PartnerStreamDurationSeconds = DurationSeconds;
 }
 
 FName UDyadSessionSubsystem::GetAvatarId(const EDyadAvatarSlot Slot) const
@@ -144,6 +189,7 @@ void UDyadSessionSubsystem::ResetChoices()
 	PartnerChoiceMode = EDyadChoiceMode::Free;
 	YokedSourceSessionId.Reset();
 	bChoicesLocked = false;
+	LobbyFlowStage = EDyadLobbyFlowStage::SelfSelect;
 	RecordEvent(TEXT("reset_choices"), FString());
 }
 
@@ -163,6 +209,9 @@ void UDyadSessionSubsystem::BeginNewSession(const FString& InSeatId, const FStri
 	QuestionnaireItems.Reset();
 	QuestionnaireAnswers.Reset();
 	QuestionnaireAfterSeconds = 0.0f;
+	// Choice/lock state deliberately persists across BeginNewSession (conditions
+	// preset right after); the flow stage just follows whatever that state implies.
+	LobbyFlowStage = bChoicesLocked ? EDyadLobbyFlowStage::Locked : EDyadLobbyFlowStage::SelfSelect;
 	OpenSessionFolder();
 	RecordEvent(TEXT("session_begin"), FString::Printf(
 		TEXT("sessionId=%s seat=%s condition=%s"), *SessionId, *SeatId, *ConditionTag));

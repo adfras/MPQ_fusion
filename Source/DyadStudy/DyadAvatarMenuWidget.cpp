@@ -126,25 +126,27 @@ void UDyadAvatarMenuWidget::BuildMenuTree()
 	UVerticalBox* Root = WidgetTree->ConstructWidget<UVerticalBox>();
 	WidgetTree->RootWidget = Root;
 
-	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
-	Title->SetText(NSLOCTEXT("DyadStudy", "MenuTitle", "Choose the avatars"));
-	FSlateFontInfo TitleFont = Title->GetFont();
+	TitleText = WidgetTree->ConstructWidget<UTextBlock>();
+	TitleText->SetText(NSLOCTEXT("DyadStudy", "MenuTitleSelf", "Choose your avatar"));
+	FSlateFontInfo TitleFont = TitleText->GetFont();
 	TitleFont.Size = 28;
-	Title->SetFont(TitleFont);
-	Root->AddChildToVerticalBox(Title);
+	TitleText->SetFont(TitleFont);
+	Root->AddChildToVerticalBox(TitleText);
 
-	Root->AddChildToVerticalBox(BuildChoiceRow(
-		EDyadAvatarSlot::Self, NSLOCTEXT("DyadStudy", "SelfRow", "You")));
-	Root->AddChildToVerticalBox(BuildChoiceRow(
-		EDyadAvatarSlot::Partner, NSLOCTEXT("DyadStudy", "PartnerRow", "Your partner")));
+	SelfRow = BuildChoiceRow(
+		EDyadAvatarSlot::Self, NSLOCTEXT("DyadStudy", "SelfRow", "You"));
+	Root->AddChildToVerticalBox(SelfRow);
+	PartnerRow = BuildChoiceRow(
+		EDyadAvatarSlot::Partner, NSLOCTEXT("DyadStudy", "PartnerRow", "Your partner"));
+	Root->AddChildToVerticalBox(PartnerRow);
 
 	LockButton = WidgetTree->ConstructWidget<UButton>();
-	UTextBlock* LockLabel = WidgetTree->ConstructWidget<UTextBlock>();
-	LockLabel->SetText(NSLOCTEXT("DyadStudy", "LockButton", "Confirm choices"));
-	FSlateFontInfo LockFont = LockLabel->GetFont();
+	LockLabelText = WidgetTree->ConstructWidget<UTextBlock>();
+	LockLabelText->SetText(NSLOCTEXT("DyadStudy", "ConfirmAvatar", "Confirm avatar"));
+	FSlateFontInfo LockFont = LockLabelText->GetFont();
 	LockFont.Size = 22;
-	LockLabel->SetFont(LockFont);
-	LockButton->AddChild(LockLabel);
+	LockLabelText->SetFont(LockFont);
+	LockButton->AddChild(LockLabelText);
 	LockButton->OnClicked.AddUniqueDynamic(this, &UDyadAvatarMenuWidget::HandleLockClicked);
 	UVerticalBoxSlot* LockSlot = Root->AddChildToVerticalBox(LockButton);
 	LockSlot->SetPadding(FMargin(0.0f, 14.0f, 0.0f, 4.0f));
@@ -160,7 +162,7 @@ void UDyadAvatarMenuWidget::HandleLockClicked()
 {
 	if (UDyadSessionSubsystem* Session = ResolveSession(this))
 	{
-		Session->LockChoices();
+		Session->ConfirmLobbyStage();
 	}
 }
 
@@ -179,6 +181,7 @@ void UDyadAvatarMenuWidget::RefreshFromSession()
 	}
 
 	const bool bLocked = Session->AreChoicesLocked();
+	const EDyadLobbyFlowStage Stage = Session->GetLobbyFlowStage();
 	for (UDyadAvatarMenuButton* Button : ChoiceButtons)
 	{
 		if (!Button)
@@ -193,10 +196,36 @@ void UDyadAvatarMenuWidget::RefreshFromSession()
 			(*Frame)->SetBrushColor(bSelected ? SelectedFrameColor : (bLocked ? LockedFrameColor : IdleFrameColor));
 		}
 	}
+
+	// One stage at a time: self row while choosing yourself in the mirror, partner row
+	// after confirming (the recording-driven partner preview stands where the mirror was).
+	const bool bSelfStage = Stage == EDyadLobbyFlowStage::SelfSelect;
+	if (SelfRow)
+	{
+		SelfRow->SetVisibility(bSelfStage ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	if (PartnerRow)
+	{
+		PartnerRow->SetVisibility(bSelfStage ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	}
+	if (TitleText)
+	{
+		TitleText->SetText(bSelfStage
+			? NSLOCTEXT("DyadStudy", "MenuTitleSelf", "Choose your avatar")
+			: NSLOCTEXT("DyadStudy", "MenuTitlePartner", "Choose your partner"));
+	}
+	if (LockLabelText)
+	{
+		LockLabelText->SetText(bSelfStage
+			? NSLOCTEXT("DyadStudy", "ConfirmAvatar", "Confirm avatar")
+			: NSLOCTEXT("DyadStudy", "ConfirmPartner", "Confirm partner"));
+	}
 	if (LockButton)
 	{
-		LockButton->SetIsEnabled(!bLocked &&
-			!Session->GetSelfAvatarId().IsNone() && !Session->GetPartnerAvatarId().IsNone());
+		const bool bStageHasChoice = bSelfStage
+			? !Session->GetSelfAvatarId().IsNone()
+			: !Session->GetPartnerAvatarId().IsNone();
+		LockButton->SetIsEnabled(!bLocked && bStageHasChoice);
 	}
 	if (StatusText)
 	{

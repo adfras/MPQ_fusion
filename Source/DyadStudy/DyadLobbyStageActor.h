@@ -37,12 +37,13 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 	// Where the partner-preview rig stands, relative to this stage actor. The default
-	// puts it beside the self-view avatar (clear of it and of the mirror quad) in
-	// L_DyadLobby_01's placement, facing the participant. MetaHuman actors visually
-	// face +Y at yaw 0, so the -90 relative yaw (on the stage's -90) lands them looking
-	// down -Y at the participant.
+	// is CENTER STAGE — the spot the self-view mirror copy occupies during the self
+	// stage (world ~(0,107) with the stage at (80,10) yaw -90): the sequential flow
+	// hides the mirror copy when the partner stage begins and the recording-driven
+	// partner takes its place. MetaHuman actors visually face +Y at yaw 0, so the -90
+	// relative yaw (on the stage's -90) lands them looking down -Y at the participant.
 	UPROPERTY(EditAnywhere, Category = "DyadStudy")
-	FTransform PartnerPreviewRelativeTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector(-100.0f, 50.0f, 0.0f));
+	FTransform PartnerPreviewRelativeTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector(-97.0f, -80.0f, 0.0f));
 
 	// Where a WIRE-driven partner stands while still in the lobby (Phase 3 loopback
 	// proof; Phase 4 moves the wire partner into the interaction room).
@@ -52,6 +53,8 @@ public:
 private:
 	void HandleAvatarChoiceChanged(EDyadAvatarSlot Slot, FName AvatarId);
 	void TickConditionInit();
+	void TickFlowStage();
+	void SetSelfViewHidden(bool bInHidden) const;
 	void RespawnPartnerPreview(FName AvatarId);
 	void PublishLiveTee();
 	void EnsurePinchInteraction();
@@ -74,6 +77,7 @@ private:
 	FDelegateHandle ChoiceChangedHandle;
 
 	bool bSessionInitialized = false;
+	EDyadLobbyFlowStage LastFlowStage = EDyadLobbyFlowStage::SelfSelect;
 	int32 AutoJourneyStep = 0;
 	double NextAutoJourneyStepSeconds = -1.0;
 };

@@ -1,16 +1,21 @@
 #include "DyadLobbyStageActor.h"
 
+#include "Components/PrimitiveComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Components/WidgetInteractionComponent.h"
 #include "DyadAvatarMenuWidget.h"
 #include "DyadAvatarSwapLibrary.h"
 #include "DyadConditionFile.h"
+#include "DyadStudyRoomPolicy.h"
 #include "DyadLinkSubsystem.h"
 #include "EmbodiedFusionComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformTime.h"
+#include "MediaPipeDriverRuntime.h"
 #include "MediaPipeEmbodiedAvatarPawn.h"
 #include "MotionControllerComponent.h"
 
@@ -37,6 +42,32 @@ TAutoConsoleVariable<float> CVarDyadLobbyAutoJourneySeconds(
 	TEXT("DYADIC_STUDY_PLAN Phase 2 gate driver: when > 0, the lobby stage walks the full ")
 	TEXT("menu journey (select self, select partner, change self, lock, post-lock rejection) ")
 	TEXT("with N seconds per step and a screenshot after each. 0 disables."));
+
+// Composition of the recording-driven partner preview, tuned empirically 2026-07-17
+// (three-point fit, then verified by elbow inspection): the rendered facing follows
+// 270 + dataYaw - actorYaw, and the arm solve stays coherent ONLY at actorYaw=180 —
+// any other actor yaw leaves part of the arm path in the un-rotated data frame (at
+// 180 degrees of mismatch the arms render front-back mirrored: elbows bending
+// forward, hands pinned behind the back). dataYaw=180 then faces the participant.
+TAutoConsoleVariable<float> CVarDyadPreviewDataYawDeg(
+	TEXT("mp.DyadPreviewDataYawDeg"), 180.0f,
+	TEXT("Yaw applied to the recorded observations driving the lobby partner preview ")
+	TEXT("(facing = 270 + dataYaw - actorYaw)."));
+
+TAutoConsoleVariable<float> CVarDyadPreviewActorYawDeg(
+	TEXT("mp.DyadPreviewActorYawDeg"), 180.0f,
+	TEXT("World yaw of the lobby partner-preview rig actor. 180 is the arm-coherence ")
+	TEXT("value; change only with the composition notes in DyadLobbyStageActor.cpp."));
+
+int32 GDyadLobbyWirePartner = 0;
+FAutoConsoleVariableRef CVarDyadLobbyWirePartner(
+	TEXT("mp.DyadLobbyWirePartner"), GDyadLobbyWirePartner,
+	TEXT("Spawn a wire-driven partner rig inside the LOBBY while rows flow (Phase 3 ")
+	TEXT("loopback debugging aid). Default 0: the lobby shows only the partner-choice ")
+	TEXT("preview; the wire-driven partner appears across the table after travel. The ")
+	TEXT("lobby rig's spot sits on the pawn camera's sightline to the self avatar, so ")
+	TEXT("leaving this on stacks two avatars on screen."),
+	ECVF_Default);
 
 // mp.DyadSelectAvatar <self|partner> <name> / mp.DyadLockChoices: the same C++ entry
 // points the menu buttons call — desk verification and the experimenter's keyboard path.
@@ -83,14 +114,70 @@ FAutoConsoleCommand CmdDyadSelectAvatar(
 
 FAutoConsoleCommand CmdDyadLockChoices(
 	TEXT("mp.DyadLockChoices"),
-	TEXT("Lock the dyad avatar choices (same function as the menu's confirm button)."),
+	TEXT("Confirm the current lobby stage (same function as the menu's confirm button): ")
+	TEXT("first call confirms YOUR avatar and opens partner selection; second call ")
+	TEXT("confirms the partner and locks (ready/travel)."),
 	FConsoleCommandDelegate::CreateLambda([]()
 	{
 		if (UDyadSessionSubsystem* Session = FindSessionSubsystem())
 		{
-			Session->LockChoices();
+			Session->ConfirmLobbyStage();
 		}
 	}));
+
+// Armed by mp.DyadDumpBigPrimitives, fired from the stage Tick so late runtime spawns
+// (self-view surfaces, diagnostics, media planes) are all present by dump time.
+double GDyadDumpBigPrimitivesAtSeconds = -1.0;
+FAutoConsoleCommand CmdDyadDumpBigPrimitives(
+	TEXT("mp.DyadDumpBigPrimitives"),
+	TEXT("mp.DyadDumpBigPrimitives [delaySeconds=8]: after the delay, log owner label, ")
+	TEXT("component, class, and world bounds for every visible primitive component ")
+	TEXT("larger than ~1 m — identifies mystery slabs in the participant rooms."),
+	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
+	{
+		const double Delay = Args.Num() > 0 ? FCString::Atod(*Args[0]) : 8.0;
+		GDyadDumpBigPrimitivesAtSeconds = FPlatformTime::Seconds() + Delay;
+		UE_LOG(LogDyadLobby, Log, TEXT("mp.DyadDumpBigPrimitives: dumping in %.1f s."), Delay);
+	}));
+
+void DumpBigPrimitives(UWorld* World)
+{
+	if (!World)
+	{
+		return;
+	}
+	int32 Count = 0;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		TInlineComponentArray<UPrimitiveComponent*> Components(*It);
+		for (const UPrimitiveComponent* Component : Components)
+		{
+			if (!Component)
+			{
+				continue;
+			}
+			// Unfiltered on purpose: visibility flags and bounds both lied during the
+			// 2026-07-17 black-board hunt (a visible camera surface never made the
+			// filtered list), so this dump shows everything and lets the reader judge.
+			const FBoxSphereBounds Bounds = Component->Bounds;
+			if (Bounds.BoxExtent.GetMax() * 2.0f < 40.0f)
+			{
+				continue;
+			}
+			const FVector O = Bounds.Origin;
+			const FVector E = Bounds.BoxExtent;
+			UE_LOG(LogDyadLobby, Log,
+				TEXT("BigPrim: actor=%s acls=%s comp=%s cls=%s vis=%d hid=%d reg=%d origin=(%.0f,%.0f,%.0f) extent=(%.0f,%.0f,%.0f)"),
+				*It->GetActorNameOrLabel(), *It->GetClass()->GetName(),
+				*Component->GetName(), *Component->GetClass()->GetName(),
+				Component->IsVisible() ? 1 : 0, Component->bHiddenInGame ? 1 : 0,
+				Component->IsRegistered() ? 1 : 0,
+				O.X, O.Y, O.Z, E.X, E.Y, E.Z);
+			Count++;
+		}
+	}
+	UE_LOG(LogDyadLobby, Log, TEXT("BigPrim: %d components listed."), Count);
+}
 } // namespace
 
 ADyadLobbyStageActor::ADyadLobbyStageActor()
@@ -109,8 +196,18 @@ ADyadLobbyStageActor::ADyadLobbyStageActor()
 	// must be set HERE (not BeginPlay) — the component instantiates its widget when it
 	// registers, which happens before BeginPlay.
 	MenuWidgetComponent->SetRelativeScale3D(FVector(0.12f));
-	MenuWidgetComponent->SetRelativeLocation(FVector(0.0f, 0.0f, 150.0f));
-	MenuWidgetComponent->SetTwoSided(true);
+	// The panel is 168 cm wide and its dark button rows read as a bar across any face
+	// they cross. Keep the PROVEN-rendering pose (stage-local axes, no relative yaw —
+	// re-angled/far-side placements rendered as a blank board in HighResShot passes,
+	// 2026-07-17) and instead: +40 local Y slides the panel off the self-view mirror
+	// copy's sightline (world X ~0), and Z 135 drops the dark button rows to chest
+	// height so any residual crossing sits below faces.
+	MenuWidgetComponent->SetRelativeLocation(FVector(0.0f, 40.0f, 135.0f));
+	// One-sided ON PURPOSE: with TwoSided the renderer also shows a dark,
+	// depth-ignoring, X-mirrored backface copy of this widget (the "black board"
+	// that haunted every desk capture since Phase 2 — 2026-07-17 hunt). Backface
+	// culling removes the ghost; the participant only ever faces the front.
+	MenuWidgetComponent->SetTwoSided(false);
 	MenuWidgetComponent->SetWidgetClass(UDyadAvatarMenuWidget::StaticClass());
 }
 
@@ -140,8 +237,11 @@ void ADyadLobbyStageActor::BeginPlay()
 			this, &ADyadLobbyStageActor::HandleAvatarChoiceChanged);
 		bSessionInitialized = !Session->GetSessionId().IsEmpty();
 		// A partner choice that predates this stage (travel back into the lobby) still
-		// gets its preview.
-		if (!Session->GetPartnerAvatarId().IsNone())
+		// gets its preview — but only once the flow is past the self stage (assigned
+		// conditions preset the partner id while the participant is still at stage 1).
+		LastFlowStage = Session->GetLobbyFlowStage();
+		if (LastFlowStage != EDyadLobbyFlowStage::SelfSelect &&
+			!Session->GetPartnerAvatarId().IsNone())
 		{
 			RespawnPartnerPreview(Session->GetPartnerAvatarId());
 		}
@@ -172,7 +272,14 @@ void ADyadLobbyStageActor::HandleAvatarChoiceChanged(const EDyadAvatarSlot Slot,
 {
 	if (Slot == EDyadAvatarSlot::Partner)
 	{
-		RespawnPartnerPreview(AvatarId);
+		// Preview only during the partner stage: assigned presets arrive while the
+		// participant is still choosing themselves, and the partner must not stand in
+		// the mirror spot until the mirror stage is over.
+		const UDyadSessionSubsystem* Session = GetSession();
+		if (Session && Session->GetLobbyFlowStage() != EDyadLobbyFlowStage::SelfSelect)
+		{
+			RespawnPartnerPreview(AvatarId);
+		}
 		return;
 	}
 
@@ -197,9 +304,104 @@ void ADyadLobbyStageActor::RespawnPartnerPreview(const FName AvatarId)
 		return;
 	}
 	FDyadAvatarRigFactory::DestroyRig(World, PartnerPreviewRig);
-	const FTransform PreviewTransform = PartnerPreviewRelativeTransform * GetActorTransform();
+
+	// Participant design (2026-07-17): the preview shows the partner MOVING on the
+	// pinned recording segment — "is this who I want across the table?" — not a
+	// puppet of the participant's own body (which parks lifeless whenever tracking
+	// drops and previews the wrong thing conceptually). Same machinery as the ghost.
+	const UDyadSessionSubsystem* Session = GetSession();
+	FString SourcePath = Session ? Session->GetPartnerStreamCachePath() : FString();
+	if (SourcePath.TrimStartAndEnd().IsEmpty())
+	{
+		// The canonical dataset (AGENTS.md) — same default as mp.DyadGhostSourceFile.
+		SourcePath = TEXT("Saved/CodexAgent/Diagnostics/")
+			TEXT("tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_v2_manifest.json");
+	}
+	TSharedPtr<FMediaPipeDyadRowStream> Stream = MakeShared<FMediaPipeDyadRowStream>();
+	FString LoadError;
+	if (!Stream->Load(SourcePath, LoadError))
+	{
+		UE_LOG(LogDyadLobby, Warning,
+			TEXT("DyadLobby: partner preview row source '%s' failed to load: %s"),
+			*SourcePath, *LoadError);
+		return;
+	}
+	Stream->ConfigureSegment(
+		Session ? Session->GetPartnerStreamStartSeconds() : 2.0,
+		Session ? Session->GetPartnerStreamDurationSeconds() : 26.0);
+	Stream->StartAt(FPlatformTime::Seconds());
+
+	// Face the participant by rotating the DATA, not the rig (arm-mirror bug otherwise;
+	// see the yaw CVars above). Position comes from the placement property; the actor
+	// yaw stays data-aligned.
+	const float DataYawDeg = CVarDyadPreviewDataYawDeg.GetValueOnGameThread();
+	const float ActorYawDeg = CVarDyadPreviewActorYawDeg.GetValueOnGameThread();
+	const TSharedPtr<FMediaPipeDyadObservationSource> RotatedSource =
+		MakeShared<FMediaPipeDyadYawRotatedSource>(Stream, DataYawDeg);
+	const FTransform PreviewTransform(
+		FRotator(0.0f, ActorYawDeg, 0.0f),
+		(PartnerPreviewRelativeTransform * GetActorTransform()).GetLocation());
 	FDyadAvatarRigFactory::SpawnRig(
-		World, AvatarId, PreviewTransform, LiveTee, TEXT("MP_DyadPartnerPreview"), PartnerPreviewRig);
+		World, AvatarId, PreviewTransform, RotatedSource, TEXT("MP_DyadPartnerPreview"), PartnerPreviewRig);
+	UE_LOG(LogDyadLobby, Log,
+		TEXT("DyadLobby: partner preview %s driven by recording segment %.1fs+%.1fs ")
+		TEXT("(dataYaw=%.0f actorYaw=%.0f)."),
+		*AvatarId.ToString(),
+		Stream->GetSegmentStartSeconds(), Stream->GetSegmentDurationSeconds(),
+		DataYawDeg, ActorYawDeg);
+}
+
+void ADyadLobbyStageActor::TickFlowStage()
+{
+	const UDyadSessionSubsystem* Session = GetSession();
+	if (!Session)
+	{
+		return;
+	}
+	const EDyadLobbyFlowStage Stage = Session->GetLobbyFlowStage();
+	if (Stage != LastFlowStage)
+	{
+		if (Stage == EDyadLobbyFlowStage::SelfSelect)
+		{
+			// Back to the mirror: clone visible, partner preview gone.
+			SetSelfViewHidden(false);
+			FDyadAvatarRigFactory::DestroyRig(GetWorld(), PartnerPreviewRig);
+		}
+		else if (LastFlowStage == EDyadLobbyFlowStage::SelfSelect)
+		{
+			// "Once confirmed, the mirror goes away": hide the self-view clone and put
+			// the recording-driven partner preview in its spot.
+			SetSelfViewHidden(true);
+			if (!Session->GetPartnerAvatarId().IsNone())
+			{
+				RespawnPartnerPreview(Session->GetPartnerAvatarId());
+			}
+		}
+		LastFlowStage = Stage;
+	}
+	if (Stage != EDyadLobbyFlowStage::SelfSelect)
+	{
+		// Pawn respawns rebuild the self-view satellites visible; keep the mirror away
+		// for the rest of the lobby flow.
+		SetSelfViewHidden(true);
+	}
+}
+
+void ADyadLobbyStageActor::SetSelfViewHidden(const bool bInHidden) const
+{
+	// Actor-level hiding loses to the pawn's per-tick self-view manager (verified in
+	// the 2026-07-17 journey: the mirror clone stayed visible through stage 2). Drive
+	// the pawn's own switch instead — the same property the interaction stage sets on
+	// arrival — and its manager tears the mirror copy down/up cleanly. RespawnPawn
+	// copies the property, so mid-stage respawns keep the stage's choice.
+	if (AMediaPipeEmbodiedAvatarPawn* LivePawn = UDyadAvatarSwapLibrary::FindLivePawn(GetWorld()))
+	{
+		const bool bWantShow = !bInHidden;
+		if (LivePawn->bShowMediaPipeSelfView != bWantShow)
+		{
+			LivePawn->bShowMediaPipeSelfView = bWantShow;
+		}
+	}
 }
 
 void ADyadLobbyStageActor::PublishLiveTee()
@@ -299,19 +501,21 @@ void ADyadLobbyStageActor::TickAutoJourney(const float DeltaSeconds)
 		break;
 	case 1:
 		Screenshot(TEXT("self_Kellan"));
-		Session->SelectPartnerAvatar(FName(TEXT("Maria")));
+		// Sequential flow: confirming the self choice ends the mirror stage.
+		Session->ConfirmLobbyStage();
 		break;
 	case 2:
-		Screenshot(TEXT("partner_Maria"));
-		Session->SelectSelfAvatar(FName(TEXT("Hudson")));
+		Screenshot(TEXT("partner_stage_mirror_gone"));
+		Session->SelectPartnerAvatar(FName(TEXT("Maria")));
 		break;
 	case 3:
-		Screenshot(TEXT("self_changed_Hudson"));
+		Screenshot(TEXT("partner_Maria_recorded_preview"));
 		Session->SelectPartnerAvatar(FName(TEXT("Payton")));
 		break;
 	case 4:
 		Screenshot(TEXT("partner_changed_Payton"));
-		Session->LockChoices();
+		// Second confirm locks (READY/travel when a peer is connected).
+		Session->ConfirmLobbyStage();
 		break;
 	case 5:
 		Screenshot(TEXT("locked"));
@@ -341,7 +545,7 @@ void ADyadLobbyStageActor::TickWirePartner()
 	{
 		return;
 	}
-	const bool bWantWirePartner = Link->HasWireRows();
+	const bool bWantWirePartner = GDyadLobbyWirePartner != 0 && Link->HasWireRows();
 	if (!bWantWirePartner)
 	{
 		if (WirePartnerRig.IsSpawned())
@@ -417,7 +621,15 @@ void ADyadLobbyStageActor::TickConditionInit()
 void ADyadLobbyStageActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	FDyadStudyRoomPolicy::TickParticipantFacingRoom();
+	if (GDyadDumpBigPrimitivesAtSeconds > 0.0 &&
+		FPlatformTime::Seconds() >= GDyadDumpBigPrimitivesAtSeconds)
+	{
+		GDyadDumpBigPrimitivesAtSeconds = -1.0;
+		DumpBigPrimitives(GetWorld());
+	}
 	TickConditionInit();
+	TickFlowStage();
 	PublishLiveTee();
 	EnsurePinchInteraction();
 	TickWirePartner();
