@@ -1,0 +1,12 @@
+== seat A (Saved/DyadStudy/dyad_20260717_083604_665_1_seatA)
+32320 control.jsonl
+2686 events.jsonl
+46322800 rows_inbound.jsonl
+35223476 rows_outbound.jsonl
+166 session.json
+== seat B (Saved/DyadStudy/dyad_20260717_083610_seatB)
+65470 control.jsonl
+351 events.jsonl
+31466601 rows_inbound.jsonl
+46327563 rows_outbound.jsonl
+160 session.json

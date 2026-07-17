@@ -4,6 +4,7 @@
 #include "Components/WidgetInteractionComponent.h"
 #include "DyadAvatarMenuWidget.h"
 #include "DyadAvatarSwapLibrary.h"
+#include "DyadConditionFile.h"
 #include "DyadLinkSubsystem.h"
 #include "EmbodiedFusionComponent.h"
 #include "Engine/GameInstance.h"
@@ -17,6 +18,20 @@ DEFINE_LOG_CATEGORY_STATIC(LogDyadLobby, Log, All);
 
 namespace
 {
+FString GDyadConditionFile = TEXT("");
+FAutoConsoleVariableRef CVarDyadConditionFile(
+	TEXT("mp.DyadConditionFile"), GDyadConditionFile,
+	TEXT("DYADIC_STUDY_PLAN Phase 5: path to the condition JSON (project-relative or ")
+	TEXT("absolute). Loaded by the lobby stage at BeginPlay; the session subsystem ")
+	TEXT("enforces it (locked menus render locked)."),
+	ECVF_Default);
+
+FString GDyadSeat = TEXT("A");
+FAutoConsoleVariableRef CVarDyadSeat(
+	TEXT("mp.DyadSeat"), GDyadSeat,
+	TEXT("This machine's seat id (A|B), stamped on every session log row."),
+	ECVF_Default);
+
 TAutoConsoleVariable<float> CVarDyadLobbyAutoJourneySeconds(
 	TEXT("mp.DyadLobbyAutoJourneySeconds"), 0.0f,
 	TEXT("DYADIC_STUDY_PLAN Phase 2 gate driver: when > 0, the lobby stage walks the full ")
@@ -123,12 +138,7 @@ void ADyadLobbyStageActor::BeginPlay()
 	{
 		ChoiceChangedHandle = Session->OnAvatarChoiceChanged.AddUObject(
 			this, &ADyadLobbyStageActor::HandleAvatarChoiceChanged);
-		if (Session->GetSessionId().IsEmpty())
-		{
-			// Standalone lobby boots (desk runs) still get stamped identity; the Phase 5
-			// condition loader overrides this with the real seat/condition.
-			Session->BeginNewSession(TEXT("A"), TEXT("lobby_dev"));
-		}
+		bSessionInitialized = !Session->GetSessionId().IsEmpty();
 		// A partner choice that predates this stage (travel back into the lobby) still
 		// gets its preview.
 		if (!Session->GetPartnerAvatarId().IsNone())
@@ -363,9 +373,51 @@ void ADyadLobbyStageActor::TickWirePartner()
 		WirePartnerRig);
 }
 
+void ADyadLobbyStageActor::TickConditionInit()
+{
+	// -game boots execute -ExecCmds AFTER BeginPlay, so the condition CVar must be
+	// polled: apply it the moment it appears, or fall back to a dev session after a
+	// short grace window (measured 2026-07-16: BeginPlay-time read saw an empty CVar).
+	if (bSessionInitialized)
+	{
+		return;
+	}
+	UDyadSessionSubsystem* Session = GetSession();
+	UWorld* World = GetWorld();
+	if (!Session || !World)
+	{
+		return;
+	}
+	if (!Session->GetSessionId().IsEmpty())
+	{
+		bSessionInitialized = true;
+		return;
+	}
+	const FString ConditionPath = GDyadConditionFile.TrimStartAndEnd();
+	if (!ConditionPath.IsEmpty())
+	{
+		FString ConditionError;
+		if (!FDyadConditionFile::LoadAndApply(ConditionPath, GDyadSeat.TrimStartAndEnd(), *Session, ConditionError))
+		{
+			UE_LOG(LogDyadLobby, Error, TEXT("DyadLobby: condition file failed: %s"), *ConditionError);
+			Session->BeginNewSession(GDyadSeat.TrimStartAndEnd(), TEXT("condition_error"));
+		}
+		bSessionInitialized = true;
+		return;
+	}
+	if (World->GetTimeSeconds() > 3.0)
+	{
+		// Standalone lobby boots (desk runs) still get stamped identity; condition runs
+		// never reach this fallback (the CVar lands within the first ticks).
+		Session->BeginNewSession(GDyadSeat.TrimStartAndEnd(), TEXT("lobby_dev"));
+		bSessionInitialized = true;
+	}
+}
+
 void ADyadLobbyStageActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	TickConditionInit();
 	PublishLiveTee();
 	EnsurePinchInteraction();
 	TickWirePartner();

@@ -127,11 +127,16 @@ void UDyadLinkSubsystem::SendHello(const double NowSeconds)
 	const FString Seat = Session ? Session->GetSeatId() : TEXT("A");
 	const FString SessionId = Session ? Session->GetSessionId() : FString();
 	HelloSendMonoMs = MonotonicMs();
-	Connection.SendLine(DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeHello(
+	const FString HelloLine = DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeHello(
 		Seat.IsEmpty() ? TEXT("A") : Seat,
 		SessionId,
 		FDateTime::UtcNow().ToUnixTimestamp() * 1000.0,
-		HelloSendMonoMs)));
+		HelloSendMonoMs));
+	Connection.SendLine(HelloLine);
+	if (Session)
+	{
+		Session->RecordControlLine(true, HelloLine);
+	}
 }
 
 void UDyadLinkSubsystem::SendChoicesFromSession()
@@ -141,11 +146,13 @@ void UDyadLinkSubsystem::SendChoicesFromSession()
 	{
 		return;
 	}
-	Connection.SendLine(DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeChoices(
+	const FString ChoicesLine = DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeChoices(
 		Session->GetSelfAvatarId().ToString(),
 		Session->GetPartnerAvatarId().ToString(),
 		Session->GetChoiceMode(EDyadAvatarSlot::Self) == EDyadChoiceMode::Free ? TEXT("free")
-			: (Session->GetChoiceMode(EDyadAvatarSlot::Self) == EDyadChoiceMode::Assigned ? TEXT("assigned") : TEXT("yoked")))));
+			: (Session->GetChoiceMode(EDyadAvatarSlot::Self) == EDyadChoiceMode::Assigned ? TEXT("assigned") : TEXT("yoked"))));
+	Connection.SendLine(ChoicesLine);
+	Session->RecordControlLine(true, ChoicesLine);
 	bChoicesSent = true;
 }
 
@@ -195,11 +202,13 @@ bool UDyadLinkSubsystem::SendReady()
 	{
 		return false;
 	}
+	const FString ReadyLine = DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeReady());
 	if (UDyadSessionSubsystem* Session = GetSession())
 	{
 		Session->RecordEvent(TEXT("wire_ready_sent"), FString());
+		Session->RecordControlLine(true, ReadyLine);
 	}
-	return Connection.SendLine(DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeReady()));
+	return Connection.SendLine(ReadyLine);
 }
 
 bool UDyadLinkSubsystem::SendGo(const FString& Level)
@@ -208,11 +217,13 @@ bool UDyadLinkSubsystem::SendGo(const FString& Level)
 	{
 		return false;
 	}
+	const FString GoLine = DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeGo(Level));
 	if (UDyadSessionSubsystem* Session = GetSession())
 	{
 		Session->RecordEvent(TEXT("wire_go_sent"), FString::Printf(TEXT("level=%s"), *Level));
+		Session->RecordControlLine(true, GoLine);
 	}
-	return Connection.SendLine(DyadLinkProtocol::MakeMessageLine(DyadLinkProtocol::MakeGo(Level)));
+	return Connection.SendLine(GoLine);
 }
 
 void UDyadLinkSubsystem::HandleLine(const FString& Line, const double NowSeconds)
@@ -226,6 +237,17 @@ void UDyadLinkSubsystem::HandleLine(const FString& Line, const double NowSeconds
 	FString Type;
 	Message->TryGetStringField(TEXT("type"), Type);
 	UDyadSessionSubsystem* Session = GetSession();
+	if (Session)
+	{
+		if (Type == DyadLinkProtocol::TypeRow)
+		{
+			Session->RecordRowLine(false, Line);
+		}
+		else
+		{
+			Session->RecordControlLine(false, Line);
+		}
+	}
 
 	if (Type == DyadLinkProtocol::TypeRow)
 	{
@@ -376,8 +398,13 @@ void UDyadLinkSubsystem::PumpOutboundRows(const double NowSeconds)
 	}
 	const TSharedRef<FJsonObject> Payload = DyadLinkProtocol::BuildSourceRowPayload(
 		LiveFusion->GetSourceObservations_GameThread(), NowSeconds, TEXT("live"));
-	Connection.SendLine(DyadLinkProtocol::MakeMessageLine(
-		DyadLinkProtocol::MakeRow(OutboundSequence++, MonotonicMs(), Payload)));
+	const FString RowLine = DyadLinkProtocol::MakeMessageLine(
+		DyadLinkProtocol::MakeRow(OutboundSequence++, MonotonicMs(), Payload));
+	Connection.SendLine(RowLine);
+	if (UDyadSessionSubsystem* Session = GetSession())
+	{
+		Session->RecordRowLine(true, RowLine);
+	}
 }
 
 void UDyadLinkSubsystem::Tick(float DeltaTime)

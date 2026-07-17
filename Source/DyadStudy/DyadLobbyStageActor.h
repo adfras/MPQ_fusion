@@ -51,6 +51,7 @@ public:
 
 private:
 	void HandleAvatarChoiceChanged(EDyadAvatarSlot Slot, FName AvatarId);
+	void TickConditionInit();
 	void RespawnPartnerPreview(FName AvatarId);
 	void PublishLiveTee();
 	void EnsurePinchInteraction();
@@ -72,6 +73,7 @@ private:
 	FDyadAvatarRig WirePartnerRig;
 	FDelegateHandle ChoiceChangedHandle;
 
+	bool bSessionInitialized = false;
 	int32 AutoJourneyStep = 0;
 	double NextAutoJourneyStepSeconds = -1.0;
 };

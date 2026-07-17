@@ -1,0 +1,29 @@
+{
+  "conditionTag": "assigned_pilot",
+  "taskId": "acquaintance_talk",
+  "level": "/Game/MetaHumanRooms/L_DyadInteraction_01",
+  "yokedSourceSessionId": "",
+  "seats": {
+    "A": {
+      "self": { "mode": "assigned", "avatar": "Emory" },
+      "partner": { "mode": "assigned", "avatar": "Maria" }
+    },
+    "B": {
+      "self": { "mode": "assigned", "avatar": "Kellan" },
+      "partner": { "mode": "assigned", "avatar": "Hudson" }
+    }
+  },
+  "partnerStream": {
+    "cache": "Saved/CodexAgent/Diagnostics/tracking_fusion_dataset_avatar_locked_sync_calibration_20260609_170656_replay_source_v2_manifest.json",
+    "startSeconds": 2.0,
+    "durationSeconds": 26.0
+  },
+  "questionnaire": {
+    "afterSeconds": 45.0,
+    "items": [
+      "I felt as if the body I saw was my own body.",
+      "I felt that the person across from me was really there with me.",
+      "I felt comfortable sharing personal things in this conversation."
+    ]
+  }
+}

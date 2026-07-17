@@ -97,19 +97,52 @@ class PartnerPlayer:
         self.sock: socket.socket | None = None
         self.recv_buffer = b""
         self.send_buffer = b""
-        self.session_id = f"player_{time.strftime('%Y%m%d_%H%M%S')}"
+        self.session_id = f"dyad_{time.strftime('%Y%m%d_%H%M%S')}_seatB"
+        self.session_dir = Path(args.session_dir) if args.session_dir else (
+            PROJECT_ROOT / "Saved" / "DyadStudy" / self.session_id)
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        (self.session_dir / "session.json").write_text(json.dumps({
+            "sessionId": self.session_id,
+            "seat": "B",
+            "conditionTag": args.condition_tag,
+            "wallClockIso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "monotonicSeconds": time.monotonic(),
+        }) + "\n", encoding="utf-8")
+        self.events_file = (self.session_dir / "events.jsonl").open("a", encoding="utf-8")
+        self.control_file = (self.session_dir / "control.jsonl").open("a", encoding="utf-8")
+        self.rows_out_file = (self.session_dir / "rows_outbound.jsonl").open("a", encoding="utf-8")
+        self.rows_in_file = (self.session_dir / "rows_inbound.jsonl").open("a", encoding="utf-8")
         self.hello_send_mono = 0.0
         self.clock_offset_ms: float | None = None
         self.go_received = False
         self.rows_sent = 0
         self.loops_completed = 0
 
+    def record_event(self, kind: str, detail: str) -> None:
+        self.events_file.write(json.dumps({
+            "tMonoS": time.monotonic(), "kind": kind, "detail": detail,
+        }) + "\n")
+        self.events_file.flush()
+
+    def record_control(self, outbound: bool, message: dict) -> None:
+        self.control_file.write(json.dumps({
+            "dir": "out" if outbound else "in",
+            "tMonoS": time.monotonic(),
+            "line": message,
+        }) + "\n")
+        self.control_file.flush()
+
     # --- wire helpers ---
 
     def send(self, message: dict) -> None:
         # Buffered send: the socket is non-blocking (recv is polled on the same socket),
         # so a momentarily full OS buffer must queue rather than raise (WinError 10035).
-        self.send_buffer += (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
+        line = json.dumps(message, separators=(",", ":"))
+        if message.get("type") == "ROW":
+            self.rows_out_file.write(line + "\n")
+        else:
+            self.record_control(True, message)
+        self.send_buffer += (line + "\n").encode("utf-8")
         self.flush_send()
 
     def flush_send(self) -> None:
@@ -147,11 +180,16 @@ class PartnerPlayer:
 
     def handle_message(self, message: dict) -> None:
         kind = message.get("type", "")
+        if kind == "ROW":
+            self.rows_in_file.write(json.dumps(message, separators=(",", ":")) + "\n")
+            return
+        self.record_control(False, message)
         if kind == "HELLO":
             recv_mono = mono_ms()
             peer_mono = float(message.get("monotonicMs", 0.0))
             rtt = max(0.0, recv_mono - self.hello_send_mono)
             self.clock_offset_ms = peer_mono - (self.hello_send_mono + rtt / 2.0)
+            self.record_event("wire_hello", f"peerSeat={message.get('seat')} offsetMs={self.clock_offset_ms:.1f} rttMs={rtt:.1f}")
             print(
                 f"[player] HELLO from seat {message.get('seat')} session={message.get('sessionId')} "
                 f"offsetMs={self.clock_offset_ms:.1f} rttMs={rtt:.1f}",
@@ -162,6 +200,7 @@ class PartnerPlayer:
             print(f"[player] GO level={level} -> acking", flush=True)
             self.send({"type": "GO_ACK", "level": level})
             self.go_received = True
+            self.record_event("wire_go_received", f"level={level}")
         elif kind == "CHOICES":
             print(f"[player] host CHOICES logged: {message}", flush=True)
         elif kind == "BYE":
@@ -247,6 +286,7 @@ class PartnerPlayer:
                 if not ready_sent and now >= ready_at:
                     self.send({"type": "READY"})
                     ready_sent = True
+                    self.record_event("wire_ready_sent", "")
                     print("[player] READY sent", flush=True)
                 if now >= next_heartbeat:
                     self.send({"type": "HEARTBEAT", "monotonicMs": mono_ms()})
@@ -291,9 +331,12 @@ class PartnerPlayer:
                     self.sock.close()
             except OSError:
                 pass
+        self.record_event("session_end", f"rows={self.rows_sent} loops={self.loops_completed}")
+        for handle in (self.events_file, self.control_file, self.rows_out_file, self.rows_in_file):
+            handle.close()
         print(
             f"[player] done: rows={self.rows_sent} loops={self.loops_completed} "
-            f"ready={ready_sent} go={self.go_received}",
+            f"ready={ready_sent} go={self.go_received} sessionDir={self.session_dir}",
             flush=True,
         )
         return 0
@@ -320,6 +363,10 @@ def main() -> int:
                         help="avatar id reported in CHOICES (log-only; appearance never crosses the wire)")
     parser.add_argument("--partner-avatar", default="Kellan",
                         help="partner-slot choice reported in CHOICES (log-only)")
+    parser.add_argument("--session-dir", default="",
+                        help="seat-B session folder (default Saved/DyadStudy/<sessionId>)")
+    parser.add_argument("--condition-tag", default="recorded_partner",
+                        help="condition tag stamped in this seat's session.json")
     args = parser.parse_args()
     return PartnerPlayer(args).run()
 

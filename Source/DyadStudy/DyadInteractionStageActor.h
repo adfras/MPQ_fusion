@@ -32,6 +32,9 @@ private:
 	void EnsurePartnerRig();
 	UDyadSessionSubsystem* GetSession() const;
 
+	UPROPERTY(Transient)
+	TObjectPtr<class UWidgetComponent> QuestionnaireComponent = nullptr;
+
 	FDyadAvatarRig PartnerRig;
 	bool bArrivalReported = false;
 	bool bSelfEnsured = false;

@@ -76,6 +76,25 @@ public:
 	const FString& GetSeatId() const { return SeatId; }
 	const FString& GetConditionTag() const { return ConditionTag; }
 
+	// --- Per-seat session folder (Phase 5): Saved/DyadStudy/<SessionId>/ ---
+	// One folder = one seat's complete record: session.json (identity), events.jsonl
+	// (subsystem events incl. selections/questionnaire), control.jsonl (the wire control
+	// transcript, both directions), rows_outbound.jsonl / rows_inbound.jsonl (the row
+	// streams). The link subsystem feeds the wire files; RecordEvent feeds events.
+	const FString& GetSessionDirectory() const { return SessionDirectory; }
+	void RecordControlLine(bool bOutbound, const FString& Line);
+	void RecordRowLine(bool bOutbound, const FString& Line);
+
+	// --- Questionnaire hook (Phase 5): items from the condition file; answers are data ---
+	void SetQuestionnaire(const TArray<FString>& Items, float AfterSeconds);
+	const TArray<FString>& GetQuestionnaireItems() const { return QuestionnaireItems; }
+	float GetQuestionnaireAfterSeconds() const { return QuestionnaireAfterSeconds; }
+	bool AnswerQuestionnaire(int32 ItemIndex, int32 Score);
+	bool IsQuestionnaireComplete() const;
+	const TArray<int32>& GetQuestionnaireAnswers() const { return QuestionnaireAnswers; }
+
+	virtual void Deinitialize() override;
+
 	// --- Event log (Phase 5 persists this into the session folder) ---
 
 	struct FDyadSessionEvent
@@ -92,6 +111,9 @@ public:
 
 private:
 	bool IsKnownCastMember(FName AvatarId) const;
+	void OpenSessionFolder();
+	void CloseSessionFolder();
+	void AppendLineToArchive(TUniquePtr<FArchive>& Archive, const TCHAR* FileLabel, const FString& Line);
 
 	FName SelfAvatarId;
 	FName PartnerAvatarId;
@@ -104,4 +126,14 @@ private:
 	FString SeatId;
 	FString ConditionTag;
 	TArray<FDyadSessionEvent> SessionEvents;
+
+	FString SessionDirectory;
+	TUniquePtr<FArchive> EventsArchive;
+	TUniquePtr<FArchive> ControlArchive;
+	TUniquePtr<FArchive> RowsOutboundArchive;
+	TUniquePtr<FArchive> RowsInboundArchive;
+
+	TArray<FString> QuestionnaireItems;
+	TArray<int32> QuestionnaireAnswers;
+	float QuestionnaireAfterSeconds = 0.0f;
 };
