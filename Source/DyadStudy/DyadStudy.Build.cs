@@ -20,6 +20,7 @@ public class DyadStudy : ModuleRules
 			"Engine",
 			"Json",
 			"InputCore",
+			"EnhancedInput",
 			"HeadMountedDisplay",
 			"UMG",
 			"Slate",
@@ -27,5 +28,16 @@ public class DyadStudy : ModuleRules
 			"MediaPipeDriver",
 			"DyadLink"
 		});
+
+		if (Target.bBuildEditor)
+		{
+			// Editor-only: mp.DyadAuthorMenuWidget rebuilds the menu WidgetBlueprint's
+			// designer tree (DyadMenuWidgetAssetAuthor.cpp).
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"UMGEditor",
+				"UnrealEd"
+			});
+		}
 	}
 }

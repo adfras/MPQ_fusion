@@ -133,7 +133,7 @@ def apply_room_cosmetics(hide_labels=()):
             # rooms are static; one capture at load is correct anyway.
             _set_props(sky_component, {
                 "real_time_capture": False,
-                "intensity": 1.0,
+                "intensity": 0.15,
             })
             try:
                 sky_component.recapture_sky()
@@ -153,10 +153,15 @@ def apply_room_cosmetics(hide_labels=()):
         fill.set_actor_location_and_rotation(location, unreal.Rotator(0.0, 0.0, 0.0), False, False)
         light_component = fill.get_component_by_class(unreal.PointLightComponent)
         if light_component is not None:
-            # 5000 lm blew the room out against its fixed exposure volume (2026-07-17
-            # trial feedback: "glared out"); 1600 reads as soft office light.
+            # 5000 lm blew the room out ("glared out", worn); 1600 was still glary in
+            # the headset — HMD tonemapping blooms hotter than the desk view. 800 as
+            # the baked baseline; final values are tuned LIVE through the MCP bridge
+            # with the participant judging, then written back here.
+            # 800 still bloomed pink-white in the HMD (participant screenshots,
+            # 2026-07-17 evening): headset tonemapping runs far hotter than the desk
+            # view. 500 + skylight 0.15 is the new baked baseline.
             _set_props(light_component, {
-                "intensity": 1600.0,
+                "intensity": 500.0,
                 "attenuation_radius": 1400.0,
                 "cast_shadows": False,
                 "soft_source_radius": 30.0,

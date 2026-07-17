@@ -96,6 +96,52 @@ def main() -> int:
         unreal.EditorLevelLibrary.destroy_actor(stale_blocker)
         unreal.log("Removed stale menu ghost blocker")
 
+    # Stage-1 dressing mirror (2026-07-17 participant design): a framed, glass-tinted
+    # panel around the self-view clone's spot so the clone reads as a reflection. The
+    # clone stands at world (0,107) facing the participant; the frame plane sits just
+    # in front at Y=90, the tinted backing just behind. All pieces carry the
+    # DyadMirrorDeco tag — ADyadLobbyStageActor strikes the set when the mirror "goes
+    # away" at the partner stage. Materials are borrowed from existing room actors so
+    # the palette stays coherent (bookshelf wood for the frame, wall-art glass-blue
+    # for the backing).
+    all_actors = unreal.EditorLevelLibrary.get_all_level_actors()
+
+    def _find_material(label):
+        for candidate in all_actors:
+            if candidate.get_actor_label() == label and isinstance(candidate, unreal.StaticMeshActor):
+                return candidate.static_mesh_component.get_material(0)
+        return None
+
+    frame_material = _find_material("Furnishing_Bookshelf_Frame")
+    glass_material = _find_material("Decor_WallArt_Main")
+    cube = unreal.EditorAssetLibrary.load_asset("/Engine/BasicShapes/Cube.Cube")
+
+    MIRROR_PIECES = (
+        ("MP_DyadMirror_SlatLeft", unreal.Vector(-69.0, 90.0, 110.0), unreal.Vector(0.08, 0.06, 2.2), frame_material),
+        ("MP_DyadMirror_SlatRight", unreal.Vector(69.0, 90.0, 110.0), unreal.Vector(0.08, 0.06, 2.2), frame_material),
+        ("MP_DyadMirror_SlatTop", unreal.Vector(0.0, 90.0, 218.0), unreal.Vector(1.46, 0.06, 0.08), frame_material),
+        ("MP_DyadMirror_SlatBottom", unreal.Vector(0.0, 90.0, 2.0), unreal.Vector(1.46, 0.06, 0.08), frame_material),
+        ("MP_DyadMirror_Backing", unreal.Vector(0.0, 138.0, 110.0), unreal.Vector(1.42, 0.02, 2.16), glass_material),
+    )
+    for piece_label, piece_loc, piece_scale, piece_material in MIRROR_PIECES:
+        piece = next((a for a in all_actors if a.get_actor_label() == piece_label), None)
+        if piece is None:
+            piece = unreal.EditorLevelLibrary.spawn_actor_from_class(
+                unreal.StaticMeshActor, piece_loc, unreal.Rotator(0.0, 0.0, 0.0))
+            if piece is None:
+                unreal.log_error(f"Failed to spawn mirror piece {piece_label}")
+                return 1
+            mesh_component = piece.static_mesh_component
+            mesh_component.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
+            mesh_component.set_editor_property("static_mesh", cube)
+            unreal.log(f"Spawned mirror piece {piece_label}")
+        piece.set_actor_label(piece_label, mark_dirty=True)
+        piece.set_actor_location_and_rotation(piece_loc, unreal.Rotator(0.0, 0.0, 0.0), False, False)
+        piece.set_actor_scale3d(piece_scale)
+        if piece_material is not None:
+            piece.static_mesh_component.set_material(0, piece_material)
+        piece.set_editor_property("tags", ["DyadMirrorDeco"])
+
     apply_room_cosmetics(hide_labels=HIDE_LABELS)
     unreal.EditorLevelLibrary.save_current_level()
     unreal.log(f"Configured dyad lobby map {DEST_MAP}")

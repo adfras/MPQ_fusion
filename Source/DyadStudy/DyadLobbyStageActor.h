@@ -7,6 +7,9 @@
 
 #include "DyadLobbyStageActor.generated.h"
 
+class UInputAction;
+class UInputMappingContext;
+class UUserWidget;
 class UWidgetComponent;
 class UWidgetInteractionComponent;
 
@@ -50,14 +53,44 @@ public:
 	UPROPERTY(EditAnywhere, Category = "DyadStudy")
 	FTransform WirePartnerRelativeTransform = FTransform(FRotator(0.0f, -90.0f, 0.0f), FVector(-180.0f, -60.0f, 0.0f));
 
+	// Alan's 2026-07-17 direction: the visible menu is a REAL editor asset he can open
+	// and edit. When this WidgetBlueprint resolves it wins the menu component; the
+	// pure-C++ UDyadAvatarMenuWidget stays the fallback so headless boots and fresh
+	// checkouts never lose the menu (same brain either way — see the widget class docs).
+	UPROPERTY(EditAnywhere, Category = "DyadStudy")
+	TSoftClassPtr<UUserWidget> MenuWidgetClassOverride = TSoftClassPtr<UUserWidget>(
+		FSoftObjectPath(TEXT("/Game/DyadStudy/UI/WBP_DyadAvatarMenu.WBP_DyadAvatarMenu_C")));
+
+	// Enhanced Input assets for the select click (authored in-editor via the MCP).
+	// Additive: when they load they are polled FIRST in IsHandSelectPressed; the raw
+	// per-profile key polling stays as the no-asset fallback, and the XR-hand pinch
+	// paths are untouched either way.
+	UPROPERTY(EditAnywhere, Category = "DyadStudy|Input")
+	TSoftObjectPtr<UInputMappingContext> SelectMappingContext = TSoftObjectPtr<UInputMappingContext>(
+		FSoftObjectPath(TEXT("/Game/DyadStudy/Input/IMC_DyadLobby.IMC_DyadLobby")));
+
+	UPROPERTY(EditAnywhere, Category = "DyadStudy|Input")
+	TSoftObjectPtr<UInputAction> SelectActionLeft = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/DyadStudy/Input/IA_DyadSelect_L.IA_DyadSelect_L")));
+
+	UPROPERTY(EditAnywhere, Category = "DyadStudy|Input")
+	TSoftObjectPtr<UInputAction> SelectActionRight = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/DyadStudy/Input/IA_DyadSelect_R.IA_DyadSelect_R")));
+
 private:
 	void HandleAvatarChoiceChanged(EDyadAvatarSlot Slot, FName AvatarId);
 	void TickConditionInit();
 	void TickFlowStage();
+	void ApplyStageVisuals(EDyadLobbyFlowStage Stage);
+	void SetMirrorDecoHidden(bool bInHidden) const;
 	void SetSelfViewHidden(bool bInHidden) const;
 	void RespawnPartnerPreview(FName AvatarId);
 	void PublishLiveTee();
 	void EnsurePinchInteraction();
+	void TickHandRays();
+	void TickSelectInput();
+	void TickSelectInputAssets();
+	bool IsHandSelectPressed(bool bLeft, bool& bInOutPinchLatch) const;
 	void TickWirePartner();
 	void TickAutoJourney(float DeltaSeconds);
 	UDyadSessionSubsystem* GetSession() const;
@@ -78,6 +111,26 @@ private:
 
 	bool bSessionInitialized = false;
 	EDyadLobbyFlowStage LastFlowStage = EDyadLobbyFlowStage::SelfSelect;
+	bool bStageVisualsInitialized = false;
+	// "Phase out" transition: fade to black, swap the scene, fade back.
+	EDyadLobbyFlowStage PendingVisualStage = EDyadLobbyFlowStage::SelfSelect;
+	double StageSwapAtSeconds = -1.0;
+	// Select-press edge state per hand (controller trigger OR bare-hand pinch).
+	bool bLeftSelectDown = false;
+	bool bRightSelectDown = false;
+	mutable bool bLeftPinchLatch = false;
+	mutable bool bRightPinchLatch = false;
+	// Loaded Enhanced Input assets (null when absent — raw key polling covers select).
+	UPROPERTY(Transient)
+	TObjectPtr<UInputMappingContext> LoadedSelectMappingContext = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> LoadedSelectActionLeft = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> LoadedSelectActionRight = nullptr;
+	bool bTriedSelectInputAssets = false;
+	bool bSelectContextApplied = false;
+	// Throttle for the XRHands worn-check log line (TickHandRays).
+	double NextHandRayLogSeconds = 0.0;
 	int32 AutoJourneyStep = 0;
 	double NextAutoJourneyStepSeconds = -1.0;
 };

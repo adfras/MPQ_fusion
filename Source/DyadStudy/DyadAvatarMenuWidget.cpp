@@ -61,6 +61,14 @@ void UDyadAvatarMenuButton::HandleClicked()
 	}
 }
 
+void UDyadMenuClickRelay::HandleClicked()
+{
+	if (UDyadAvatarMenuWidget* Menu = OwnerMenu.Get())
+	{
+		Menu->SelectAvatarChoice(ChoiceSlot, AvatarId);
+	}
+}
+
 UWidget* UDyadAvatarMenuWidget::BuildChoiceRow(const EDyadAvatarSlot InSlot, const FText& Label)
 {
 	UVerticalBox* Row = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -107,9 +115,133 @@ UWidget* UDyadAvatarMenuWidget::BuildChoiceRow(const EDyadAvatarSlot InSlot, con
 
 		ChoiceButtons.Add(Button);
 		ButtonFrames.Add(Button, Frame);
+		ChoiceEntries.Add({Button, Frame, InSlot, Profile.ProfileId});
 	}
 	Row->AddChildToVerticalBox(Buttons);
 	return Row;
+}
+
+void UDyadAvatarMenuWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	// A WidgetBlueprint child arrives here with its designer tree already duplicated
+	// onto WidgetTree, and RebuildWidget will later SKIP the C++ build because
+	// RootWidget is set. The bare C++ widget arrives with an empty tree (it is built in
+	// RebuildWidget). RootWidget presence therefore cleanly separates the two skins.
+	if (WidgetTree && WidgetTree->RootWidget)
+	{
+		DiscoverDesignerTree();
+	}
+}
+
+void UDyadAvatarMenuWidget::DiscoverDesignerTree()
+{
+	// Name contract (documented on the class): AvatarButton_/AvatarFrame_/Portrait_
+	// + <Self|Partner>_<ProfileId>, plus TitleText/StatusText/ConfirmButton/
+	// ConfirmLabel/SelfRow/PartnerRow. Everything is optional — whatever the designer
+	// tree provides gets driven, the rest is skipped (RefreshFromSession null-checks).
+	ChoiceEntries.Reset();
+
+	auto ParseSlotId = [](const FString& Suffix, EDyadAvatarSlot& OutSlot, FString& OutId) -> bool
+	{
+		if (Suffix.StartsWith(TEXT("Self_")))
+		{
+			OutSlot = EDyadAvatarSlot::Self;
+			OutId = Suffix.Mid(5);
+			return !OutId.IsEmpty();
+		}
+		if (Suffix.StartsWith(TEXT("Partner_")))
+		{
+			OutSlot = EDyadAvatarSlot::Partner;
+			OutId = Suffix.Mid(8);
+			return !OutId.IsEmpty();
+		}
+		return false;
+	};
+
+	int32 PortraitCount = 0;
+	TArray<UWidget*> AllWidgets;
+	WidgetTree->GetAllWidgets(AllWidgets);
+	for (UWidget* Widget : AllWidgets)
+	{
+		if (!Widget)
+		{
+			continue;
+		}
+		const FString Name = Widget->GetName();
+		EDyadAvatarSlot ParsedSlot = EDyadAvatarSlot::Self;
+		FString Id;
+		if (Name.StartsWith(TEXT("AvatarButton_")) && ParseSlotId(Name.Mid(13), ParsedSlot, Id))
+		{
+			UButton* Button = Cast<UButton>(Widget);
+			if (!Button)
+			{
+				continue;
+			}
+			UBorder* Frame = Cast<UBorder>(
+				WidgetTree->FindWidget(FName(*(TEXT("AvatarFrame_") + Name.Mid(13)))));
+			// The custom button class self-binds its click to the session; a PLAIN
+			// UButton (what the MCP authoring places) gets a click relay carrying the
+			// payload, so the designer tree needs zero graph nodes.
+			if (UDyadAvatarMenuButton* Typed = Cast<UDyadAvatarMenuButton>(Button))
+			{
+				Typed->InitChoice(ParsedSlot, FName(*Id));
+			}
+			else
+			{
+				UDyadMenuClickRelay* Relay = NewObject<UDyadMenuClickRelay>(this);
+				Relay->OwnerMenu = this;
+				Relay->ChoiceSlot = ParsedSlot;
+				Relay->AvatarId = FName(*Id);
+				Button->OnClicked.AddUniqueDynamic(Relay, &UDyadMenuClickRelay::HandleClicked);
+				ClickRelays.Add(Relay);
+			}
+			ChoiceEntries.Add({Button, Frame, ParsedSlot, FName(*Id)});
+		}
+		else if (Name.StartsWith(TEXT("Portrait_")) && ParseSlotId(Name.Mid(9), ParsedSlot, Id))
+		{
+			if (UImage* Image = Cast<UImage>(Widget))
+			{
+				if (UTexture2D* Portrait = LoadPortraitTexture(FName(*Id)))
+				{
+					Image->SetBrushFromTexture(Portrait);
+					PortraitCount++;
+				}
+			}
+		}
+	}
+
+	TitleText = WidgetTree->FindWidget<UTextBlock>(TEXT("TitleText"));
+	StatusText = WidgetTree->FindWidget<UTextBlock>(TEXT("StatusText"));
+	LockLabelText = WidgetTree->FindWidget<UTextBlock>(TEXT("ConfirmLabel"));
+	LockButton = WidgetTree->FindWidget<UButton>(TEXT("ConfirmButton"));
+	SelfRow = WidgetTree->FindWidget(TEXT("SelfRow"));
+	PartnerRow = WidgetTree->FindWidget(TEXT("PartnerRow"));
+	if (LockButton)
+	{
+		LockButton->OnClicked.AddUniqueDynamic(this, &UDyadAvatarMenuWidget::HandleLockClicked);
+	}
+
+	UE_LOG(LogDyadMenu, Log,
+		TEXT("DyadMenu: designer tree discovered — %d choice buttons, %d portraits, ")
+		TEXT("title=%d status=%d confirmBtn=%d confirmLbl=%d selfRow=%d partnerRow=%d."),
+		ChoiceEntries.Num(), PortraitCount,
+		TitleText ? 1 : 0, StatusText ? 1 : 0, LockButton ? 1 : 0, LockLabelText ? 1 : 0,
+		SelfRow ? 1 : 0, PartnerRow ? 1 : 0);
+	RefreshFromSession();
+}
+
+void UDyadAvatarMenuWidget::SelectAvatarChoice(const EDyadAvatarSlot InSlot, const FName AvatarId)
+{
+	if (UDyadSessionSubsystem* Session = ResolveSession(this))
+	{
+		Session->SelectAvatar(InSlot, AvatarId);
+	}
+}
+
+void UDyadAvatarMenuWidget::ConfirmStage()
+{
+	HandleLockClicked();
 }
 
 TSharedRef<SWidget> UDyadAvatarMenuWidget::RebuildWidget()
@@ -182,18 +314,19 @@ void UDyadAvatarMenuWidget::RefreshFromSession()
 
 	const bool bLocked = Session->AreChoicesLocked();
 	const EDyadLobbyFlowStage Stage = Session->GetLobbyFlowStage();
-	for (UDyadAvatarMenuButton* Button : ChoiceButtons)
+	for (const FChoiceEntry& Entry : ChoiceEntries)
 	{
+		UButton* Button = Entry.Button.Get();
 		if (!Button)
 		{
 			continue;
 		}
-		const bool bSelected = Session->GetAvatarId(Button->ChoiceSlot) == Button->AvatarId;
-		const bool bSlotSelectable = !bLocked && Session->GetChoiceMode(Button->ChoiceSlot) == EDyadChoiceMode::Free;
+		const bool bSelected = Session->GetAvatarId(Entry.Slot) == Entry.AvatarId;
+		const bool bSlotSelectable = !bLocked && Session->GetChoiceMode(Entry.Slot) == EDyadChoiceMode::Free;
 		Button->SetIsEnabled(bSlotSelectable);
-		if (TObjectPtr<UBorder>* Frame = ButtonFrames.Find(Button))
+		if (UBorder* Frame = Entry.Frame.Get())
 		{
-			(*Frame)->SetBrushColor(bSelected ? SelectedFrameColor : (bLocked ? LockedFrameColor : IdleFrameColor));
+			Frame->SetBrushColor(bSelected ? SelectedFrameColor : (bLocked ? LockedFrameColor : IdleFrameColor));
 		}
 	}
 
