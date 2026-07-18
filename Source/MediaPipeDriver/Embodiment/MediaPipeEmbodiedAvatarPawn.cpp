@@ -11,6 +11,8 @@
 #include "MediaPipeMetaHumanProfile.h"
 #include "MediaPipePoseLog.h"
 #include "MediaPipePoseDrivenSkeletalActor.h"
+#include "MediaPipePoseDrivenAnimInstance.h"
+#include "MediaPipeCaptureRecorders.h"
 #include "MediaPipePoseTrackerComponent.h"
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestWebcamSourceActor.h"
@@ -767,16 +769,61 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 	MetaHumanSelfViewActor->SetActorHiddenInGame(false);
 
 	USkeletalMeshComponent* SourceBodyComponent = FindMetaHumanBodyMesh(SourceMetaHumanActor, ActiveMetaHumanProfile);
+	const USkeletalMesh* SourceBodyMeshAsset = SourceBodyComponent ? SourceBodyComponent->GetSkeletalMeshAsset() : nullptr;
+	const USkeleton* BodySkeleton = SourceBodyMeshAsset ? SourceBodyMeshAsset->GetSkeleton() : nullptr;
 
+	// Keep the SOURCE actor's body-skeleton components refreshing while off-screen (the
+	// live avatar stands behind the participant). The FACE must stay completely
+	// untouched: forcing its VisibilityBasedAnimTickOption to AlwaysTickPoseAndRefresh-
+	// Bones alone makes the face-bound hair groom render as the opaque rest-space
+	// "blob" (2026-07-18 root cause, reproduced on a pure vanilla BP_Maria).
 	TArray<USkeletalMeshComponent*> SourceSkeletalComponents;
 	SourceMetaHumanActor->GetComponents<USkeletalMeshComponent>(SourceSkeletalComponents);
 	for (USkeletalMeshComponent* SourceComponent : SourceSkeletalComponents)
 	{
-		ConfigureMetaHumanSelfViewSkeletalComponent(SourceComponent);
+		if (SourceComponent && SourceComponent->GetSkeletalMeshAsset() &&
+			SourceComponent->GetSkeletalMeshAsset()->GetSkeleton() == BodySkeleton)
+		{
+			ConfigureMetaHumanSelfViewSkeletalComponent(SourceComponent);
+		}
 	}
 
 	TArray<USkeletalMeshComponent*> TargetSkeletalComponents;
 	MetaHumanSelfViewActor->GetComponents<USkeletalMeshComponent>(TargetSkeletalComponents);
+
+	// The clone's BODY drives itself with the same pose-driven anim instance and
+	// tracking source as the live avatar. It must NOT be a leader-pose follower: a
+	// follower body starves the clone's Face_AnimBP of a valid body pose and the
+	// face-bound hair groom renders as the rest-space "blob" (reproduced on a pure
+	// vanilla BP_Maria whose Body was leader-posed cross-actor — that single change
+	// ballooned the hair). Driven body + untouched face is the configuration proven
+	// to render hair correctly (same architecture as the dyad rigs).
+	USkeletalMeshComponent* TargetBodyComponent = FindMetaHumanBodyMesh(MetaHumanSelfViewActor, ActiveMetaHumanProfile);
+	if (TargetBodyComponent)
+	{
+		if (TargetBodyComponent->GetAnimClass() != UMediaPipePoseDrivenAnimInstance::StaticClass())
+		{
+			TargetBodyComponent->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+			TargetBodyComponent->SetAnimInstanceClass(UMediaPipePoseDrivenAnimInstance::StaticClass());
+			TargetBodyComponent->InitializeAnimScriptInstance(true);
+		}
+		if (UMediaPipePoseDrivenAnimInstance* CloneAnim =
+			Cast<UMediaPipePoseDrivenAnimInstance>(TargetBodyComponent->GetAnimInstance()))
+		{
+			AActor* CloneSourceActor = nullptr;
+			UEmbodiedFusionComponent* CloneFusionComponent = nullptr;
+			if (AvatarDriverActor)
+			{
+				CloneSourceActor = const_cast<AActor*>(
+					MediaPipeCaptureRecorders::ResolveTrackingSourceActor(AvatarDriverActor->Source));
+				CloneFusionComponent = AvatarDriverActor->GetActiveEmbodiedFusionComponent();
+			}
+			CloneAnim->SetSourceActor(CloneSourceActor);
+			CloneAnim->SetEmbodiedFusionComponent(CloneFusionComponent);
+			CloneAnim->ApplyRetargetQualitySettings();
+		}
+		ConfigureMetaHumanSelfViewSkeletalComponent(TargetBodyComponent);
+	}
 
 	int32 LeaderPoseComponentCount = 0;
 	int32 DirectBodyPoseLeaderCount = 0;
@@ -787,21 +834,20 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 			continue;
 		}
 
-		USkeletalMeshComponent* SourceComponent =
-			FindMetaHumanSelfViewPoseLeader(TargetComponent, SourceBodyComponent, SourceSkeletalComponents);
-
-		if (SourceComponent && SourceComponent != TargetComponent)
+		// Clothing (body skeleton) follows the clone's OWN driven body, exactly like a
+		// vanilla MetaHuman. The FACE and other foreign-skeleton components keep their
+		// stock anim/tick configuration untouched (see blob note above).
+		if (TargetComponent != TargetBodyComponent && TargetBodyComponent)
 		{
-			ConfigureMetaHumanSelfViewSkeletalComponent(SourceComponent);
-			TargetComponent->SetLeaderPoseComponent(SourceComponent, true, true);
-			if (SourceComponent == SourceBodyComponent)
+			const USkeletalMesh* TargetMeshAsset = TargetComponent->GetSkeletalMeshAsset();
+			if (TargetMeshAsset && TargetMeshAsset->GetSkeleton() == BodySkeleton)
 			{
-				++DirectBodyPoseLeaderCount;
+				TargetComponent->SetLeaderPoseComponent(TargetBodyComponent, true, true);
+				ConfigureMetaHumanSelfViewSkeletalComponent(TargetComponent);
+				++LeaderPoseComponentCount;
 			}
-			++LeaderPoseComponentCount;
 		}
 
-		ConfigureMetaHumanSelfViewSkeletalComponent(TargetComponent);
 		RestoreMetaHumanSelfViewHiddenBones(TargetComponent, Profile.LocalViewPolicy);
 		TargetComponent->SetOwnerNoSee(false);
 		TargetComponent->SetOnlyOwnerSee(false);

@@ -334,28 +334,35 @@ bool FMediaPipeAvatarEmbodimentMetaHumanSelfViewLeaderAutomationTest::RunTest(co
 	USkeletalMeshComponent* TargetFace =
 		NewObject<USkeletalMeshComponent>(TargetOuter, FName(TEXT("Face")));
 
+	// 2026-07-18 hair-blob root cause: leader-posing a component across skeletons
+	// (face -> source BODY) balloons the face-bound hair groom. The resolver now
+	// prefers the name/mesh-matched source component (Face->Face, Body->Body) and
+	// only falls back to the source body when no match exists.
 	TArray<USkeletalMeshComponent*> SourceComponents = { SourceFace, SourceBody };
 	TestTrue(TEXT("Self-view body samples the live body pose directly"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetBody,
 			SourceBody,
 			SourceComponents) == SourceBody);
-	TestTrue(TEXT("Self-view face also samples the live body pose directly"),
-		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
-			TargetFace,
-			SourceBody,
-			SourceComponents) == SourceBody);
-	TestFalse(TEXT("Self-view face does not follow the source face follower chain"),
+	TestTrue(TEXT("Self-view face follows the matching source face, never the body"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetFace,
 			SourceBody,
 			SourceComponents) == SourceFace);
 
-	TestTrue(TEXT("Missing source body falls back to matching component lookup"),
+	TestTrue(TEXT("Missing source body still resolves the matching component"),
 		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
 			TargetFace,
 			nullptr,
 			SourceComponents) == SourceFace);
+
+	USkeletalMeshComponent* TargetTorso =
+		NewObject<USkeletalMeshComponent>(TargetOuter, FName(TEXT("Torso")));
+	TestTrue(TEXT("Unmatched components fall back to the source body"),
+		MediaPipeDriverRuntime::FindMetaHumanSelfViewPoseLeader(
+			TargetTorso,
+			SourceBody,
+			SourceComponents) == SourceBody);
 
 	return true;
 }

@@ -20,6 +20,7 @@
 #include "Camera/CameraComponent.h"
 #include "Camera/CameraTypes.h"
 #include "Components/LODSyncComponent.h"
+#include "GroomComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/PlanarReflectionComponent.h"
 #include "Components/PoseableMeshComponent.h"
@@ -1504,11 +1505,72 @@ int32 ResolveAutoQuestMetaHumanForcedLod(const EMetaHumanQuestQualityContext Con
 	return FMath::Clamp(CVarAutoQuestVrMetaHumanForcedLod.GetValueOnGameThread(), -1, 7);
 }
 
+// The MetaHuman hair card/helmet LOD representations ship broken in this project's
+// content (2026-07-18 hair-blob root cause): a VANILLA BP_Maria forced to LODSync
+// LOD 3 renders the exact opaque red "hair blob" with no driver code involved, and
+// Wallace's cards are equally broken (paler tint). Strand LODs render correctly for
+// every cast member. Grooms must therefore never leave strand geometry: remove them
+// from LODSync (whose forced LOD would drag them onto card LODs alongside the
+// body/face meshes) and pin them to LOD 0 (strands). Runs for every driven-avatar
+// context (live, self-view, dyad rigs, respawns) via the quality profile below.
+void PinMetaHumanGroomsToStrandLods(AActor* MetaHumanActor)
+{
+	TArray<UGroomComponent*> GroomComponents;
+	MetaHumanActor->GetComponents<UGroomComponent>(GroomComponents);
+	if (GroomComponents.Num() == 0)
+	{
+		return;
+	}
+
+	TArray<ULODSyncComponent*> LodSyncComponents;
+	MetaHumanActor->GetComponents<ULODSyncComponent>(LodSyncComponents);
+	for (ULODSyncComponent* LodSyncComponent : LodSyncComponents)
+	{
+		if (!LodSyncComponent)
+		{
+			continue;
+		}
+
+		const int32 NumBefore = LodSyncComponent->ComponentsToSync.Num();
+		LodSyncComponent->ComponentsToSync.RemoveAll(
+			[&GroomComponents](const FComponentSync& Sync)
+			{
+				for (const UGroomComponent* GroomComponent : GroomComponents)
+				{
+					if (GroomComponent && GroomComponent->GetFName() == Sync.Name)
+					{
+						return true;
+					}
+				}
+				return false;
+			});
+		if (LodSyncComponent->ComponentsToSync.Num() != NumBefore)
+		{
+			LodSyncComponent->RefreshSyncComponents();
+		}
+	}
+
+	// NOTE: no GroomComponent::SetForcedLOD here. Forcing a groom LOD switches the
+	// groom to the Forced LOD selection path, which renders the hair as the unbound
+	// rest-space "blob" on driven avatars (observed live 2026-07-18). Removing the
+	// grooms from LODSync above is sufficient: the grooms then keep engine auto LOD
+	// and never get dragged onto the broken card/helmet LODs by the forced body LOD.
+}
+
 void ApplyAutoQuestMetaHumanQualityProfile(
 	AActor* MetaHumanActor,
 	const EMetaHumanQuestQualityContext Context = EMetaHumanQuestQualityContext::Live)
 {
-	if (!MetaHumanActor || CVarAutoQuestVrPerfProfile.GetValueOnGameThread() == 0)
+	if (!MetaHumanActor)
+	{
+		return;
+	}
+
+	// Always pin grooms to strands, even with the perf profile disabled: the broken
+	// card LODs would otherwise still be reachable through LODSync auto selection.
+	PinMetaHumanGroomsToStrandLods(MetaHumanActor);
+
+	if (CVarAutoQuestVrPerfProfile.GetValueOnGameThread() == 0)
 	{
 		return;
 	}
@@ -1664,12 +1726,18 @@ USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
 		return nullptr;
 	}
 
-	if (SourceBodyComponent)
+	// Prefer the name/mesh-matched source component (Face->Face, Torso->Torso, ...).
+	// Short-circuiting every follower to the source BODY leader-posed the clone's
+	// FACE across skeletons, which collapses the FACIAL_* bones to identity and
+	// renders the face-bound hair groom as the rest-space "blob" (2026-07-18 root
+	// cause). Like-to-like leaders keep every bone mapped.
+	if (USkeletalMeshComponent* MatchingComponent =
+		FindMatchingMetaHumanSkeletalComponent(TargetComponent, SourceComponents))
 	{
-		return SourceBodyComponent;
+		return MatchingComponent;
 	}
 
-	return FindMatchingMetaHumanSkeletalComponent(TargetComponent, SourceComponents);
+	return SourceBodyComponent;
 }
 
 void ConfigureMetaHumanSelfViewSkeletalComponent(USkeletalMeshComponent* MeshComponent)

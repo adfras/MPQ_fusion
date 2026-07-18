@@ -40,6 +40,7 @@ public class MediaPipeDriver : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"HairStrandsCore",
 			"ImageWrapper",
 			"Json",
 			"Media",

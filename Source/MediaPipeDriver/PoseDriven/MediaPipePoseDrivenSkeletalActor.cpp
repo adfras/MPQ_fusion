@@ -51,10 +51,25 @@ int32 ConfigurePresentationSkeletalFollowers(AActor* PresentationActor, USkeleta
 	TArray<USkeletalMeshComponent*> SkeletalComponents;
 	PresentationActor->GetComponents<USkeletalMeshComponent>(SkeletalComponents);
 
+	const USkeletalMesh* PresentationMeshAsset = PresentationMesh->GetSkeletalMeshAsset();
+	const USkeleton* PresentationSkeleton = PresentationMeshAsset ? PresentationMeshAsset->GetSkeleton() : nullptr;
+
 	int32 FollowerCount = 0;
 	for (USkeletalMeshComponent* SkeletalComponent : SkeletalComponents)
 	{
 		if (!SkeletalComponent || SkeletalComponent == PresentationMesh || !SkeletalComponent->GetSkeletalMeshAsset())
+		{
+			continue;
+		}
+
+		// Only same-skeleton components (clothing) become leader-pose followers, and
+		// ONLY those get the always-tick treatment. The MetaHuman FACE (own skeleton)
+		// must stay COMPLETELY untouched: leader-posing it or merely forcing its
+		// VisibilityBasedAnimTickOption to AlwaysTickPoseAndRefreshBones makes the
+		// face-bound hair groom render as the opaque rest-space "blob" (2026-07-18
+		// root cause — reproduced on a pure vanilla BP_Maria with that single flag).
+		const USkeleton* ComponentSkeleton = SkeletalComponent->GetSkeletalMeshAsset()->GetSkeleton();
+		if (ComponentSkeleton != PresentationSkeleton)
 		{
 			continue;
 		}
