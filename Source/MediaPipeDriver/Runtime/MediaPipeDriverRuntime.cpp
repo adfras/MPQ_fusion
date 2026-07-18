@@ -918,8 +918,10 @@ TArray<FMediaPipeCVarSetting> GetCandidateVariantSettings()
 		// live at the mirror rather than pushing the gain past ~2 (flicker risk).
 		// ACCEPTED (worn 2026-07-12 follow-up, same session as the down-gate; user
 		// verdict "good"). Live-bisectable.
-		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.0f),
-		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.5f),
+		// 2026-07-18 worn feedback (Alan): the 1.5 gain that fixed "reads weak" now
+		// reads overdone — "the shoulders shrugging could be dampened a little".
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugDeadbandCm"), 1.5f),
+		FMediaPipeCVarSetting::MakeFloat(TEXT("mp.ShrugLiftGain"), 1.15f),
 		// Symmetric in-band rest-ref learning (2026-07-12, worn Emory right-shrug
 		// session): with deep drops gated above, the in-band 2.5s-down / 90s-up
 		// asymmetry still ratcheted the rest reference toward the lower noise envelope

@@ -205,14 +205,13 @@ ADyadLobbyStageActor::ADyadLobbyStageActor()
 	// must be set HERE (not BeginPlay) — the component instantiates its widget when it
 	// registers, which happens before BeginPlay.
 	MenuWidgetComponent->SetRelativeScale3D(FVector(0.08f));
-	// WORN-sightline placement (2026-07-17 headset feedback: a panel 40 degrees left
-	// of the forward gaze is INVISIBLE in VR — the participant reported seeing "just
-	// Emory"). Stage 1 pose: dead ahead between the participant (world (0,-170), eye
-	// ~154) and the mirror clone (world (0,107)), low-center at ~1.25 m so the clone's
-	// face and shoulders stay visible above the panel (top edge Z~133). TickFlowStage
-	// slides it aside for stage 2 so the partner preview stands unobstructed. Scale
-	// 0.08 = 112 cm panel. Desk verification uses the same pawn-eye camera.
-	MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, -80.0f, 105.0f));
+	// WORN-sightline placement, revised 2026-07-18 (Alan): upper-left of the mirror
+	// sightline so the panel never covers the mirror or its clone. Moderate offset on
+	// purpose — the 2026-07-17 lesson is that 40 degrees off-gaze is INVISIBLE in VR.
+	// ApplyStageVisuals re-asserts the per-stage pose every stage change (and is the
+	// place to change these numbers). Scale 0.08 = 112 cm panel. Desk verification
+	// uses the same pawn-eye camera.
+	MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 20.0f, 150.0f));
 	// One-sided ON PURPOSE: with TwoSided the renderer also shows a dark,
 	// depth-ignoring, X-mirrored backface copy of this widget (the "black board"
 	// that haunted every desk capture since Phase 2 — 2026-07-17 hunt). Backface
@@ -438,20 +437,28 @@ void ADyadLobbyStageActor::TickFlowStage()
 
 void ADyadLobbyStageActor::ApplyStageVisuals(const EDyadLobbyFlowStage Stage)
 {
-	// Menu pose per stage (worn sightline, see the ctor notes): stage 1 dead ahead
-	// low-center; stages 2+ slid ~30 degrees aside and angled back at the participant
-	// so the partner preview stands unobstructed at the mirror spot.
+	// Menu pose per stage. 2026-07-18 (Alan): UPPER-LEFT of the mirror sightline in
+	// both stages — the dead-ahead low-center pose covered the mirror and its clone.
+	// Kept moderate (~20 degrees left, ~10 up at his standing distance): the
+	// 2026-07-17 lesson is that a panel 40 degrees off-gaze is INVISIBLE in VR.
+	// Stage 2 slides a further step left and angles back at the participant so the
+	// partner preview stands fully unobstructed at the mirror spot.
 	if (MenuWidgetComponent)
 	{
+		// Sign/scale notes (2026-07-18 desk captures): stage-relative -Y reads as the
+		// PARTICIPANT'S RIGHT, and the offset is NOT symmetric around the view center
+		// (the stage origin sits right of the participant's centerline): -125 landed
+		// upper-RIGHT, +55 landed clipped at the far left edge. +20 puts the panel
+		// upper-left AND comfortably inside the visible cone.
 		if (Stage == EDyadLobbyFlowStage::SelfSelect)
 		{
-			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, -80.0f, 105.0f));
-			MenuWidgetComponent->SetRelativeRotation(FRotator::ZeroRotator);
+			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 20.0f, 150.0f));
+			MenuWidgetComponent->SetRelativeRotation(FRotator(0.0f, -8.0f, 0.0f));
 		}
 		else
 		{
-			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, -150.0f, 105.0f));
-			MenuWidgetComponent->SetRelativeRotation(FRotator(0.0f, 30.0f, 0.0f));
+			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 70.0f, 150.0f));
+			MenuWidgetComponent->SetRelativeRotation(FRotator(0.0f, -25.0f, 0.0f));
 		}
 	}
 	if (Stage == EDyadLobbyFlowStage::SelfSelect)
