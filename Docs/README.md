@@ -25,6 +25,10 @@ and gotchas is `SETUP_NEW_MACHINE.md` §7-7d.
   script and pass criteria.
 - `MEDIAPIPE_PIPELINE_WALKTHROUGH.md`: broader MediaPipe/Quest architecture and historical context.
 - `METAHUMAN_PROFILE_DRIVEN_RETARGETING.md`: MetaHuman profile and retargeting context.
+- `METAHUMAN_GROOM_RULES.md`: ACTIVE rules for hair grooms on driven avatars — read
+  BEFORE touching avatar visibility/spawn/LOD/tick code. Never sweep a groom-bearing
+  component tree per frame; the hair-blob arc that produced these rules is closed in
+  `RESOLUTION_2026-07-18_HAIR_GROOM_BLOB.md`.
 - `AVATAR_PROFILE_DRIVEN_EMBODIMENT.md`: profile-driven embodied avatar setup.
 - `AVATAR_LOCKED_SYNC_CALIBRATION_CAPTURE_PROTOCOL.md`: current one-run avatar-locked sync
   calibration capture protocol with seven green 30-second movement blocks and lower-body

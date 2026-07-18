@@ -50,6 +50,7 @@ You are controlling an Unreal Engine 5.8 editor project through local tools.
   - MediaPipe source component or adapter: produces MediaPipe body, hand, and face observations only.
   - AnimInstance or pose writer: consumes only the fused pose plus avatar profile and writes bones.
 - Keep dependencies one-way: sources must not know Manny or MetaHuman bone mappings; fusion must not know Manny or MetaHuman implementation details; pose writers must not poll raw Quest/OpenXR/MediaPipe data directly.
+- Groom hair rule: never sweep a MetaHuman's mesh-component tree per frame (visibility, collision, or any render-affecting setters) and never call `SetVisibility(x, true)` where the propagation can reach a groom — per-frame render-state churn silently disengages the hair binding (rest-space "blob"). Configuration sweeps run on transitions only. Full rules: `Docs/METAHUMAN_GROOM_RULES.md`.
 - When cleaning architecture, prefer small behavior-preserving slices. First move coordination responsibilities out of `FAnimNode_MediaPipePoseDriven` and into an owned fusion component/service, then update the anim node to consume the fused pose.
 - Current coupling hotspots to inspect before architectural changes:
   - `Source/MediaPipeDriver/PoseDriven/MediaPipePoseDrivenAnimInstance.cpp`: currently polls Quest/runtime state, finds MediaPipe sources, assembles tracking source frames, runs BodyFusion, and writes pose.
