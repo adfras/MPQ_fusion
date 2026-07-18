@@ -24,6 +24,7 @@
 #include "MediaPipeQuestConstrainedArmSolver.h"
 #include "MediaPipeQuestWristApplyPolicy.h"
 #include "MediaPipeQuestWristDebugReporter.h"
+#include "MediaPipeQuestParticipantReachStore.h"
 #include "MediaPipeQuestWristCalibrationState.h"
 #include "MediaPipeQuestWristDiagnosticFormatter.h"
 #include "MediaPipeSkeletonPoseAdapter.h"
@@ -194,6 +195,9 @@ bool FAnimNode_MediaPipePoseDriven::DriveQuestHandCS(FCSPose<FCompactPose>& CSPo
 		DiagnosticsState.LastQuestWristSolveLogTimeSecondsL = -1.0;
 		DiagnosticsState.LastQuestWristSolveLogTimeSecondsR = -1.0;
 		UE_LOG(LogMediaPipePose, Log, TEXT("mp.ResetQuestWristCalibration: applied actor=%s serial=%d state=WaitingForStablePose"), *TargetActorName.ToString(), ManualResetSerial);
+		// A manual reset means the participant wants calibration redone from scratch —
+		// the persisted cross-respawn store must not resurrect the old measurements.
+		FMediaPipeQuestParticipantReachStore::Clear();
 		UpdateCalibrationTrace();
 	}
 	else

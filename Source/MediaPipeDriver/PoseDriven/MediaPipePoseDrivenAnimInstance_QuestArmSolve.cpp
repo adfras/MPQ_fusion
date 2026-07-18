@@ -24,6 +24,7 @@
 #include "MediaPipeQuestHandCompareDiagnostics.h"
 #include "MediaPipeQuestFingerSolver.h"
 #include "MediaPipeQuestConstrainedArmSolver.h"
+#include "MediaPipeQuestParticipantReachStore.h"
 #include "MediaPipeQuestWristApplyPolicy.h"
 #include "MediaPipeReachExtender.h"
 #include "MediaPipeQuestWristDebugReporter.h"
@@ -1427,6 +1428,45 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 		TargetEmbodimentProfile.SkeletonFamily == EMediaPipeAvatarSkeletonFamily::MannyLike;
 	const bool bQuestArmLengthCalibrationOwner =
 		FMediaPipeQuestWristApplyPolicy::ShouldOwnArmLengthCalibration(ArmLengthOwnerInput);
+
+	// Participant persistence (2026-07-18): a fresh pawn (dyad-lobby respawn) restores
+	// the participant's ACCEPTED two-pose arm length instead of idling in
+	// WaitingForHands until Quest ownership plus a new pose hold — the lobby's body
+	// chain owns the arms, so that wait never ended and every menu selection lost the
+	// calibration (Wallace, the cast's longest-armed rig, showed it as stretched
+	// arms). Raw participant observations; per-avatar corrections recompute at apply
+	// time. Deliberately OUTSIDE the quest-tracked gate below: restoring must not
+	// require the very ownership the lobby lacks.
+	if (bQuestArmLengthCalibrationOwner &&
+		QuestWristRuntimeState.ArmLengthCalibrationStage == QuestArmLengthCalibrationStage_WaitingForHands &&
+		CVarQuestArmLengthCalibrationStartup.GetValueOnAnyThread() != 0 &&
+		CVarQuestArmCalibrationPersist.GetValueOnAnyThread() != 0)
+	{
+		FMediaPipeQuestPersistedArmLength Persisted;
+		if (FMediaPipeQuestParticipantReachStore::TryGetArmLengthAccepted(Persisted))
+		{
+			FQuestWristSideRuntimeState& SeedLeft = QuestWristRuntimeState.Left;
+			FQuestWristSideRuntimeState& SeedRight = QuestWristRuntimeState.Right;
+			SeedLeft.bHasArmLengthCalibrationForwardReach = true;
+			SeedRight.bHasArmLengthCalibrationForwardReach = true;
+			SeedLeft.ArmLengthCalibrationForwardReachCm = Persisted.ForwardReachCmL;
+			SeedRight.ArmLengthCalibrationForwardReachCm = Persisted.ForwardReachCmR;
+			SeedLeft.bHasArmLengthCalibrationDownSample = true;
+			SeedRight.bHasArmLengthCalibrationDownSample = true;
+			SeedLeft.ArmLengthCalibrationDownDropCm = Persisted.DownDropCmL;
+			SeedRight.ArmLengthCalibrationDownDropCm = Persisted.DownDropCmR;
+			SeedLeft.ArmLengthCalibrationDownReachCm = Persisted.DownReachCmL;
+			SeedRight.ArmLengthCalibrationDownReachCm = Persisted.DownReachCmR;
+			QuestWristRuntimeState.ArmLengthCalibrationStage = QuestArmLengthCalibrationStage_Accepted;
+			QuestWristRuntimeState.ArmLengthCalibrationAcceptedTimeSeconds = FPlatformTime::Seconds();
+			UE_LOG(LogMediaPipePose, Log,
+				TEXT("mp.QuestArmLengthCalibration: restored accepted participant arm length across respawn ")
+				TEXT("(fwdL=%.1f fwdR=%.1f downDropL=%.1f downDropR=%.1f)."),
+				Persisted.ForwardReachCmL, Persisted.ForwardReachCmR,
+				Persisted.DownDropCmL, Persisted.DownDropCmR);
+		}
+	}
+
 	const bool bQuestArmLengthCalibrationAccepted =
 		QuestWristRuntimeState.ArmLengthCalibrationStage == QuestArmLengthCalibrationStage_Accepted;
 
@@ -1467,6 +1507,30 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 				CVarQuestConstrainedArmReachScaleMax.GetValueOnAnyThread());
 			const float MinObservedReachCm = MaxReachCm * MinObservedFraction;
 			const float MaxObservedReachCm = MaxReachCm / ReachScaleMin;
+
+			// Participant persistence (2026-07-18): the observed max measures the
+			// PARTICIPANT, not the avatar — seed a fresh pawn (dyad-lobby respawn)
+			// from the process store so reach calibration survives menu selections.
+			// 0.95 haircut on purpose: the observed max only ratchets UP and shoulder
+			// origins differ a few cm between avatars, so a carried value must
+			// undershoot — an overshoot could never correct itself. Owner-gated: only
+			// the live embodied MetaHuman writes or reads the store.
+			if (bQuestArmLengthCalibrationOwner &&
+				CVarQuestArmCalibrationPersist.GetValueOnAnyThread() != 0 &&
+				!QuestWristSideState.bHasHmdRelativeReachObservedMax)
+			{
+				float PersistedReachCm = 0.0f;
+				if (FMediaPipeQuestParticipantReachStore::TryGetObservedMax(bIsLeft, PersistedReachCm))
+				{
+					const float SeededReachCm = FMath::Min(PersistedReachCm * 0.95f, MaxObservedReachCm);
+					if (SeededReachCm >= MinObservedReachCm)
+					{
+						QuestWristSideState.bHasHmdRelativeReachObservedMax = true;
+						QuestWristSideState.HmdRelativeReachObservedMaxCm = SeededReachCm;
+					}
+				}
+			}
+
 			if (!bSuppressReachScaleAfterDropout &&
 				WristReachCm >= MinObservedReachCm &&
 				WristReachCm <= MaxObservedReachCm &&
@@ -1475,6 +1539,11 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 			{
 				QuestWristSideState.bHasHmdRelativeReachObservedMax = true;
 				QuestWristSideState.HmdRelativeReachObservedMaxCm = WristReachCm;
+				if (bQuestArmLengthCalibrationOwner &&
+					CVarQuestArmCalibrationPersist.GetValueOnAnyThread() != 0)
+				{
+					FMediaPipeQuestParticipantReachStore::NoteObservedMax(bIsLeft, WristReachCm);
+				}
 			}
 
 			if (QuestWristSideState.bHasHmdRelativeReachObservedMax)
@@ -1706,6 +1775,19 @@ void FAnimNode_MediaPipePoseDriven::DriveArmCS(FCSPose<FCompactPose>& CSPose, bo
 							RightSideState.ArmLengthCalibrationDownReachCm = RightSideState.ArmLengthCalibrationCandidateReachCm;
 							QuestWristRuntimeState.ArmLengthCalibrationStage = QuestArmLengthCalibrationStage_Accepted;
 							QuestWristRuntimeState.ArmLengthCalibrationAcceptedTimeSeconds = NowSeconds;
+							if (CVarQuestArmCalibrationPersist.GetValueOnAnyThread() != 0)
+							{
+								// Participant persistence: these are RAW participant
+								// observations — survive avatar respawns (dyad lobby).
+								FMediaPipeQuestPersistedArmLength Persisted;
+								Persisted.ForwardReachCmL = LeftSideState.ArmLengthCalibrationForwardReachCm;
+								Persisted.ForwardReachCmR = RightSideState.ArmLengthCalibrationForwardReachCm;
+								Persisted.DownDropCmL = LeftSideState.ArmLengthCalibrationDownDropCm;
+								Persisted.DownDropCmR = RightSideState.ArmLengthCalibrationDownDropCm;
+								Persisted.DownReachCmL = LeftSideState.ArmLengthCalibrationDownReachCm;
+								Persisted.DownReachCmR = RightSideState.ArmLengthCalibrationDownReachCm;
+								FMediaPipeQuestParticipantReachStore::NoteArmLengthAccepted(Persisted);
+							}
 							ResetArmLengthCalibrationProgress();
 							UE_LOG(
 								LogMediaPipePose,

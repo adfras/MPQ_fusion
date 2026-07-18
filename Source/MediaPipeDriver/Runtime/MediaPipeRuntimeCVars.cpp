@@ -638,6 +638,14 @@ namespace MediaPipeRuntimeCVars
 		0,
 		TEXT("When non-zero, HMD-relative Quest wrist endpoints learn the wearer's observed reach and normalize it to the avatar arm reach before the constrained solve."));
 
+	TAutoConsoleVariable<int32> CVarQuestArmCalibrationPersist(
+		TEXT("mp.QuestArmCalibrationPersist"),
+		1,
+		TEXT("When non-zero, the PARTICIPANT-side arm calibration results (reach-scale observed max ")
+		TEXT("and the two-pose accepted arm length) persist across avatar respawns in this process — ")
+		TEXT("the dyad lobby's menu selections stop wiping calibration the participant already did. ")
+		TEXT("mp.ResetQuestWristCalibration clears the persisted state."));
+
 	TAutoConsoleVariable<int32> CVarQuestConstrainedArmReachScaleUniform(
 		TEXT("mp.QuestConstrainedArmReachScaleUniform"),
 		0,

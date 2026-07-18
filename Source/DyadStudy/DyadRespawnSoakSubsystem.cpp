@@ -1,5 +1,6 @@
 #include "DyadRespawnSoakSubsystem.h"
 
+#include "ContentStreaming.h"
 #include "DyadAvatarSwapLibrary.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -45,6 +46,30 @@ void UDyadRespawnSoakSubsystem::Tick(float DeltaTime)
 	}
 
 	const double NowSeconds = World->GetTimeSeconds();
+
+	// Phase 2 of a swap: the labeled shot of the OUTGOING avatar has had frames to
+	// render — now it is safe to bring in the next cast member. Swapping in the same
+	// tick as the (deferred) HighResShot made every portrait show the INCOMING avatar,
+	// unstreamed, under the outgoing name (2026-07-17 shuffle, Wallace.png = Emory).
+	if (PendingSwapAtSeconds > 0.0)
+	{
+		if (NowSeconds < PendingSwapAtSeconds)
+		{
+			return;
+		}
+		PendingSwapAtSeconds = -1.0;
+		if (AMediaPipeEmbodiedAvatarPawn* Pawn = UDyadAvatarSwapLibrary::FindLivePawn(World))
+		{
+			UE_LOG(LogDyadSoak, Log,
+				TEXT("mp.DyadRespawnSoak: swap %d -> %s."), CompletedSwapCount, *PendingNextProfileId.ToString());
+			if (UDyadAvatarSwapLibrary::RespawnPawn(Pawn, PendingNextProfileId))
+			{
+				CompletedSwapCount++;
+			}
+		}
+		return;
+	}
+
 	if (NextSwapWorldSeconds < 0.0)
 	{
 		// First arm: give the initial avatar one full interval to assemble.
@@ -73,7 +98,9 @@ void UDyadRespawnSoakSubsystem::Tick(float DeltaTime)
 
 	// Visual record of the OUTGOING avatar after it had a full interval to settle. The
 	// player controller's console is the route that reliably reaches the game viewport
-	// (GEngine->Exec drops HighResShot in -game; measured 2026-07-16).
+	// (GEngine->Exec drops HighResShot in -game; measured 2026-07-16). Textures are
+	// force-streamed first so a first-appearance avatar doesn't render grey mips.
+	IStreamingManager::Get().StreamAllResources(1.0f);
 	if (APlayerController* PlayerController = World->GetFirstPlayerController())
 	{
 		PlayerController->ConsoleCommand(FString::Printf(
@@ -82,12 +109,8 @@ void UDyadRespawnSoakSubsystem::Tick(float DeltaTime)
 			*Pawn->MetaHumanProfileId.ToString()));
 	}
 
-	const FName NextProfileId = Profiles[CastCursor % Profiles.Num()].ProfileId;
+	// The shot is deferred to the next presented frame; hold the swap well behind it.
+	PendingNextProfileId = Profiles[CastCursor % Profiles.Num()].ProfileId;
 	CastCursor++;
-	UE_LOG(LogDyadSoak, Log,
-		TEXT("mp.DyadRespawnSoak: swap %d -> %s."), CompletedSwapCount, *NextProfileId.ToString());
-	if (UDyadAvatarSwapLibrary::RespawnPawn(Pawn, NextProfileId))
-	{
-		CompletedSwapCount++;
-	}
+	PendingSwapAtSeconds = NowSeconds + 0.75;
 }

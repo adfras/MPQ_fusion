@@ -134,6 +134,7 @@ namespace MediaPipeRuntimeCVars
 	extern TAutoConsoleVariable<float> CVarQuestConstrainedArmDownStraightenReachFloorFraction;
 	extern TAutoConsoleVariable<float> CVarQuestConstrainedArmDownStraightenMaxReachFraction;
 	extern TAutoConsoleVariable<int32> CVarQuestConstrainedArmReachScaleCalibration;
+	extern TAutoConsoleVariable<int32> CVarQuestArmCalibrationPersist;
 	extern TAutoConsoleVariable<int32> CVarQuestConstrainedArmReachScaleUniform;
 	extern TAutoConsoleVariable<float> CVarQuestConstrainedArmReachScaleMinObservedFraction;
 	extern TAutoConsoleVariable<float> CVarQuestConstrainedArmReachScaleApplyStartFraction;

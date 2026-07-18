@@ -25,6 +25,12 @@ public:
 
 private:
 	double NextSwapWorldSeconds = -1.0;
+	// Two-phase swap: the labeled HighResShot renders on the NEXT presented frame, so
+	// the respawn must wait behind it or the shot shows the INCOMING avatar with
+	// unstreamed textures under the outgoing avatar's name (the 2026-07-17 portrait
+	// shuffle: every portrait was the next cast member, grey unless already resident).
+	double PendingSwapAtSeconds = -1.0;
+	FName PendingNextProfileId;
 	int32 CastCursor = 0;
 	int32 CompletedSwapCount = 0;
 };

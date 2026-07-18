@@ -22,8 +22,11 @@ DEFAULT_SHOTS = PROJECT_ROOT / "Saved" / "Screenshots" / "WindowsEditor"
 DEFAULT_OUT = PROJECT_ROOT / "Content" / "DyadStudy" / "Portraits"
 
 # Avatar stands centered around x~640 in the soak framing; generous head/torso window
-# tolerates the cast's height spread (Emory is authored short).
-CROP_BOX = (520, 250, 780, 560)  # left, top, right, bottom on a 1280x720 shot
+# tolerates the cast's height spread (Emory is authored short). Bottom capped at 475:
+# the lobby menu panel's top edge sits at y~478 in the soak framing and was bleeding
+# into the bottom of every portrait (2026-07-18); same 260x310 aspect as before so the
+# menu's 140x155 portrait boxes render without squash.
+CROP_BOX = (520, 165, 780, 475)  # left, top, right, bottom on a 1280x720 shot
 
 SHOT_RE = re.compile(r"DyadSoak_(\d+)_([A-Za-z]+)\.png$")
 
