@@ -665,7 +665,7 @@ void AMediaPipeEmbodiedAvatarPawn::SetMovementReplicaAvatarVisible(const bool bV
 			continue;
 		}
 
-		Mesh->SetVisibility(bVisible, true);
+		SetComponentTreeVisibleIdempotent(Mesh, bVisible);
 		Mesh->SetHiddenInGame(!bVisible);
 	}
 
@@ -675,9 +675,19 @@ void AMediaPipeEmbodiedAvatarPawn::SetMovementReplicaAvatarVisible(const bool bV
 	}
 }
 
-void AMediaPipeEmbodiedAvatarPawn::SetMetaHumanSelfViewAvatarVisible(const bool bVisible) const
+void AMediaPipeEmbodiedAvatarPawn::SetMetaHumanSelfViewAvatarVisible(const bool bVisible)
 {
 	if (!MetaHumanSelfViewActor)
+	{
+		return;
+	}
+
+	// Sweep the component tree only on an actual transition — this runs from Tick
+	// whenever the self-view is inactive, and a per-frame sweep is exactly the groom
+	// render-state churn that latches the hair "blob" (see the show pass above).
+	const bool bSameActor = SelfViewShowPassActor.Get() == MetaHumanSelfViewActor;
+	const bool bAlreadyInState = bSameActor && (bSelfViewHiddenSinceShowPass == !bVisible);
+	if (bAlreadyInState)
 	{
 		return;
 	}
@@ -694,9 +704,12 @@ void AMediaPipeEmbodiedAvatarPawn::SetMetaHumanSelfViewAvatarVisible(const bool 
 
 		MeshComponent->SetOwnerNoSee(false);
 		MeshComponent->SetOnlyOwnerSee(false);
-		MeshComponent->SetVisibility(bVisible, true);
+		SetComponentTreeVisibleIdempotent(MeshComponent, bVisible);
 		MeshComponent->SetHiddenInGame(!bVisible);
 	}
+
+	SelfViewShowPassActor = MetaHumanSelfViewActor;
+	bSelfViewHiddenSinceShowPass = !bVisible;
 }
 
 void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog)
@@ -825,6 +838,18 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 		ConfigureMetaHumanSelfViewSkeletalComponent(TargetBodyComponent);
 	}
 
+	// The visibility/collision "show pass" must run only on real transitions (a fresh
+	// clone, or after the hide sweep), NEVER per frame. Running it per frame keeps the
+	// hair grooms' render state churning and their skinning binding permanently
+	// disengaged — the hair then renders as the opaque rest-space "blob". This exact
+	// block was isolated with a runtime bisect on 2026-07-18: with it disabled a fresh
+	// long-hair clone spawns with perfect strands; re-enabling it re-blobs a healed
+	// clone within seconds. Every setter it uses is individually change-guarded, so
+	// the damage comes from the block's interaction with same-frame spawn/config —
+	// gate it rather than re-litigating per call.
+	const bool bRunShowPass =
+		SelfViewShowPassActor.Get() != MetaHumanSelfViewActor || bSelfViewHiddenSinceShowPass;
+
 	int32 LeaderPoseComponentCount = 0;
 	int32 DirectBodyPoseLeaderCount = 0;
 	for (USkeletalMeshComponent* TargetComponent : TargetSkeletalComponents)
@@ -849,28 +874,38 @@ void AMediaPipeEmbodiedAvatarPawn::UpdateMetaHumanSelfViewAvatar(const bool bLog
 		}
 
 		RestoreMetaHumanSelfViewHiddenBones(TargetComponent, Profile.LocalViewPolicy);
-		TargetComponent->SetOwnerNoSee(false);
-		TargetComponent->SetOnlyOwnerSee(false);
-		TargetComponent->SetVisibility(true, true);
-		TargetComponent->SetHiddenInGame(false);
-		TargetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		TargetComponent->SetGenerateOverlapEvents(false);
-		TargetComponent->SetCanEverAffectNavigation(false);
+		if (bRunShowPass)
+		{
+			TargetComponent->SetOwnerNoSee(false);
+			TargetComponent->SetOnlyOwnerSee(false);
+			SetComponentTreeVisibleIdempotent(TargetComponent, true);
+			TargetComponent->SetHiddenInGame(false);
+			TargetComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			TargetComponent->SetGenerateOverlapEvents(false);
+			TargetComponent->SetCanEverAffectNavigation(false);
+		}
 	}
 
-	TArray<UMeshComponent*> TargetMeshComponents;
-	MetaHumanSelfViewActor->GetComponents<UMeshComponent>(TargetMeshComponents);
-	for (UMeshComponent* MeshComponent : TargetMeshComponents)
+	if (bRunShowPass)
 	{
-		if (!MeshComponent)
+		TArray<UMeshComponent*> TargetMeshComponents;
+		MetaHumanSelfViewActor->GetComponents<UMeshComponent>(TargetMeshComponents);
+		for (UMeshComponent* MeshComponent : TargetMeshComponents)
 		{
-			continue;
+			if (!MeshComponent)
+			{
+				continue;
+			}
+
+			MeshComponent->SetOwnerNoSee(false);
+			MeshComponent->SetOnlyOwnerSee(false);
+			SetComponentTreeVisibleIdempotent(MeshComponent, true);
+			MeshComponent->SetHiddenInGame(false);
 		}
 
-		MeshComponent->SetOwnerNoSee(false);
-		MeshComponent->SetOnlyOwnerSee(false);
-		MeshComponent->SetVisibility(true, true);
-		MeshComponent->SetHiddenInGame(false);
+		MetaHumanSelfViewActor->SetActorHiddenInGame(false);
+		SelfViewShowPassActor = MetaHumanSelfViewActor;
+		bSelfViewHiddenSinceShowPass = false;
 	}
 
 	if (bLog)

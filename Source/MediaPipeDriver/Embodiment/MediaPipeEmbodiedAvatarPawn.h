@@ -127,7 +127,7 @@ private:
 	void SetMovementReplicaAvatarVisible(bool bVisible);
 	void UpdateMediaPipeSelfViewAvatar(bool bLog);
 	void UpdateMetaHumanSelfViewAvatar(bool bLog);
-	void SetMetaHumanSelfViewAvatarVisible(bool bVisible) const;
+	void SetMetaHumanSelfViewAvatarVisible(bool bVisible);
 	void InitializeMovementReplicaAvatar(bool bLog);
 	void CacheMovementReplicaReferencePose();
 	void UpdateMovementReplicaAvatarPose();
@@ -155,6 +155,14 @@ private:
 
 	UPROPERTY(Transient)
 	AActor* MetaHumanSelfViewActor = nullptr;
+
+	// Which clone actor last received the one-time visibility/collision show pass,
+	// and whether the hide sweep ran since. The show pass must NOT run per frame:
+	// sweeping the clone's mesh components every frame keeps the hair grooms'
+	// render state churning and their binding permanently disengaged (rest-space
+	// "blob", 2026-07-18 root cause — bisected to exactly this block).
+	TWeakObjectPtr<AActor> SelfViewShowPassActor;
+	bool bSelfViewHiddenSinceShowPass = false;
 
 	UPROPERTY(Transient)
 	AMediaPipeVrTrackingPanelActor* TrackingPanelActor = nullptr;

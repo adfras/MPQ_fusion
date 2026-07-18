@@ -131,6 +131,14 @@ USkeletalMeshComponent* FindMetaHumanSelfViewPoseLeader(
 	USkeletalMeshComponent* SourceBodyComponent,
 	const TArray<USkeletalMeshComponent*>& SourceComponents);
 void ConfigureMetaHumanSelfViewSkeletalComponent(USkeletalMeshComponent* MeshComponent);
+// Sets visibility on a component and its whole attach subtree, but only touches
+// components whose visible flag actually differs. SetVisibility(bVisible, true)
+// marks EVERY child's render state dirty on EVERY call, even when nothing changed
+// (engine SceneComponent.cpp: "we have to mark dirty always"). Calling it per frame
+// on a MetaHuman recreates the hair grooms' render state every frame, which keeps
+// the groom binding permanently disengaged — the hair renders as the rest-space
+// "blob" (2026-07-18 root cause; the self-view clone was poisoned this way).
+void SetComponentTreeVisibleIdempotent(USceneComponent* Component, bool bVisible);
 void RestoreMetaHumanSelfViewHiddenBones(
 	USkeletalMeshComponent* MeshComponent,
 	const FMediaPipeAvatarLocalViewPolicy& LocalViewPolicy);

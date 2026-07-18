@@ -1550,11 +1550,45 @@ void PinMetaHumanGroomsToStrandLods(AActor* MetaHumanActor)
 		}
 	}
 
-	// NOTE: no GroomComponent::SetForcedLOD here. Forcing a groom LOD switches the
-	// groom to the Forced LOD selection path, which renders the hair as the unbound
-	// rest-space "blob" on driven avatars (observed live 2026-07-18). Removing the
-	// grooms from LODSync above is sufficient: the grooms then keep engine auto LOD
-	// and never get dragged onto the broken card/helmet LODs by the forced body LOD.
+	// Pin every groom to LOD 0 (strands). Removing the grooms from LODSync is NOT
+	// sufficient on its own: a free-running groom picks its own LOD from screen
+	// coverage and drops onto the broken card LODs at conversational distances
+	// (mirror clone at 2.8 m, menu rigs, portrait cameras). Forcing a strand LOD is
+	// safe — a vanilla MetaHuman's LODSync drives its grooms through this same path
+	// (SetForceRenderedLOD -> SetForcedLOD) every frame with perfect hair; the
+	// earlier "forced groom LOD renders rest-space" observation was the self-view
+	// clone photobombing the probe screenshots.
+	for (UGroomComponent* GroomComponent : GroomComponents)
+	{
+		if (GroomComponent && GroomComponent->GetForcedLOD() != 0)
+		{
+			GroomComponent->SetForcedLOD(0);
+		}
+	}
+}
+
+void SetComponentTreeVisibleIdempotent(USceneComponent* Component, const bool bVisible)
+{
+	if (!Component)
+	{
+		return;
+	}
+
+	TArray<USceneComponent*, TInlineAllocator<32>> Stack;
+	Stack.Add(Component);
+	while (Stack.Num() > 0)
+	{
+		USceneComponent* Current = Stack.Pop(EAllowShrinking::No);
+		if (!Current)
+		{
+			continue;
+		}
+		Stack.Append(Current->GetAttachChildren());
+		if (Current->GetVisibleFlag() != bVisible)
+		{
+			Current->SetVisibility(bVisible, false);
+		}
+	}
 }
 
 void ApplyAutoQuestMetaHumanQualityProfile(
@@ -2456,7 +2490,7 @@ void ConfigureEmbodiedLocalViewVisibility(
 		{
 			++OwnerNoSeeCount;
 			MeshComponent->SetHiddenInGame(false);
-			MeshComponent->SetVisibility(true, true);
+			SetComponentTreeVisibleIdempotent(MeshComponent, true);
 		}
 	}
 
