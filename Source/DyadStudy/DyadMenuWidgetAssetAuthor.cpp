@@ -76,16 +76,18 @@ void AuthorDyadMenuWidgetAsset()
 	UVerticalBox* Outer = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("MenuOuter"));
 	Tree->RootWidget = Outer;
 	UBorder* Backdrop = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("MenuBackdrop"));
-	Backdrop->SetBrushColor(FLinearColor(0.015f, 0.015f, 0.025f, 0.9f));
+	Backdrop->SetBrushColor(FLinearColor(0.015f, 0.015f, 0.025f, 0.94f));
 	Backdrop->SetPadding(FMargin(28.0f, 20.0f, 28.0f, 16.0f));
 	Outer->AddChildToVerticalBox(Backdrop);
 
 	UVerticalBox* Root = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("MenuRoot"));
 	Backdrop->SetContent(Root);
 
+	// Sizes revised 2026-07-18 (worn): buttons were too small to pinch-click and the
+	// text was not vision friendly at panel distance.
 	UTextBlock* Title = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
 	Title->SetText(NSLOCTEXT("DyadStudy", "MenuTitleSelf", "Choose your avatar"));
-	SetFontSize(Title, 28);
+	SetFontSize(Title, 34);
 	Root->AddChildToVerticalBox(Title)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
 
 	struct FRowSpec { const TCHAR* Prefix; FText Label; };
@@ -102,7 +104,7 @@ void AuthorDyadMenuWidgetAsset()
 		UTextBlock* RowLabel = Tree->ConstructWidget<UTextBlock>(
 			UTextBlock::StaticClass(), FName(*FString::Printf(TEXT("%sRowLabel"), Spec.Prefix)));
 		RowLabel->SetText(Spec.Label);
-		SetFontSize(RowLabel, 22);
+		SetFontSize(RowLabel, 24);
 		RowBox->AddChildToVerticalBox(RowLabel)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 4.0f));
 
 		UHorizontalBox* Buttons = Tree->ConstructWidget<UHorizontalBox>(
@@ -114,9 +116,9 @@ void AuthorDyadMenuWidgetAsset()
 			const FString Suffix = FString::Printf(TEXT("%s_%s"), Spec.Prefix, *Profile.ProfileId.ToString());
 			UBorder* Frame = Tree->ConstructWidget<UBorder>(
 				UBorder::StaticClass(), FName(*(TEXT("AvatarFrame_") + Suffix)));
-			Frame->SetBrushColor(FLinearColor(0.08f, 0.08f, 0.10f, 1.0f));
-			Frame->SetPadding(FMargin(4.0f));
-			Buttons->AddChildToHorizontalBox(Frame)->SetPadding(FMargin(6.0f, 4.0f));
+			Frame->SetBrushColor(FLinearColor(0.16f, 0.16f, 0.20f, 1.0f));
+			Frame->SetPadding(FMargin(5.0f));
+			Buttons->AddChildToHorizontalBox(Frame)->SetPadding(FMargin(8.0f, 5.0f));
 
 			UButton* Button = Tree->ConstructWidget<UButton>(
 				UButton::StaticClass(), FName(*(TEXT("AvatarButton_") + Suffix)));
@@ -128,8 +130,8 @@ void AuthorDyadMenuWidgetAsset()
 
 			USizeBox* PortraitBox = Tree->ConstructWidget<USizeBox>(
 				USizeBox::StaticClass(), FName(*(TEXT("PortraitBox_") + Suffix)));
-			PortraitBox->SetWidthOverride(140.0f);
-			PortraitBox->SetHeightOverride(155.0f);
+			PortraitBox->SetWidthOverride(180.0f);
+			PortraitBox->SetHeightOverride(214.0f);
 			Column->AddChildToVerticalBox(PortraitBox);
 
 			UImage* Portrait = Tree->ConstructWidget<UImage>(
@@ -139,7 +141,7 @@ void AuthorDyadMenuWidgetAsset()
 			UTextBlock* NameText = Tree->ConstructWidget<UTextBlock>(
 				UTextBlock::StaticClass(), FName(*(TEXT("Name_") + Suffix)));
 			NameText->SetText(FText::FromName(Profile.ProfileId));
-			SetFontSize(NameText, 16);
+			SetFontSize(NameText, 20);
 			NameText->SetJustification(ETextJustify::Center);
 			Column->AddChildToVerticalBox(NameText)->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
 		}
@@ -147,17 +149,24 @@ void AuthorDyadMenuWidgetAsset()
 
 	UButton* Confirm = Tree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("ConfirmButton"));
 	UVerticalBoxSlot* ConfirmSlot = Root->AddChildToVerticalBox(Confirm);
-	ConfirmSlot->SetPadding(FMargin(0.0f, 14.0f, 0.0f, 4.0f));
+	ConfirmSlot->SetPadding(FMargin(0.0f, 16.0f, 0.0f, 6.0f));
 	ConfirmSlot->SetHorizontalAlignment(HAlign_Center);
+	// A generous fixed hit target: the worn complaint included the confirm click not
+	// landing — the old label-sized button was a sliver at panel distance.
+	USizeBox* ConfirmBox = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("ConfirmBox"));
+	ConfirmBox->SetWidthOverride(420.0f);
+	ConfirmBox->SetHeightOverride(80.0f);
+	Confirm->SetContent(ConfirmBox);
 	UTextBlock* ConfirmLabel = Tree->ConstructWidget<UTextBlock>(
 		UTextBlock::StaticClass(), TEXT("ConfirmLabel"));
 	ConfirmLabel->SetText(NSLOCTEXT("DyadStudy", "ConfirmAvatar", "Confirm avatar"));
-	SetFontSize(ConfirmLabel, 22);
-	Confirm->SetContent(ConfirmLabel);
+	SetFontSize(ConfirmLabel, 30);
+	ConfirmLabel->SetJustification(ETextJustify::Center);
+	ConfirmBox->SetContent(ConfirmLabel);
 
 	UTextBlock* Status = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("StatusText"));
 	Status->SetText(FText::GetEmpty());
-	SetFontSize(Status, 14);
+	SetFontSize(Status, 18);
 	Root->AddChildToVerticalBox(Status);
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);

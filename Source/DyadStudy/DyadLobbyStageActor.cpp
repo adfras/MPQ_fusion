@@ -204,14 +204,16 @@ ADyadLobbyStageActor::ADyadLobbyStageActor()
 	// World-space widgets render at 1 unit per pixel: scale to a ~1.7 m panel. The class
 	// must be set HERE (not BeginPlay) — the component instantiates its widget when it
 	// registers, which happens before BeginPlay.
-	MenuWidgetComponent->SetRelativeScale3D(FVector(0.08f));
+	// 0.10 = 140 cm panel (2026-07-18 worn feedback: 0.08's buttons were "too small
+	// to click with my fingers" and the text not vision friendly).
+	MenuWidgetComponent->SetRelativeScale3D(FVector(0.10f));
 	// WORN-sightline placement, revised 2026-07-18 (Alan): upper-left of the mirror
 	// sightline so the panel never covers the mirror or its clone. Moderate offset on
 	// purpose — the 2026-07-17 lesson is that 40 degrees off-gaze is INVISIBLE in VR.
 	// ApplyStageVisuals re-asserts the per-stage pose every stage change (and is the
 	// place to change these numbers). Scale 0.08 = 112 cm panel. Desk verification
 	// uses the same pawn-eye camera.
-	MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 20.0f, 150.0f));
+	MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 40.0f, 150.0f));
 	// One-sided ON PURPOSE: with TwoSided the renderer also shows a dark,
 	// depth-ignoring, X-mirrored backface copy of this widget (the "black board"
 	// that haunted every desk capture since Phase 2 — 2026-07-17 hunt). Backface
@@ -450,14 +452,17 @@ void ADyadLobbyStageActor::ApplyStageVisuals(const EDyadLobbyFlowStage Stage)
 		// (the stage origin sits right of the participant's centerline): -125 landed
 		// upper-RIGHT, +55 landed clipped at the far left edge. +20 puts the panel
 		// upper-left AND comfortably inside the visible cone.
+		// +20 was right for the 112 cm panel; the 140 cm panel (2026-07-18 usability
+		// pass) extends further left, so shift right to keep the left edge inside the
+		// comfortable cone.
 		if (Stage == EDyadLobbyFlowStage::SelfSelect)
 		{
-			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 20.0f, 150.0f));
+			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 40.0f, 150.0f));
 			MenuWidgetComponent->SetRelativeRotation(FRotator(0.0f, -8.0f, 0.0f));
 		}
 		else
 		{
-			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 70.0f, 150.0f));
+			MenuWidgetComponent->SetRelativeLocation(FVector(55.0f, 90.0f, 150.0f));
 			MenuWidgetComponent->SetRelativeRotation(FRotator(0.0f, -25.0f, 0.0f));
 		}
 	}
